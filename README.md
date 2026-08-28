@@ -1,6 +1,7 @@
 # earshot
 
-**Find out what Reddit actually did to the comments you wrote.**
+**Find out what Reddit actually did to the comments you wrote — and who is
+still waiting on an answer from you.**
 
 Reddit removed 154 million posts and comments in one half-year and told almost
 nobody. Its own description of the work: *"our most effective work happens
@@ -49,12 +50,41 @@ node bin/es.mjs watch <your-reddit-username>
 node bin/es.mjs sync      # read your profile as a stranger sees it
 node bin/es.mjs check     # re-read each thread, logged out
 node bin/es.mjs status    # what became of the things you said
+node bin/es.mjs back      # who replied to you and is still waiting
 ```
 
 `check` takes about a minute per thread. That is not politeness — logged out,
 Reddit answers one request a minute per address, measured. The tool waits rather
 than getting your address rate-limited, and it groups your comments by thread so
 one read answers for all of them.
+
+## Coming back
+
+```
+! waiting   3 replies  Karma and Age gates are really blunt tools that, w
+
+3 waiting for you — oldest first, because that is the one going cold:
+
+  u/Extolord111 · 19d ago
+    they said: Could you perhaps replicate the old comment sorting as well?
+    you said:  Karma and Age gates are really blunt tools that, while we un
+    https://reddit.com/r/.../p1xmnfk/
+```
+
+Almost nobody goes back to their own comments, and second and third replies are
+what a community actually reads as membership — the version of warming that is
+not karma farming. `back` finds the conversations where somebody answered you
+and you never answered them.
+
+It compares *times*, not just "did you reply at all": answering once in March
+does not settle something said to you yesterday, so a thread you already
+replied in re-opens when they speak again.
+
+It costs one read per comment, because a reply tree only exists in a comment's
+own view — the flat thread feed carries no parent for anything. So it is bounded
+by recency (`--days`, default 14) rather than by a page count, and it skips
+anything `check` already found a stranger cannot see. **It writes nothing.** The
+answering is yours.
 
 ## What the words mean
 
@@ -129,7 +159,15 @@ node bin/test.mjs
 
 They cover only the things that would break quietly — a body that gets
 overwritten by a later read, a truncated thread being reported as a removal, a
-failed read being reported as a finding.
+failed read being reported as a finding, a thread you answered in March being
+reported as settled.
+
+One of them guards an assumption rather than a behaviour: `back` is only correct
+because a comment's own feed returns its **descendants**. That was verified, not
+assumed — a child's subtree is a strict subset of its parent's, and the parent
+never appears inside the child's. If Reddit ever changes it, the tests still
+pass while the tool quietly reports strangers as people who answered you, so the
+check is written down where somebody will find it.
 
 ## Licence
 

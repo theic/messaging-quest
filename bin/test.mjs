@@ -17,6 +17,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseFeed, threadOf, waitFor, ANON_GAP_MS } from "../lib/reddit.mjs";
 import { classify, history } from "../lib/verdict.mjs";
+import { conversation, byUrgency } from "../lib/conversation.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ES = join(here, "es.mjs");
@@ -106,6 +107,41 @@ check("a change of state is remembered", h.changed_at.to, "filtered");
 check("...and that it was once visible", h.ever_visible, true);
 check("never visible is different from went away",
   history([{ at: "a", state: "filtered" }, { at: "b", state: "filtered" }]).never_visible, true);
+
+/* ---------------------------------------------------------- conversations */
+// The focused feed returning DESCENDANTS is the load-bearing assumption of
+// Phase 1, and it was verified rather than assumed (2026-08-28): a child's
+// subtree is a strict subset of its parent's, and the parent never appears
+// inside the child's. If that ever changes, these all still pass while the tool
+// silently reports strangers as people who answered you.
+
+const c = (id, author, body, at) => ({ id, kind: "comment", author, body, at, url: "u" });
+const focused = (entries) => ({ ok: true, entries });
+const post = { id: "t3_p", kind: "post", author: "someone", body: "the post", at: "0" };
+const mineId = { id: "t1_me", url: "https://reddit.com/r/x/comments/p1/slug/me/" };
+const conv = (entries) => conversation(mineId, focused([post, { ...c("t1_me", "me", "what I said", "1"), id: "t1_me" }, ...entries]), "me");
+
+check("nobody under it is quiet", conv([]).state, "quiet");
+check("somebody under it is waiting", conv([c("t1_a", "ann", "hi", "2")]).state, "waiting");
+check("...and it counts them", conv([c("t1_a", "ann", "hi", "2"), c("t1_b", "bo", "hi", "3")]).replies, 2);
+check("you having replied since settles it", conv([c("t1_a", "ann", "hi", "2"), c("t1_x", "me", "ok", "3")]).state, "answered");
+// The one a "did you reply at all?" flag gets wrong: answering in March does
+// not settle something said yesterday.
+check("but them speaking AFTER you re-opens it",
+  conv([c("t1_a", "ann", "hi", "2"), c("t1_x", "me", "ok", "3"), c("t1_c", "ann", "still?", "4")]).state, "waiting");
+check("...and that is flagged as since-you", conv([c("t1_a", "ann", "hi", "2"), c("t1_x", "me", "ok", "3"), c("t1_c", "ann", "still?", "4")]).since_you, true);
+// A tombstone is not a person waiting for an answer.
+check("a [removed] reply is not somebody waiting", conv([c("t1_a", "ann", "[removed]", "2")]).state, "quiet");
+check("a [deleted] reply is not either", conv([c("t1_a", "ann", "[deleted]", "2")]).state, "quiet");
+// The post is context, not a reply to you — counting it makes every comment
+// you ever wrote look answered.
+check("the post itself is never counted as a reply", conv([]).replies, 0);
+// It is the LAST unanswered thing that is hanging, not the first.
+check("the newest unanswered thing is the one surfaced",
+  conv([c("t1_a", "ann", "first", "2"), c("t1_c", "bo", "newest", "4")]).latest.text, "newest");
+check("a failed read is an error, not silence", conversation(mineId, { ok: false, error: "timeout" }, "me").state, "error");
+// Oldest-first, because a queue sorted newest-first buries the one going cold.
+check("the oldest wait comes first", byUrgency([{ at: "3" }, { at: "1" }, { at: "2" }]).map((r) => r.at), ["1", "2", "3"]);
 
 /* ------------------------------------------------------------------ store */
 

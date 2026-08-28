@@ -24,6 +24,7 @@ import { createHash } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { ANON_GAP_MS, waitFor, read, userFeed, threadFeed, commentFeed, threadOf, subredditOf } from "../lib/reddit.mjs";
 import { classify, history, STATES } from "../lib/verdict.mjs";
+import { conversation, byUrgency } from "../lib/conversation.mjs";
 
 const DIR = process.env.EARSHOT_DIR || ".earshot";
 const F = (n) => join(DIR, n);
@@ -92,7 +93,7 @@ const cmds = {};
 
 cmds.init = () => {
   mkdirSync(DIR, { recursive: true });
-  for (const f of ["items.jsonl", "checks.jsonl", "reads.jsonl"]) if (!existsSync(F(f))) writeFileSync(F(f), "");
+  for (const f of ["items.jsonl", "checks.jsonl", "reads.jsonl", "replies.jsonl"]) if (!existsSync(F(f))) writeFileSync(F(f), "");
   console.log(`ready — ${DIR}/\n\nNext:  es watch <your-reddit-username>\n       es sync\n       es check`);
 };
 
@@ -239,6 +240,68 @@ cmds.check = async (args) => {
   console.log(`\nes status`);
 };
 
+/**
+ * Phase 1 — who is waiting for you.
+ *
+ * Costs one read per comment, because the reply tree only exists in the
+ * comment's own focused view; the flat thread feed carries no parent for
+ * anything. Bounded by recency rather than by a page count: a reply to
+ * something you wrote five months ago is not a conversation you can still walk
+ * back into, and reading for it spends the same minute as one you can.
+ */
+cmds.back = async (args) => {
+  const acct = account() || die("nobody to listen to yet — run: es watch <your-reddit-username>");
+  const me = acct.name.toLowerCase();
+  const days = args.includes("--days") ? Number(args[args.indexOf("--days") + 1]) : 14;
+  const limit = args.includes("--limit") ? Number(args[args.indexOf("--limit") + 1]) : 25;
+  const store = items();
+  if (!store.size) die("nothing stored yet — run `es sync`");
+
+  const cutoff = Date.now() - days * 864e5;
+  const checks = checksById();
+  // A comment a stranger cannot see is not a comment anybody is replying to.
+  // Skipping those is not an optimisation, it is the right answer — and it is
+  // what makes Phase 0 worth having run first.
+  const unseen = new Set(["filtered", "removed", "gone", "deleted"]);
+  const todo = [...store.values()].filter((it) => {
+    if (it.kind !== "comment") return false;
+    if (it.at && Date.parse(it.at) < cutoff) return false;
+    return !unseen.has(history(checks.get(it.id) ?? []).state);
+  }).slice(0, limit);
+
+  if (!todo.length) return console.log(`nothing from the last ${days} days that a stranger can still see. \`es back --days 60\` looks further back.`);
+  console.log(`${todo.length} of your comments from the last ${days} days.`);
+  console.log(`At least ${Math.ceil((todo.length * ANON_GAP_MS) / 60_000)} minutes — one read each, because only a comment's own view carries its replies.\n`);
+
+  const waiting = [];
+  for (const it of todo) {
+    const f = await fetchAnon(commentFeed(it.url));
+    const c = conversation(it, f, me);
+    append("replies.jsonl", { id: it.id, at: now(), state: c.state, replies: c.replies ?? 0, latest: c.latest ?? null, since_you: c.since_you ?? false });
+    if (c.state === "waiting") waiting.push({ it, c });
+    process.stdout.write(`  ${c.state === "waiting" ? "!" : " "} ${c.state.padEnd(9)} ${(c.replies ?? 0)} repl${(c.replies ?? 0) === 1 ? "y" : "ies"}  ${line(it)}\n`);
+  }
+
+  if (!waiting.length) return console.log(`\nNobody is waiting on you.`);
+  console.log(`\n${waiting.length} waiting for you — oldest first, because that is the one going cold:\n`);
+  for (const { it, c } of byUrgency(waiting.map(({ it, c }) => ({ it, c, at: c.at })))) {
+    console.log(`  u/${c.latest.author} · ${ago(c.latest.at)}${c.since_you ? " · since you last spoke" : ""}`);
+    console.log(`    they said: ${(c.latest.text || "").replace(/\s+/g, " ").slice(0, 150)}`);
+    console.log(`    you said:  ${line(it)}`);
+    console.log(`    ${c.latest.url || it.url}\n`);
+  }
+  console.log(`You answer these yourself, in your own words. Nothing here writes or sends anything.`);
+};
+
+const ago = (iso) => {
+  if (!iso) return "at some point";
+  const h = (Date.now() - Date.parse(iso)) / 3600_000;
+  if (!Number.isFinite(h)) return "at some point";
+  if (h < 1) return "just now";
+  if (h < 48) return `${Math.round(h)}h ago`;
+  return `${Math.round(h / 24)}d ago`;
+};
+
 const mark = (s) => ({ visible: "  ", unlisted: " ?", filtered: " !", removed: " !", deleted: "  ", gone: " ?", inconclusive: " ?", error: " x" })[s] ?? "  ";
 const line = (it) => {
   const body = (it.body || "").replace(/\s+/g, " ").trim();
@@ -303,16 +366,29 @@ cmds.log = (args) => {
 /** §04, and it is also just correct: content deleted from Reddit should not
  *  live on here. The hash stays so an edit is still detectable; the words go. */
 cmds.sweep = () => {
-  const rows = readJsonl("items.jsonl");
   const cutoff = Date.now() - BODY_TTL_MS;
-  let n = 0;
-  const out = rows.map((r) => {
+  let n = 0, m = 0;
+
+  const items_ = readJsonl("items.jsonl").map((r) => {
     if (r.body && Date.parse(r.seen_at) < cutoff) { n++; return { ...r, body: "", body_expired: true }; }
     return r;
   });
-  writeFileSync(F("items.jsonl"), out.map((r) => JSON.stringify(r)).join("\n") + (out.length ? "\n" : ""));
-  console.log(`${n} bodies past 48h dropped. Ids, urls, dates, hashes and every check are untouched.`);
+  rewrite("items.jsonl", items_);
+
+  // Somebody else's words, which is the case §04 is actually about: your own
+  // comments are yours, but a stranger's reply sitting on your disk for a month
+  // is the thing the retention rule exists for.
+  const replies = readJsonl("replies.jsonl").map((r) => {
+    if (r.latest?.text && Date.parse(r.at) < cutoff) { m++; return { ...r, latest: { ...r.latest, text: "" }, text_expired: true }; }
+    return r;
+  });
+  rewrite("replies.jsonl", replies);
+
+  console.log(`${n} of your bodies and ${m} replies past 48h dropped.`);
+  console.log(`Ids, urls, dates, hashes and every check and reply count are untouched.`);
 };
+
+const rewrite = (name, rows) => writeFileSync(F(name), rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : ""));
 
 /* ------------------------------------------------------------------- main */
 
@@ -326,6 +402,7 @@ if (!cmd || !cmds[cmd]) {
   add <permalink>         add one by hand — the path that still works
                           when your profile itself is invisible
   check [--all] [--limit N]   re-read each thread as a stranger
+  back [--days N] [--limit N] who replied to you, and has not been answered
   status                  what became of the things you said
   log [item-id]           every check, in order
   sweep                   drop stored bodies past 48h
