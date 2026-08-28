@@ -20,6 +20,7 @@ import { classify, history } from "../lib/verdict.mjs";
 import { conversation, byUrgency } from "../lib/conversation.mjs";
 import { refuse, verdictOf, bansPromotion, scoped } from "../lib/sources.mjs";
 import { fromDescription, isParody, readRoomFile, roomFile } from "../lib/rules.mjs";
+import { longestSharedRun, repeats, claims, inventedLinks, RUN_LIMIT } from "../lib/guards.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ES = join(here, "es.mjs");
@@ -272,6 +273,70 @@ es2(["mark", "t3_a", "sent"]);
 check("marking sent retires that person", /never appear in a queue again/.test(es2(["mark", "t3_c", "sent"])), true);
 writeFileSync(join(D2, "marks.jsonl"), "");
 check("...and they stay gone even if the mark is lost", /queue is empty/.test(es2(["queue"])), true);
+
+/* --------------------------------------------------- phase 3 — the refusals */
+
+// The AI smell is SHAPE, not vocabulary. The predecessor's 29 drafts shared a
+// 26-word identical run while its mail-merge check reported them clean — it
+// fired on 0 of 406 pairs, because it subtracted the template's vocabulary
+// before comparing. This compares runs and subtracts nothing.
+const A = "i built a small tool for exactly this problem and it took a week";
+const B = "hey there, i built a small tool for exactly this problem and honestly it helped";
+check("a shared run is measured in consecutive words", longestSharedRun(A, B).length, 10);
+check("...and the phrase itself comes back, so it can be seen", /i built a small tool/.test(longestSharedRun(A, B).phrase), true);
+check("nothing in common is zero", longestSharedRun("completely unrelated words", "nothing alike here").length, 0);
+check("an empty prior cannot match", longestSharedRun("", "anything at all").length, 0);
+check("a run at the limit is flagged", Boolean(repeats(A, [{ id: "d1", text: B }])), true);
+check("a short overlap is not", repeats("thanks, that is useful", [{ id: "d1", text: "thanks, that helps a lot" }]), null);
+check("the limit is the measured one", RUN_LIMIT, 8);
+
+// The sentence a competitor actually posted into a clinical thread under a
+// real name, from an operator who had never had that job.
+const said = claims("At my last job I used vocavela for some basic bridge work during intake. Nice weather.");
+check("a fabricated job history is surfaced", said.length, 1);
+check("...as the whole sentence, not the two words that matched", /vocavela/.test(said[0].sentence), true);
+check("ordinary prose makes no claim", claims("That sounds frustrating. Have you tried asking them directly?").length, 0);
+check("first person alone is not a claim about experience", claims("I would probably start there.").length, 0);
+
+// The drafter has no search, so any URL it did not lift from the thread is invented.
+check("a link from the thread is fine", inventedLinks("see https://real.example", "body https://real.example"), []);
+check("a link from nowhere is not", inventedLinks("see https://made-up.example", "body https://real.example"), ["https://made-up.example"]);
+check("trailing punctuation does not disguise it", inventedLinks("at https://made-up.example.", "body"), ["https://made-up.example"]);
+
+/* --------------------------------------------------- phase 3 through the CLI */
+
+const box3 = mkdtempSync(join(tmpdir(), "earshot-draft-"));
+const env3 = { ...process.env, EARSHOT_DIR: join(box3, ".earshot") };
+const es3 = (args, stdin) => { try { return execFileSync(process.execPath, [ES, ...args], { env: env3, input: stdin ?? "", encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }); } catch (e) { return `${e.stdout || ""}${e.stderr || ""}`; } };
+es3(["init"]);
+const D3 = env3.EARSHOT_DIR;
+const one = (id) => JSON.stringify({ id, place: "smallbusiness", url: `https://reddit.com/r/smallbusiness/comments/${id}/y/`, author: "ann", title: "t", body: "I cannot find clients", body_sha256: "h", posted_at: "2026-08-28T09:00:00Z", seen_at: new Date().toISOString(), probe: "smallbusiness:new" }) + "\n";
+writeFileSync(join(D3, "found.jsonl"), one("t3_x") + one("t3_y"));
+
+// An unmeasured voice must impose NO style. That is the deletion the ported
+// tests guard, checked once more at the seam where this tool renders it.
+// With no samples, every measured field stays silent — and exactly one rule
+// still fires. The em dash is the single most reliable machine signature in a
+// forum reply, so its UNKNOWN state is a ban rather than a silence, and one
+// sample containing one lifts it. That asymmetry is the ported module's
+// contract, and this is the seam where it renders.
+const noVoice = es3(["voice"]);
+check("with no samples, nothing about the person is claimed", /Nothing about your style is measurable yet/.test(noVoice), true);
+check("...and the one rule that still applies says why", /No em dashes/.test(noVoice), true);
+check("...and no house style is smuggled in with it", /lowercase|non-native|sentence case/.test(noVoice), false);
+
+const PHRASE = "picking one specific kind of customer and answering twenty of their threads properly";
+// Rewriting ONE reply is not repeating yourself, and flagging it would train
+// you to ignore the warning that matters. Checked first, in a clean store, so
+// no other draft can be the thing it matches against.
+es3(["draft", "t3_x", "--save"], PHRASE);
+check("revising the same reply is not repetition", /REPEATED PHRASING/.test(es3(["draft", "t3_x", "--save"], `${PHRASE}, slowly`)), false);
+// The same words aimed at a second person is precisely what Reddit names as
+// reportable spam: "the same or similar comments across communities".
+const dup = es3(["draft", "t3_y", "--save"], `you could try ${PHRASE} today`);
+check("...but the same phrasing aimed at somebody else is", /REPEATED PHRASING/.test(dup), true);
+check("a clean draft says so plainly", /No repeated phrasing, no invented links/.test(es3(["draft", "t3_y", "--save"], "what does the thing actually do?")), true);
+check("nothing is ever rejected outright — you are the one sending it", /You send it yourself/.test(dup), true);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

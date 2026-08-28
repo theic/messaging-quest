@@ -27,6 +27,9 @@ import { classify, history, STATES } from "../lib/verdict.mjs";
 import { conversation, byUrgency } from "../lib/conversation.mjs";
 import { scoped, submissions, refuse, verdictOf, pct } from "../lib/sources.mjs";
 import { fromDescription, isParody, sidebarUrl, roomFile, readRoomFile } from "../lib/rules.mjs";
+import { measureVoice, mergeVoice, voiceRules, voiceSummary, lengthCeiling, MIN_SAMPLE_CHARS } from "../lib/voice.mjs";
+import { signalWritingRules, communityRisks } from "../lib/writing.mjs";
+import { repeats, claims, inventedLinks, RUN_LIMIT } from "../lib/guards.mjs";
 
 const DIR = process.env.EARSHOT_DIR || ".earshot";
 const F = (n) => join(DIR, n);
@@ -712,6 +715,126 @@ cmds.mark = (args) => {
   } else console.log(mark === "sent" ? `logged as answered: ${id}` : `discarded: ${id}`);
 };
 
+/* ------------------------------------------------------ phase 3 — draft */
+
+const voiceOf = () => (existsSync(F("voice.json")) ? JSON.parse(readFileSync(F("voice.json"), "utf8")) : null);
+const meFile = () => (existsSync(F("me.md")) ? readFileSync(F("me.md"), "utf8") : "");
+
+/**
+ * Measure how you write, from what you have already written.
+ *
+ * Phase 0 already stores your own comments, so this needs no new reads and no
+ * persona menu — the samples are your actual words. Presence is decisive at one
+ * sample and absence is never decisive below five, so a thin corpus produces a
+ * mostly-empty fingerprint, which renders NO instructions at all. That is the
+ * correct outcome, not a gap to fill with a default.
+ */
+cmds.voice = () => {
+  const bodies = [...items().values()].map((i) => i.body).filter((b) => b && b.length >= MIN_SAMPLE_CHARS);
+  const measured = measureVoice(bodies);
+  const merged = mergeVoice(measured, voiceOf()?.user ?? null);
+  writeFileSync(F("voice.json"), JSON.stringify({ measured, user: voiceOf()?.user ?? null, at: now(), samples: bodies.length }, null, 2));
+
+  const all = [...items().values()].filter((i) => i.body).length;
+  console.log(`${bodies.length} of your comments were long enough to measure${all > bodies.length ? ` (${all - bodies.length} were under ${MIN_SAMPLE_CHARS} characters)` : ""}.\n`);
+  const rules = voiceRules(merged);
+  const summary = voiceSummary(merged);
+  console.log(`${summary ?? "Nothing about your style is measurable yet, and nothing is being guessed."}\n`);
+  for (const r of rules) console.log(`  - ${r}`);
+  if (!summary) {
+    // Exactly one rule fires with no evidence, and saying why stops it looking
+    // like a default that crept in. Absence is not decisive below five samples;
+    // the em dash is the one case where the unknown state is a ban, because a
+    // model left alone reaches for it every time.
+    console.log(`\nThat one rule applies with no evidence, deliberately. Every other dimension`);
+    console.log(`stays silent until your own comments show it — run \`es sync\` for more samples.`);
+  }
+  console.log(`\nCorrect any line by editing ${DIR}/voice.json — what you say beats what was measured.`);
+};
+
+/**
+ * The material for answering one person. It writes nothing.
+ *
+ * Everything below is assembled from what is already on disk. The model, if you
+ * use one, runs outside this process like the judge does — which is what keeps
+ * this free, local and swappable.
+ */
+cmds.draft = (args, stdin) => {
+  const id = args[0] || die("usage: es draft <item-id>   (then: es draft <item-id> --save < reply.txt)");
+  const it = found().get(id) || die(`no such item: ${id}`);
+  const fp = mergeVoice(voiceOf()?.measured ?? null, voiceOf()?.user ?? null);
+
+  if (args.includes("--save")) return saveDraft(it, stdin, fp);
+
+  const me = meFile().trim();
+  console.log(`# Answer this person\n`);
+  console.log(`u/${it.author ?? "?"} in r/${it.place} — ${it.url}\n`);
+  console.log(`## What they said\n\n${it.title ? `**${it.title}**\n\n` : ""}${(it.body || "").slice(0, 1600)}\n`);
+  console.log(`## How to write it\n`);
+  console.log(signalWritingRules({
+    intent: "signal", stage: "opener",
+    pitch: firstLine(me) || "(nothing in me.md yet — write it, or this is guesswork)",
+    problem: null, style: null, styleNotes: null, voice: fp,
+  }).trim());
+  const risks = communityRisks(it.url, "reddit", "opener");
+  if (risks.length) { console.log(`\n## Where you are writing\n`); for (const r of risks) console.log(`- ${r}`); }
+
+  // §15 keeps this block: named axes of difference, labels the writer chooses,
+  // and one option being a correct answer.
+  console.log(`\n## Three options, differing by MOVE\n`);
+  console.log(`Three ways of saying one sentence is a worse product than one good reply, and you can tell instantly.`);
+  console.log(`Different approaches means: answering the literal question versus answering what is behind it;`);
+  console.log(`leading with the specific detail versus leading with the shared experience; solving it outright`);
+  console.log(`versus pointing them at whoever already solved it. If there is only ONE honest thing to say here,`);
+  console.log(`write one — that is a correct answer and a better one than padding.`);
+  console.log(`\nEach option carries a SHORT NAME you write, one or two words, naming what actually differs:`);
+  console.log(`"direct", "story first", "just the link", "asks back". Never "option 2".`);
+  console.log(`\nUnder ${lengthCeiling(fp)} characters.`);
+  if (me) console.log(`\n## What you can honestly say about yourself\n\n${me.slice(0, 1200)}`);
+  else console.log(`\n## me.md is empty\n\nWrite ${DIR}/me.md — what you have actually built. Every first-person claim gets checked against it.`);
+  console.log(`\n---\nWhen you have a draft:  es draft ${id} --save < reply.txt`);
+};
+
+const firstLine = (s) => String(s).split("\n").map((l) => l.trim()).find((l) => l && !l.startsWith("#")) ?? "";
+
+/** The two hard refusals, plus the one the store already had. Nothing is
+ *  rejected outright — you are the one sending it — but nothing is quiet
+ *  either. */
+const saveDraft = (it, text, fp) => {
+  const body = String(text ?? "").trim();
+  if (!body) die("no draft text on stdin");
+  // Everything you have drafted for SOMEBODY ELSE. Revisions of this same item
+  // are excluded deliberately: rewriting one reply is not repeating yourself,
+  // and flagging it would train you to ignore the warning that matters.
+  const priors = readJsonl("drafts.jsonl").filter((d) => d.id !== it.id).map((d) => ({ id: d.id, text: d.text }));
+
+  const rep = repeats(body, priors);
+  const said = claims(body);
+  const links = inventedLinks(body, `${it.body} ${it.url}`);
+  append("drafts.jsonl", { id: it.id, url: it.url, text: body, at: now(), flags: { repeat: rep?.length ?? 0, claims: said.length, links: links.length } });
+  console.log(`draft saved for ${it.id}\n`);
+
+  if (rep) {
+    console.log(`!! REPEATED PHRASING — ${rep.length} identical consecutive words you have used before:`);
+    console.log(`   "${rep.phrase}"`);
+    console.log(`   Reddit names "the same or similar comments across communities" as reportable spam.`);
+    console.log(`   The corpus this was measured on shared a 26-word run while its duplicate check reported clean.\n`);
+  }
+  if (links.length) {
+    console.log(`!! INVENTED LINK — not present in the thread we read:`);
+    for (const u of links) console.log(`   ${u}`);
+    console.log(`   Delete it. It is a checkable false statement under your own name.\n`);
+  }
+  if (said.length) {
+    console.log(`?? CLAIMS ABOUT YOU — each is either true or it is the thing that ends the account:`);
+    for (const c of said) console.log(`   "${c.sentence}"`);
+    console.log(`   Check each against ${DIR}/me.md. A competitor posted "at my last job i used <product>"`);
+    console.log(`   into a clinical thread under a real name. Nobody had ever had that job.\n`);
+  }
+  if (!rep && !links.length && !said.length) console.log(`No repeated phrasing, no invented links, no claims about your history.`);
+  console.log(`You send it yourself, from your own account. Nothing here posts.`);
+};
+
 /* ------------------------------------------------------------------- main */
 
 const [, , cmd, ...args] = process.argv;
@@ -743,6 +866,10 @@ find — other people, and the rooms it refuses to look in
   mark <id> sent|skip     answered, or discard. "sent" retires that person
                           from every future queue, permanently
 
+  voice                   how you write, measured from your own comments
+  draft <id>              the material for answering one person
+  draft <id> --save       save a reply and run the refusals over it
+
   sweep                   drop stored bodies past 48h
 
 Nothing here posts, messages, votes, or reads anybody else's account.`);
@@ -751,5 +878,6 @@ Nothing here posts, messages, votes, or reads anybody else's account.`);
 if (!existsSync(DIR) && cmd !== "init") die(`no ${DIR}/ here — run \`es init\` first`);
 // `judge` is the one place a verdict comes IN from outside — the model runs in
 // whatever you point at this, never in here.
-const stdin = cmd === "judge" && !process.stdin.isTTY ? readFileSync(0, "utf8") : "";
+const wantsStdin = cmd === "judge" || (cmd === "draft" && args.includes("--save"));
+const stdin = wantsStdin && !process.stdin.isTTY ? readFileSync(0, "utf8") : "";
 await cmds[cmd](args, stdin);

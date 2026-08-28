@@ -146,6 +146,53 @@ the model that moved.
 `mark <id> sent` retires that person from every future queue, permanently.
 Showing you the same human twice is what makes a queue feel like a lottery.
 
+## Writing the reply
+
+```bash
+node bin/es.mjs voice          # how you write, measured from your own comments
+node bin/es.mjs draft <id>     # the material for answering one person
+node bin/es.mjs draft <id> --save < reply.txt
+```
+
+`voice` needs no new reads: your own comments are already stored by `sync`, so
+the fingerprint is measured off your actual words rather than picked from a
+persona menu. **Presence is decisive at one sample; absence is never decisive
+below five.** A thin corpus therefore produces a mostly-empty fingerprint, which
+renders no style instructions at all — that is the right answer, not a gap to
+fill with a default.
+
+Exactly one rule fires with no evidence: no em dashes. It is the single most
+reliable machine signature in a forum reply, and one sample of you using one
+lifts the ban.
+
+`draft` writes nothing. It assembles what is already on disk — the post, your
+measured voice, the community's risks — and asks for three options that differ
+by **move**: answering the literal question, versus answering what is behind it,
+versus pointing at whoever already solved it. Never three tones of one sentence.
+If there is only one honest thing to say, one option is a correct answer.
+
+### The two refusals
+
+`--save` runs them and stays loud:
+
+- **Repeated phrasing.** The longest run of identical consecutive words between
+  this draft and everything you have drafted for somebody else. Reddit names
+  "the same or similar comments across communities" as reportable spam.
+- **Claims about you.** Every first-person claim of experience, surfaced next to
+  `me.md` for you to check. A competitor was observed posting *"at my last job i
+  used [product] for some basic bridge work during intake"* into a clinical
+  thread under a real name. Nobody had ever had that job.
+- Plus the inherited one: any URL not lifted from the thread is invented.
+
+Nothing is rejected outright, because you are the one sending it.
+
+**Why runs and not a similarity score.** The predecessor's mail-merge check
+reported its drafts clean — it fired on 0 of 406 pairs, because it subtracted
+the template's vocabulary before comparing. Re-run over the drafts still on
+disk, this one flags 25 of 120 pairs, with a real 19-word identical run in it.
+A duplicate detector that never fires is worse than none, because it is also a
+reassurance.
+
 ## What the words mean
 
 | | |
