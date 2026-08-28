@@ -1,0 +1,11 @@
+{
+  "name": "earshot",
+  "version": "0.1.0",
+  "description": "Find out what Reddit actually did to the comments you wrote.",
+  "type": "module",
+  "bin": { "es": "./bin/es.mjs" },
+  "scripts": { "test": "node bin/test.mjs" },
+  "license": "Elastic-2.0",
+  "engines": { "node": ">=18" },
+  "files": ["bin", "lib", "README.md"]
+}
