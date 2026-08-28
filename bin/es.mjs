@@ -25,6 +25,8 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { ANON_GAP_MS, waitFor, read, userFeed, threadFeed, commentFeed, threadOf, subredditOf } from "../lib/reddit.mjs";
 import { classify, history, STATES } from "../lib/verdict.mjs";
 import { conversation, byUrgency } from "../lib/conversation.mjs";
+import { scoped, submissions, refuse, verdictOf, pct } from "../lib/sources.mjs";
+import { fromDescription, isParody, sidebarUrl, roomFile, readRoomFile } from "../lib/rules.mjs";
 
 const DIR = process.env.EARSHOT_DIR || ".earshot";
 const F = (n) => join(DIR, n);
@@ -60,6 +62,47 @@ const checksById = () => {
 };
 const account = () => (existsSync(F("account.json")) ? JSON.parse(readFileSync(F("account.json"), "utf8")) : null);
 
+/* Phase 2 keeps OTHER PEOPLE's posts in their own file. Your comments and a
+ * stranger's post are different things with different retention: yours are
+ * yours, theirs are what §04's 48-hour rule is actually about. Mixing them into
+ * one table is how a sweep either deletes your own history or keeps somebody
+ * else's for a year. */
+const found = () => {
+  const m = new Map();
+  for (const r of readJsonl("found.jsonl")) if (!m.has(r.id)) m.set(r.id, r); // first wins
+  return m;
+};
+const lastById = (name) => {
+  const m = new Map();
+  for (const r of readJsonl(name)) m.set(r.id, r); // last wins
+  return m;
+};
+const sources = () => [...lastById("sources.jsonl").values()].filter((s) => !s.deleted);
+
+/** Everybody you have ever replied to. Permanent, and checked before anything
+ *  reaches the queue: showing you the same person twice is the failure that
+ *  makes a queue feel like a lottery. */
+const contacted = () => new Set(readJsonl("contacted.jsonl").map((r) => String(r.author ?? "").toLowerCase()));
+
+const roomPath = (place) => join(DIR, "rooms", `${place.toLowerCase()}.md`);
+const roomState = (place) => {
+  const p = roomPath(place);
+  return existsSync(p) ? readRoomFile(readFileSync(p, "utf8")) : { state: "unanswered" };
+};
+
+/** §11: a rubric hash on every verdict, so "the queue changed" can be answered
+ *  with "your rule" or "the model" instead of a shrug. A golden run once caught
+ *  10 of 20 stored verdicts flipping under a byte-identical rubric. */
+const ruleHash = () => {
+  const p = F("rule.md");
+  if (!existsSync(p)) die("no rule.md — run `es init`");
+  return createHash("sha256").update(readFileSync(p, "utf8")).digest("hex").slice(0, 8);
+};
+
+const verdicts = () => lastById("verdicts.jsonl");
+const pending = () => (existsSync(F("pending.json")) ? JSON.parse(readFileSync(F("pending.json"), "utf8")) : []);
+const setPending = (v) => writeFileSync(F("pending.json"), JSON.stringify(v));
+
 /* ------------------------------------------------- the anonymous governor */
 
 // Anonymously Reddit answers one request a minute, per address, measured. The
@@ -87,18 +130,48 @@ async function fetchAnon(url, { quiet = false } = {}) {
   return r;
 }
 
+const RULE_SEED = `# Fit rule
+
+A post is a fit **iff** the author is a person who has the problem and is
+visibly working at it, and is **not** selling a solution to it or advising
+somebody else about it.
+
+## Answer YES when
+- They describe the difficulty in their own words.
+- They ask how to solve it.
+- They show what it currently costs them.
+
+## The near miss
+- Pitching their own product or service.
+- Answering somebody else's question rather than having the problem.
+- A tactic write-up, case study or launch. A war story is not somebody stuck.
+- Already solved it, reporting back in the past tense.
+- **Advertising.** Somebody offering the thing, however softly, is not somebody
+  who needs it. This clause leaks without being written down.
+- **Job seekers.** "Looking for work" is a different need from the one you
+  solve, and it reads as a fit to every judge that has not been told otherwise.
+
+## When you cannot tell
+Answer YES. A wrong yes costs one line in a queue you skim. A wrong no costs a
+person nobody will ever know existed. Uncertainty is a yes, not a fallback.
+`;
+
 /* --------------------------------------------------------------- commands */
 
 const cmds = {};
 
 cmds.init = () => {
   mkdirSync(DIR, { recursive: true });
-  for (const f of ["items.jsonl", "checks.jsonl", "reads.jsonl", "replies.jsonl"]) if (!existsSync(F(f))) writeFileSync(F(f), "");
-  console.log(`ready — ${DIR}/\n\nNext:  es watch <your-reddit-username>\n       es sync\n       es check`);
+  mkdirSync(join(DIR, "rooms"), { recursive: true });
+  for (const f of ["items.jsonl", "checks.jsonl", "reads.jsonl", "replies.jsonl",
+                   "sources.jsonl", "found.jsonl", "verdicts.jsonl", "marks.jsonl", "contacted.jsonl"])
+    if (!existsSync(F(f))) writeFileSync(F(f), "");
+  if (!existsSync(F("rule.md"))) writeFileSync(F("rule.md"), RULE_SEED);
+  console.log(`ready — ${DIR}/\n\nNext:  es me <your-reddit-username>\n       es sync\n       es check\n\nWhen you want to find people: edit ${DIR}/rule.md, then \`es probe <subreddit> --q "<phrase>"\`.`);
 };
 
-cmds.watch = (args) => {
-  const name = String(args[0] || die("usage: es watch <your-reddit-username>")).replace(/^\/?u\//, "").trim();
+cmds.me = (args) => {
+  const name = String(args[0] || die("usage: es me <your-reddit-username>")).replace(/^\/?u\//, "").trim();
   if (!/^[\w-]{3,20}$/.test(name)) die(`that does not look like a Reddit username: '${name}'`);
   writeFileSync(F("account.json"), JSON.stringify({ name, added: now() }, null, 2));
   console.log(`listening for u/${name}.\n\nNothing is posted, nothing is sent, and only your own account is read.\nNext: es sync`);
@@ -114,7 +187,7 @@ cmds.watch = (args) => {
  * account with genuinely no comments looks identical.
  */
 cmds.sync = async () => {
-  const acct = account() || die("nobody to listen to yet — run: es watch <your-reddit-username>");
+  const acct = account() || die("nobody to listen to yet — run: es me <your-reddit-username>");
   console.log(`reading reddit.com/user/${acct.name} as a stranger would\n`);
   const r = await fetchAnon(userFeed(acct.name));
 
@@ -250,7 +323,7 @@ cmds.check = async (args) => {
  * back into, and reading for it spends the same minute as one you can.
  */
 cmds.back = async (args) => {
-  const acct = account() || die("nobody to listen to yet — run: es watch <your-reddit-username>");
+  const acct = account() || die("nobody to listen to yet — run: es me <your-reddit-username>");
   const me = acct.name.toLowerCase();
   const days = args.includes("--days") ? Number(args[args.indexOf("--days") + 1]) : 14;
   const limit = args.includes("--limit") ? Number(args[args.indexOf("--limit") + 1]) : 25;
@@ -390,6 +463,255 @@ cmds.sweep = () => {
 
 const rewrite = (name, rows) => writeFileSync(F(name), rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : ""));
 
+/* ------------------------------------------------------- phase 2 — find */
+
+/**
+ * Try a room before committing to it.
+ *
+ * One read, then a decision that is a yes or a no rather than a score out of a
+ * hundred. The refusals run BEFORE the read, because a room that forbids
+ * promotion is not worth a request, let alone a place in a queue.
+ */
+cmds.probe = async (args) => {
+  const place = String(args[0] || die(`usage: es probe <subreddit> --q "<phrase>"`)).replace(/^\/?r\//, "").trim();
+  const q = args.includes("--q") ? args[args.indexOf("--q") + 1] : null;
+
+  if (isParody(place)) return refused(`r/${place} is a parody community — Reddit's "-jerk" suffix. A competitor's picker put one of these top of its list at 100/100.`);
+  const room = roomState(place);
+  if (room.state === "banned") return refused(`r/${place} does not allow it — ${room.source ?? "recorded"}.`);
+
+  const url = q ? scoped(place, q) : submissions(place);
+  const no = refuse({ url });
+  if (no) return refused(no);
+
+  console.log(`probing r/${place}${q ? ` for "${q}"` : " (new submissions)"}\n`);
+  const r = await fetchAnon(url);
+  if (!r.ok) return console.log(`  could not read it: ${r.error}\n  That is a failed read, not a verdict on the room.`);
+  // A subreddit that does not exist is answered by a silent redirect to a
+  // search feed, with a 200. Only the final URL gives it away.
+  if (r.redirected) return refused(`there is no r/${place} — Reddit redirected the feed, which it does instead of 404ing.`);
+
+  // Free, and it catches the blunt cases.
+  const desc = fromDescription(r.subtitle);
+  if (desc.state === "banned") {
+    writeRoom(place, desc.quote);
+    return refused(`r/${place}'s own description says: "${desc.quote}"`);
+  }
+
+  const known = found(), fresh = [];
+  for (const e of r.entries) {
+    if (e.kind !== "post") continue;              // submissions only, never a comment stream
+    if (known.has(e.id) || fresh.some((f) => f.id === e.id)) continue;
+    fresh.push({ id: e.id, place, url: e.url, author: e.author, title: e.title,
+      body: e.body.slice(0, 1200), body_sha256: sha(e.body), posted_at: e.at, seen_at: now(), probe: `${place}:${q ?? "new"}` });
+  }
+  for (const f of fresh) append("found.jsonl", f);
+  append("probes.jsonl", { place, q: q ?? null, url, read: fresh.length, at: now(), settled: false });
+
+  const p = pending();
+  for (const f of fresh) p.push({ n: p.length + 1, id: f.id, probe: `${place}:${q ?? "new"}` });
+  setPending(p);
+
+  writeRoom(place, null);
+  console.log(`  ${r.entries.length} entries, ${fresh.length} new posts to judge.`);
+  console.log(`\n  Its rules are NOT readable from here — measured, and the public description is not the rules list.`);
+  console.log(`  Read them once:  ${sidebarUrl(place)}`);
+  console.log(`  Then answer the line in ${roomPath(place)}`);
+  console.log(`\n  Judge what came back:  es pending    then    es judge < verdicts.json`);
+};
+
+const refused = (why) => { console.log(`  refused — ${why}`); console.log(`  no source written. This is not a score, it is a no.`); };
+
+const writeRoom = (place, found_) => {
+  const p = roomPath(place);
+  if (existsSync(p)) return;
+  mkdirSync(join(DIR, "rooms"), { recursive: true });
+  writeFileSync(p, roomFile(place, found_));
+};
+
+cmds.rooms = () => {
+  const rows = readJsonl("probes.jsonl");
+  const places = [...new Set(rows.map((r) => r.place))];
+  if (!places.length) return console.log(`no rooms probed yet — \`es probe <subreddit> --q "<phrase>"\``);
+  for (const place of places) {
+    const st = roomState(place);
+    const flag = st.state === "allowed" ? "ok " : st.state === "banned" ? "NO " : "?  ";
+    console.log(`${flag} r/${place.padEnd(24)} ${st.state === "unanswered" ? `rules unread — ${sidebarUrl(place)}` : st.state}`);
+  }
+  console.log(`\nA room stays unwatchable until its file answers. That is deliberate.`);
+};
+
+/**
+ * Commit a probed room to the watch list.
+ *
+ * Refuses on: unread rules, a room that bans it, a shape measured dead, and a
+ * probe that did not clear the floor. Four ways to say no and one to say yes.
+ */
+cmds.watch = (args) => {
+  const place = String(args[0] || die(`usage: es watch <subreddit> [--q "<phrase>"]`)).replace(/^\/?r\//, "").trim();
+  const q = args.includes("--q") ? args[args.indexOf("--q") + 1] : null;
+  const id = `${place}:${q ?? "new"}`.toLowerCase();
+
+  if (isParody(place)) return refused(`r/${place} is a parody community.`);
+  const room = roomState(place);
+  if (room.state === "banned") return refused(`r/${place} does not allow it — ${room.source ?? "recorded"}.`);
+  if (room.state === "unanswered")
+    return refused(`nobody has read r/${place}'s rules yet.\n  Read them: ${sidebarUrl(place)}\n  Then answer the line in ${roomPath(place)}`);
+
+  const url = q ? scoped(place, q) : submissions(place);
+  const no = refuse({ url });
+  if (no) return refused(no);
+
+  // The probe has to have cleared the floor. A source nobody measured is the
+  // thing that filled the predecessor's queue with 804 rows nobody consumed.
+  const v = verdicts();
+  const mine = [...found().values()].filter((f) => f.probe === `${place}:${q ?? "new"}`);
+  const judged = mine.filter((f) => v.has(f.id));
+  if (!judged.length) return refused(`nothing from r/${place} has been judged yet — run \`es probe\`, then \`es judge\`.`);
+  const decision = verdictOf({ read: judged.length, fit: judged.filter((f) => v.get(f.id).fit).length });
+  if (!decision.commit) return refused(decision.why);
+
+  if (sources().some((x) => x.id === id)) return console.log(`already watching ${id}`);
+  append("sources.jsonl", { id, place, q, url, cadence_min: 60, added: now() });
+  console.log(`watching ${id} — ${decision.why}`);
+};
+
+cmds.unwatch = (args) => {
+  const id = String(args[0] || die("usage: es unwatch <source-id>")).toLowerCase();
+  append("sources.jsonl", { id, deleted: true, at: now() });
+  console.log(`stopped watching ${id}. What it already found is untouched.`);
+};
+
+cmds.sources = () => {
+  const all = sources();
+  if (!all.length) return console.log("watching no sources yet.");
+  const lr = new Map(readJsonl("reads.jsonl").filter((r) => r.source).map((r) => [r.source, r]));
+  const seen = [...found().values()];
+  for (const s of all) {
+    const r = lr.get(s.id);
+    console.log(`${s.id.padEnd(34)} ${String(seen.filter((f) => f.probe === s.id).length).padStart(4)} found   ${!r ? "never read" : r.ok ? `read ${r.at.slice(0, 16).replace("T", " ")}` : `ERROR ${r.err ?? ""}`}`);
+  }
+};
+
+/** Read every source whose cadence is up. Plain code — there is no model in
+ *  this loop, and that is the point of §07: the agent takes the rare supervised
+ *  jobs, never the one that runs all day. */
+cmds.tick = async (args) => {
+  const limit = args.includes("--limit") ? Number(args[args.indexOf("--limit") + 1]) : Infinity;
+  const lr = new Map(readJsonl("reads.jsonl").filter((r) => r.source).map((r) => [r.source, r]));
+  const due = sources().filter((s) => {
+    const r = lr.get(s.id);
+    return !r || Date.now() - Date.parse(r.at) >= s.cadence_min * 60_000;  // never read is always due
+  }).slice(0, limit);
+  if (!due.length) return console.log("nothing is due.");
+  console.log(`${due.length} source${due.length === 1 ? "" : "s"} due. At least ${Math.ceil((due.length * ANON_GAP_MS) / 60_000)} minutes.\n`);
+
+  const known = found(), gone = contacted();
+  const p = pending();
+  let total = 0;
+  for (const s of due) {
+    const r = await fetchAnon(s.url);
+    append("reads.jsonl", { source: s.id, at: now(), ok: r.ok, err: r.ok ? null : r.error, n: r.ok ? r.entries.length : 0 });
+    if (!r.ok) { console.log(`  ${s.id}: ${r.error}`); continue; }
+    let fresh = 0;
+    for (const e of r.entries) {
+      if (e.kind !== "post") continue;
+      if (known.has(e.id)) continue;
+      // Somebody you have already written to is not a new lead, ever, and
+      // across every project. This is the check that makes a queue trustworthy.
+      if (e.author && gone.has(e.author.toLowerCase())) continue;
+      const row = { id: e.id, place: s.place, url: e.url, author: e.author, title: e.title,
+        body: e.body.slice(0, 1200), body_sha256: sha(e.body), posted_at: e.at, seen_at: now(), probe: s.id };
+      append("found.jsonl", row); known.set(e.id, row);
+      p.push({ n: p.length + 1, id: e.id, probe: s.id });
+      fresh++; total++;
+    }
+    console.log(`  ${s.id}: ${r.entries.length} read, ${fresh} new`);
+  }
+  setPending(p);
+  console.log(`\n${total} new to judge — es pending`);
+};
+
+cmds.pending = () => {
+  const p = pending(), all = found();
+  if (!p.length) return console.log("nothing waiting on a verdict.");
+  console.log(JSON.stringify(p.map((x) => {
+    const it = all.get(x.id);
+    return { n: x.n, author: it?.author ?? null, title: it?.title ?? "", body: (it?.body ?? "").slice(0, 1200) };
+  }), null, 2));
+};
+
+/** stdin: [{n, fit, why}]. The model lives OUTSIDE this process — the store
+ *  never calls one, which is what keeps the tool free, local and swappable. */
+cmds.judge = (args, stdin) => {
+  const p = pending();
+  if (!p.length) die("nothing pending to judge");
+  let vs;
+  try { vs = JSON.parse(stdin); } catch { die("stdin is not JSON — expected [{n, fit, why}]"); }
+  if (!Array.isArray(vs)) die("expected a JSON array of [{n, fit, why}]");
+  const rule = ruleHash();
+  const byN = new Map(p.map((x) => [x.n, x.id]));
+  const seen = new Set();
+  let fits = 0;
+  for (const v of vs) {
+    const id = byN.get(v.n);
+    if (!id) { console.error(`  no item numbered ${v.n} — skipped`); continue; }
+    append("verdicts.jsonl", { id, fit: !!v.fit, why: v.why ?? "", rule, at: now() });
+    seen.add(v.n);
+    if (v.fit) fits++;
+  }
+  const missing = p.filter((x) => !seen.has(x.n));
+  setPending(missing);
+  console.log(`judged ${seen.size} · ${fits} queued · rubric ${rule}`);
+  // Unjudged is its own state, and it is loud. It is not a no.
+  if (missing.length) console.log(`${missing.length} came back with NO VERDICT and stay pending — run judge again`);
+
+  // Settle any probe these items belonged to.
+  for (const probe of new Set(p.map((x) => x.probe).filter(Boolean))) {
+    const v = verdicts();
+    const rows = [...found().values()].filter((f) => f.probe === probe && v.has(f.id));
+    if (!rows.length) continue;
+    const d = verdictOf({ read: rows.length, fit: rows.filter((f) => v.get(f.id).fit).length });
+    console.log(`  ${probe}: ${d.why}`);
+    if (d.commit) console.log(`    commit it with:  es watch ${probe.split(":")[0]}${probe.endsWith(":new") ? "" : ` --q "${probe.split(":").slice(1).join(":")}"`}`);
+  }
+};
+
+cmds.queue = (args) => {
+  const v = verdicts(), m = lastById("marks.jsonl"), all = found(), gone = contacted();
+  const rows = [];
+  for (const [id, ver] of v) {
+    if (!ver.fit || m.has(id)) continue;
+    const it = all.get(id);
+    if (!it) continue;
+    if (it.author && gone.has(it.author.toLowerCase())) continue;
+    rows.push({ ...it, why: ver.why });
+  }
+  rows.sort((a, b) => (b.posted_at ?? b.seen_at).localeCompare(a.posted_at ?? a.seen_at));
+  if (args.includes("--json")) return console.log(JSON.stringify(rows, null, 2));
+  if (!rows.length) return console.log("queue is empty.");
+  for (const r of rows) {
+    console.log(`\n${r.id}  r/${r.place}  ${(r.posted_at ?? r.seen_at).slice(0, 16).replace("T", " ")}  u/${r.author ?? "?"}`);
+    console.log(`  ${(r.title || "").slice(0, 90)}`);
+    console.log(`  ${(r.body || "").replace(/\s+/g, " ").slice(0, 160)}`);
+    console.log(`  ${r.url}`);
+  }
+  console.log(`\n${rows.length} waiting. You write and send these yourself.`);
+};
+
+cmds.mark = (args) => {
+  const [id, mark] = args;
+  if (!id || !["sent", "skip"].includes(mark)) die("usage: es mark <item-id> <sent|skip>");
+  const it = found().get(id) || die(`no such item: ${id}`);
+  append("marks.jsonl", { id, mark, at: now() });
+  if (mark === "sent" && it.author) {
+    // Permanent, and across every project. Cheaper to write than to explain
+    // why the same person turned up twice.
+    append("contacted.jsonl", { author: it.author, id, at: now() });
+    console.log(`logged as answered: ${id}\n  u/${it.author} will never appear in a queue again.`);
+  } else console.log(mark === "sent" ? `logged as answered: ${id}` : `discarded: ${id}`);
+};
+
 /* ------------------------------------------------------------------- main */
 
 const [, , cmd, ...args] = process.argv;
@@ -397,7 +719,7 @@ if (!cmd || !cmds[cmd]) {
   console.log(`earshot — what did Reddit actually do to your comments?
 
   init                    make .earshot/ here
-  watch <username>        whose comments to listen to (yours)
+  me <username>           whose comments to listen to (yours)
   sync                    read your profile as a logged-out stranger
   add <permalink>         add one by hand — the path that still works
                           when your profile itself is invisible
@@ -405,10 +727,29 @@ if (!cmd || !cmds[cmd]) {
   back [--days N] [--limit N] who replied to you, and has not been answered
   status                  what became of the things you said
   log [item-id]           every check, in order
+
+find — other people, and the rooms it refuses to look in
+
+  probe <sub> --q "..."   try a room once. Refuses parody subs, rooms whose
+                          own words forbid it, and shapes measured dead
+  rooms                   which rooms' rules have been read, and which have not
+  watch <sub> [--q "..."] commit a probed room. Refuses until its rules are read
+  unwatch <id>            stop
+  sources                 what is watched, and when each was last read
+  tick [--limit N]        read what is due. No model runs in this loop
+  pending                 what needs a verdict, numbered, as JSON
+  judge < verdicts.json   [{n, fit, why}] — the model lives outside this process
+  queue [--json]          who is waiting for an answer from you
+  mark <id> sent|skip     answered, or discard. "sent" retires that person
+                          from every future queue, permanently
+
   sweep                   drop stored bodies past 48h
 
 Nothing here posts, messages, votes, or reads anybody else's account.`);
   process.exit(cmd ? 1 : 0);
 }
 if (!existsSync(DIR) && cmd !== "init") die(`no ${DIR}/ here — run \`es init\` first`);
-await cmds[cmd](args);
+// `judge` is the one place a verdict comes IN from outside — the model runs in
+// whatever you point at this, never in here.
+const stdin = cmd === "judge" && !process.stdin.isTTY ? readFileSync(0, "utf8") : "";
+await cmds[cmd](args, stdin);

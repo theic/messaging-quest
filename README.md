@@ -46,7 +46,7 @@ node bin/es.mjs init
 ## Use
 
 ```bash
-node bin/es.mjs watch <your-reddit-username>
+node bin/es.mjs me <your-reddit-username>
 node bin/es.mjs sync      # read your profile as a stranger sees it
 node bin/es.mjs check     # re-read each thread, logged out
 node bin/es.mjs status    # what became of the things you said
@@ -85,6 +85,66 @@ own view — the flat thread feed carries no parent for anything. So it is bound
 by recency (`--days`, default 14) rather than by a page count, and it skips
 anything `check` already found a stranger cannot see. **It writes nothing.** The
 answering is yours.
+
+## Finding people
+
+The second half is monitoring — and it is mostly a list of things it will not
+read.
+
+```bash
+node bin/es.mjs probe smallbusiness --q "how do I get clients"
+node bin/es.mjs rooms      # whose rules have been read, and whose have not
+node bin/es.mjs watch smallbusiness --q "how do I get clients"
+node bin/es.mjs tick       # read what is due
+node bin/es.mjs queue      # who is waiting for an answer from you
+```
+
+**A room you have not read the rules of cannot be watched.** Not warned about —
+refused. So are parody subreddits (Reddit's own `-jerk` suffix), rooms whose
+description forbids promotion, and any source that did not clear a 10% floor on
+a real probe.
+
+That last one deserves its own note, because it is where this differs most from
+what else exists. A competitor's picker was observed returning
+`r/languagelearningjerk` — a parody community — as an "Excellent Match" at
+100/100, and beside it `r/slp` at 80/100 **while rendering that subreddit's own
+rule on the card**: *"No recruiters ever. Seriously. Never."* It displayed the
+rule prohibiting its use case and scored it Excellent.
+
+### And here is the honest limit of doing it keylessly
+
+Reddit does not serve a subreddit's rules to a logged-out reader. Measured:
+`/r/<sub>/about.rss` is a 404, `about.json` is a 403 like every `.json` path,
+and the one thing that *is* readable — the `<subtitle>` on a feed — is the short
+community description, not the rules.
+
+We checked that against r/slp, the exact room the refusal exists to catch. Its
+description is the community blurb. **The rule about recruiters is not in it.**
+
+So a keyless rules check would have returned "looks clear" for the one
+subreddit that most needed a no. Rather than ship that, the tool checks the
+description (free, and it does catch blunt cases) and otherwise records the
+room as **unanswered** — writing `.earshot/rooms/<sub>.md` with a line for you
+to fill in after reading the sidebar once. Until that line says something, the
+room cannot be watched.
+
+"I could not read the rules, go and look" is worth more than a confident
+80/100.
+
+## Judging, and where the model is not
+
+`tick` reads feeds and stores what is new. That loop is plain code — **no model
+runs in it.** Judging is a bounded call that happens outside this process
+entirely: `pending` prints what needs a verdict as numbered JSON, and `judge`
+takes `[{n, fit, why}]` back on stdin.
+
+That is what keeps the tool free, local and model-swappable: point it at
+whatever you already pay for. Every verdict is stamped with a hash of your
+`rule.md`, so when the queue changes you can tell whether it was your rule or
+the model that moved.
+
+`mark <id> sent` retires that person from every future queue, permanently.
+Showing you the same human twice is what makes a queue feel like a lottery.
 
 ## What the words mean
 

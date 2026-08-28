@@ -18,6 +18,8 @@ import { fileURLToPath } from "node:url";
 import { parseFeed, threadOf, waitFor, ANON_GAP_MS } from "../lib/reddit.mjs";
 import { classify, history } from "../lib/verdict.mjs";
 import { conversation, byUrgency } from "../lib/conversation.mjs";
+import { refuse, verdictOf, bansPromotion, scoped } from "../lib/sources.mjs";
+import { fromDescription, isParody, readRoomFile, roomFile } from "../lib/rules.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ES = join(here, "es.mjs");
@@ -146,7 +148,7 @@ check("the oldest wait comes first", byUrgency([{ at: "3" }, { at: "1" }, { at: 
 /* ------------------------------------------------------------------ store */
 
 es(["init"]);
-es(["watch", "u/tester"]);   // the /u/ prefix is what people paste
+es(["me", "u/tester"]);   // the /u/ prefix is what people paste
 const ITEMS = join(env.EARSHOT_DIR, "items.jsonl");
 const item = (over = {}) => JSON.stringify({ id: "t1_aaa", kind: "comment", url: "https://reddit.com/r/x/comments/p1/slug/aaa/", author: "me", at: "2026-08-28T10:00:00Z", title: null, body: "what I actually said", body_sha256: "h", seen_at: new Date().toISOString(), source: "profile", ...over }) + "\n";
 
@@ -199,6 +201,77 @@ check("a pasted /u/ prefix is not part of the username",
 check("a request 30s after the last one still waits", waitFor(Date.now() - 30_000) > 0, true);
 check("a request after the gap does not", waitFor(Date.now() - ANON_GAP_MS - 1), 0);
 check("a clock that was never stamped does not block the first read", waitFor(0), 0);
+
+/* ------------------------------------------------------ phase 2 — refusals */
+
+// The shape measurements, as refusals rather than as a ranking. The firehose
+// was 76% of everything ever read and sat in the 4.2% half; a search without
+// restrict_sr=1 silently becomes a site-wide search at 10%.
+check("the comment firehose is refused by shape", Boolean(refuse({ kind: "comments" })), true);
+check("...and by URL, however it is written", Boolean(refuse({ url: "https://www.reddit.com/r/x/comments/.rss?limit=100" })), true);
+check("an unscoped search is refused", Boolean(refuse({ url: "https://www.reddit.com/r/x/search/.rss?q=a&sort=new" })), true);
+check("a scoped search is allowed", refuse({ url: scoped("smallbusiness", "how do I get clients") }), null);
+check("parody subs are caught by Reddit's own suffix", isParody("languagelearningjerk"), true);
+
+// THE measurement that shaped this: r/slp is the roadmap's canonical room to
+// refuse, and its public description does not contain its rule. A keyless
+// check must therefore never answer "clear" — only "banned" or "unanswered".
+check("r/slp's real description does not reveal its rule",
+  fromDescription("A community of Speech-Language Pathologists (SLPs), Speech Therapists (STs). We discuss ideas, stories, information, and give general advice.").state, "unanswered");
+check("a blunt description is still caught", fromDescription("Read the rules. No self-promotion here. Be kind.").state, "banned");
+check("...and the refusal quotes the sentence, so it can be argued with", bansPromotion("Read the rules. No self-promotion here."), "No self-promotion here.");
+// An unanswered room must never be silently treated as a yes.
+check("a fresh room file is unanswered, not permission", readRoomFile(roomFile("slp", null)).state, "unanswered");
+
+// The floor is a decision, not a score. The competitor's 0-100 produced eleven
+// distinct values over 981 rows with a floor that never once fired.
+check("under the floor does not commit", verdictOf({ read: 100, fit: 4 }).commit, false);
+check("over the floor commits", verdictOf({ read: 27, fit: 18 }).commit, true);
+check("nothing read is not a pass", verdictOf({ read: 0, fit: 0 }).commit, false);
+
+/* ------------------------------------------------- phase 2 — through the CLI */
+
+const box2 = mkdtempSync(join(tmpdir(), "earshot-find-"));
+const env2 = { ...process.env, EARSHOT_DIR: join(box2, ".earshot") };
+const es2 = (args, stdin) => { try { return execFileSync(process.execPath, [ES, ...args], { env: env2, input: stdin ?? "", encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }); } catch (e) { return `${e.stdout || ""}${e.stderr || ""}`; } };
+es2(["init"]);
+const D2 = env2.EARSHOT_DIR;
+
+check("a room nobody has read the rules for cannot be watched", /nobody has read/.test(es2(["watch", "smallbusiness"])), true);
+check("a parody sub cannot be watched at all", /parody/.test(es2(["watch", "somethingjerk"])), true);
+
+writeFileSync(join(D2, "rooms", "smallbusiness.md"), "promotion_allowed: no\n");
+check("a room recorded as forbidding it stays refused", /does not allow it/.test(es2(["watch", "smallbusiness"])), true);
+
+// Answering "yes" is necessary, not sufficient: an unmeasured source is what
+// filled the predecessor's queue with 804 rows nobody consumed.
+writeFileSync(join(D2, "rooms", "smallbusiness.md"), "promotion_allowed: yes\n");
+check("...and even permitted, an unmeasured room is refused", /has been judged/.test(es2(["watch", "smallbusiness"])), true);
+
+// Now walk a real find through the store, without touching the network.
+const submission = (id, author, body) => JSON.stringify({ id, place: "smallbusiness", url: `https://reddit.com/r/smallbusiness/comments/${id}/x/`, author, title: "t", body, body_sha256: "h", posted_at: "2026-08-28T10:00:00Z", seen_at: new Date().toISOString(), probe: "smallbusiness:new" }) + "\n";
+writeFileSync(join(D2, "found.jsonl"), submission("t3_a", "ann", "I cannot find clients") + submission("t3_b", "bob", "buy my course") + submission("t3_c", "cat", "how do I get customers"));
+writeFileSync(join(D2, "pending.json"), JSON.stringify([{ n: 1, id: "t3_a", probe: "smallbusiness:new" }, { n: 2, id: "t3_b", probe: "smallbusiness:new" }, { n: 3, id: "t3_c", probe: "smallbusiness:new" }]));
+
+const judged = es2(["judge"], JSON.stringify([{ n: 1, fit: true, why: "stuck" }, { n: 2, fit: false, why: "selling" }, { n: 3, fit: true, why: "stuck" }]));
+check("judging queues only the fits", /judged 3 · 2 queued/.test(judged), true);
+// §11: the rubric hash is what answers "the queue changed — my rule or the model?"
+check("every verdict carries a rubric hash", /rubric [0-9a-f]{8}/.test(judged), true);
+check("a probe over the floor says so and offers the commit", /clears the 10% floor/.test(judged), true);
+
+// Unjudged is its own state, and it is loud. It is not a no.
+writeFileSync(join(D2, "pending.json"), JSON.stringify([{ n: 1, id: "t3_a" }, { n: 2, id: "t3_b" }]));
+check("items that came back with no verdict stay pending", /1 came back with NO VERDICT/.test(es2(["judge"], JSON.stringify([{ n: 1, fit: true }]))), true);
+
+check("the queue holds the fits", (es2(["queue"]).match(/^t3_/gm) || []).length, 2);
+check("a judged-unfit post never appears", /t3_b/.test(es2(["queue"])), false);
+
+// The ledger. Showing the same person twice is what makes a queue feel like a
+// lottery, and it is permanent across every project by design.
+es2(["mark", "t3_a", "sent"]);
+check("marking sent retires that person", /never appear in a queue again/.test(es2(["mark", "t3_c", "sent"])), true);
+writeFileSync(join(D2, "marks.jsonl"), "");
+check("...and they stay gone even if the mark is lost", /queue is empty/.test(es2(["queue"])), true);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
