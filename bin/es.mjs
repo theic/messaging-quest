@@ -129,7 +129,13 @@ async function fetchAnon(url, { quiet = false } = {}) {
     if (!quiet) process.stdout.write(`  rate limited — waiting ${r.retryAfter}s\n`);
     await sleep((r.retryAfter + 2) * 1000);
     writeFileSync(F("clock"), String(Date.now()));
-    return await read(url);
+    const again = await read(url);
+    // The retry's outcome has to reach the ledger too. Logging only the 429
+    // leaves a trail where the last word on a URL is "rate_limited" while a
+    // verdict was in fact reached from a good read — and the ledger is the
+    // thing somebody checks when they doubt the verdict.
+    append("reads.jsonl", { url, at: now(), ok: again.ok, err: again.ok ? null : again.error, n: again.ok ? again.entries.length : 0, retry: true });
+    return again;
   }
   return r;
 }
