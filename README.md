@@ -244,6 +244,43 @@ Contributor Quality Score is named and not scored. It is account age, email
 verification and network signals, none of it readable from a keyless surface. A
 number invented for it would be decoration.
 
+## The dashboard
+
+```bash
+node bin/es.mjs serve          # then open http://127.0.0.1:8787
+```
+
+Seven views over the same `.earshot/` directory the CLI reads: **Standing**
+(what became of what you said), **Waiting**, **Queue**, **Rooms**, **Ready**,
+**Sources**, **Voice**.
+
+It is bound to `127.0.0.1`, never `0.0.0.0` — that one argument is the whole
+"you, not me, are the data controller" position expressed as a bind address.
+There is no account, no hosted anything, and no bill. A hosted dashboard would
+forfeit exactly the position that makes the free tier defensible, after CNIL
+fined KASPR €240,000 for a Chrome extension reading through a customer's own
+session.
+
+**The Queue is a deck, not a table.** One person, one card, the draft already
+there when it opens, and the gate's reason at the top if the gate is saying not
+yet. A queue rendered as forty rows is a lobby, and a lobby is where good
+intentions go to be skimmed.
+
+`I posted it` is the only control that writes anything, and what it writes is on
+your disk: a mark, plus that person retired from every future queue, permanently.
+
+### Two things about it that are load-bearing
+
+**Everything on the page came off Reddit, which means a stranger wrote it.** Post
+bodies are escaped at a single seam, and a test feeds the dashboard an `<img
+onerror>` payload and asserts the markup never reaches the browser. If that test
+ever goes red, a Reddit post can run script in your session.
+
+**Nothing loads from anywhere.** The pages ship
+`Content-Security-Policy: default-src 'none'`, so a later edit that reaches for a
+CDN font breaks loudly instead of quietly making a local-only dashboard phone
+home.
+
 ## What the words mean
 
 | | |

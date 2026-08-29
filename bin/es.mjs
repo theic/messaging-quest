@@ -26,7 +26,8 @@ import { ANON_GAP_MS, waitFor, read, userFeed, threadFeed, commentFeed, threadOf
 import { classify, history, STATES } from "../lib/verdict.mjs";
 import { conversation, byUrgency } from "../lib/conversation.mjs";
 import { scoped, submissions, refuse, verdictOf, pct } from "../lib/sources.mjs";
-import { fromDescription, isParody, sidebarUrl, roomFile, readRoomFile } from "../lib/rules.mjs";
+import { fromDescription, isParody, sidebarUrl, roomFile } from "../lib/rules.mjs";
+import { store, FILES } from "../lib/store.mjs";
 import { measureVoice, mergeVoice, voiceRules, voiceSummary, lengthCeiling, MIN_SAMPLE_CHARS } from "../lib/voice.mjs";
 import { signalWritingRules, communityRisks } from "../lib/writing.mjs";
 import { repeats, claims, inventedLinks, RUN_LIMIT } from "../lib/guards.mjs";
@@ -45,67 +46,14 @@ const sha = (s) => createHash("sha256").update(String(s)).digest("hex");
 const BODY_TTL_MS = 48 * 3600_000;
 
 /* ------------------------------------------------------------------ store */
+// Shared with the dashboard — see lib/store.mjs for why it is not inline here.
 
-const readJsonl = (name) => {
-  const p = F(name);
-  if (!existsSync(p)) return [];
-  return readFileSync(p, "utf8").split("\n").filter((l) => l.trim())
-    .map((l, i) => { try { return JSON.parse(l); } catch { die(`${name}:${i + 1} is not JSON`); } });
-};
-const append = (name, obj) => appendFileSync(F(name), JSON.stringify(obj) + "\n");
-
-const items = () => {
-  const m = new Map();
-  for (const r of readJsonl("items.jsonl")) if (!m.has(r.id)) m.set(r.id, r); // first wins
-  return m;
-};
-const checksById = () => {
-  const m = new Map();
-  for (const c of readJsonl("checks.jsonl")) (m.get(c.id) ?? m.set(c.id, []).get(c.id)).push(c);
-  return m;
-};
-const account = () => (existsSync(F("account.json")) ? JSON.parse(readFileSync(F("account.json"), "utf8")) : null);
-
-/* Phase 2 keeps OTHER PEOPLE's posts in their own file. Your comments and a
- * stranger's post are different things with different retention: yours are
- * yours, theirs are what §04's 48-hour rule is actually about. Mixing them into
- * one table is how a sweep either deletes your own history or keeps somebody
- * else's for a year. */
-const found = () => {
-  const m = new Map();
-  for (const r of readJsonl("found.jsonl")) if (!m.has(r.id)) m.set(r.id, r); // first wins
-  return m;
-};
-const lastById = (name) => {
-  const m = new Map();
-  for (const r of readJsonl(name)) m.set(r.id, r); // last wins
-  return m;
-};
-const sources = () => [...lastById("sources.jsonl").values()].filter((s) => !s.deleted);
-
-/** Everybody you have ever replied to. Permanent, and checked before anything
- *  reaches the queue: showing you the same person twice is the failure that
- *  makes a queue feel like a lottery. */
-const contacted = () => new Set(readJsonl("contacted.jsonl").map((r) => String(r.author ?? "").toLowerCase()));
-
-const roomPath = (place) => join(DIR, "rooms", `${place.toLowerCase()}.md`);
-const roomState = (place) => {
-  const p = roomPath(place);
-  return existsSync(p) ? readRoomFile(readFileSync(p, "utf8")) : { state: "unanswered" };
-};
-
-/** §11: a rubric hash on every verdict, so "the queue changed" can be answered
- *  with "your rule" or "the model" instead of a shrug. A golden run once caught
- *  10 of 20 stored verdicts flipping under a byte-identical rubric. */
-const ruleHash = () => {
-  const p = F("rule.md");
-  if (!existsSync(p)) die("no rule.md — run `es init`");
-  return createHash("sha256").update(readFileSync(p, "utf8")).digest("hex").slice(0, 8);
-};
-
-const verdicts = () => lastById("verdicts.jsonl");
-const pending = () => (existsSync(F("pending.json")) ? JSON.parse(readFileSync(F("pending.json"), "utf8")) : []);
-const setPending = (v) => writeFileSync(F("pending.json"), JSON.stringify(v));
+const S = store(DIR, die);
+const sentLog = () => S.sentLog();
+const { readJsonl, append, items, found, verdicts, checksById, contacted,
+        account, roomPath, roomState, ruleHash, pending, setPending,
+        lastById, rewrite } = S;
+const sources = S.sources;
 
 /* ------------------------------------------------- the anonymous governor */
 
@@ -173,9 +121,7 @@ const cmds = {};
 cmds.init = () => {
   mkdirSync(DIR, { recursive: true });
   mkdirSync(join(DIR, "rooms"), { recursive: true });
-  for (const f of ["items.jsonl", "checks.jsonl", "reads.jsonl", "replies.jsonl",
-                   "sources.jsonl", "found.jsonl", "verdicts.jsonl", "marks.jsonl", "contacted.jsonl"])
-    if (!existsSync(F(f))) writeFileSync(F(f), "");
+  for (const f of FILES) if (!existsSync(F(f))) writeFileSync(F(f), "");
   if (!existsSync(F("rule.md"))) writeFileSync(F("rule.md"), RULE_SEED);
   console.log(`ready — ${DIR}/\n\nNext:  es me <your-reddit-username>\n       es sync\n       es check\n\nWhen you want to find people: edit ${DIR}/rule.md, then \`es probe <subreddit> --q "<phrase>"\`.`);
 };
@@ -471,7 +417,7 @@ cmds.sweep = () => {
   console.log(`Ids, urls, dates, hashes and every check and reply count are untouched.`);
 };
 
-const rewrite = (name, rows) => writeFileSync(F(name), rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : ""));
+
 
 /* ------------------------------------------------------- phase 2 — find */
 
@@ -866,11 +812,6 @@ const saveDraft = (it, text, fp) => {
 
 /** Everything you have marked as answered, with the room it was in. The
  *  governor's whole input. */
-const sentLog = () => {
-  const all = found();
-  return readJsonl("marks.jsonl").filter((m) => m.mark === "sent")
-    .map((m) => ({ at: m.at, place: all.get(m.id)?.place ?? subredditOf(all.get(m.id)?.url ?? "") ?? "?" }));
-};
 
 /**
  * Where you stand, room by room.
@@ -921,6 +862,14 @@ const wrap = (text, width, pad) => {
   return out.join(`\n${pad}`);
 };
 
+/** The dashboard. Imported rather than shelled out to, so one process, one
+ *  store, and ctrl-c stops the thing you started. */
+cmds.serve = async (args) => {
+  const { serve } = await import("./serve.mjs");
+  await serve(args.includes("--port") ? Number(args[args.indexOf("--port") + 1]) : 8787);
+  await new Promise(() => {});   // hold the process open until ctrl-c
+};
+
 /* ------------------------------------------------------------------- main */
 
 const [, , cmd, ...args] = process.argv;
@@ -958,6 +907,7 @@ find — other people, and the rooms it refuses to look in
   draft <id>              the material for answering one person
   draft <id> --save       save a reply and run the refusals over it
 
+  serve [--port N]        the dashboard, on localhost, in your browser
   sweep                   drop stored bodies past 48h
 
 Nothing here posts, messages, votes, or reads anybody else's account.`);

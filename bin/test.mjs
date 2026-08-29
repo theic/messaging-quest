@@ -31,6 +31,7 @@ const es = (args) => execFileSync(process.execPath, [ES, ...args], { env, encodi
 // `check` reaches the network once it has work; we only want its plan, so a
 // non-zero exit that already printed the plan is a pass, not a failure.
 const esFails = (args) => { try { return es(args); } catch (e) { return `${e.stdout || ""}${e.stderr || ""}`; } };
+const esFails2 = (args, dir) => { try { return execFileSync(process.execPath, [ES, ...args], { env: { ...process.env, EARSHOT_DIR: dir }, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }); } catch (e) { return `${e.stdout || ""}${e.stderr || ""}`; } };
 
 let pass = 0, fail = 0;
 const check = (what, got, want) => {
@@ -403,6 +404,71 @@ check("...and offers the override rather than just saying no", /--anyway/.test(b
 check("the override works, because you are the one posting", /logged as answered/.test(es4(["mark", "t3_z", "sent", "--anyway"])), true);
 // A skip is not a reply, so the gate has no business touching it.
 check("a skip is never gated", /discarded/.test(es4(["mark", "t3_z", "skip"])), true);
+
+/* ------------------------------------------------------- the dashboard */
+// Served on localhost, so the interesting failures are not "does it render"
+// but "what does it render, and who can reach it".
+
+const { spawn } = await import("node:child_process");
+const SERVE = join(here, "serve.mjs");
+const boxW = mkdtempSync(join(tmpdir(), "earshot-web-"));
+const DW = join(boxW, ".earshot");
+execFileSync(process.execPath, [ES, "init"], { env: { ...process.env, EARSHOT_DIR: DW }, stdio: "ignore" });
+writeFileSync(join(DW, "account.json"), JSON.stringify({ name: "tester", added: "2026-08-29T00:00:00Z" }));
+
+// A post body is a STRANGER'S TEXT. It is the one thing on the page nobody on
+// this machine wrote, and the dashboard is all that stands between it and the
+// browser. If this test ever fails, a Reddit post can run script in the
+// operator's session.
+const NASTY = `<img src=x onerror="alert(1)"><script>fetch('http://evil.example')<\/script>`;
+writeFileSync(join(DW, "found.jsonl"), JSON.stringify({
+  id: "t3_evil", place: "smallbusiness", url: "https://reddit.com/r/smallbusiness/comments/evil/x/",
+  author: "mallory", title: NASTY, body: NASTY, body_sha256: "h",
+  posted_at: "2026-08-28T09:00:00Z", seen_at: "2026-08-28T10:00:00Z", probe: "smallbusiness:new",
+}) + "\n");
+writeFileSync(join(DW, "verdicts.jsonl"), JSON.stringify({ id: "t3_evil", fit: true, why: "stuck", rule: "abc12345", at: "2026-08-28T10:00:00Z" }) + "\n");
+writeFileSync(join(DW, "probes.jsonl"), JSON.stringify({ place: "smallbusiness", q: null, url: "u", read: 1, at: "2026-08-28T10:00:00Z" }) + "\n");
+
+const PORT = 8000 + (process.pid % 900);
+const srv = spawn(process.execPath, [SERVE, "--port", String(PORT)], { env: { ...process.env, EARSHOT_DIR: DW }, stdio: ["ignore", "pipe", "pipe"] });
+const base = `http://127.0.0.1:${PORT}`;
+const up = async () => { for (let i = 0; i < 80; i++) { try { await fetch(base + "/"); return true; } catch { await new Promise((r) => setTimeout(r, 50)); } } return false; };
+const GET = async (p) => { const r = await fetch(base + p); return { status: r.status, body: await r.text() }; };
+
+if (!(await up())) { console.log("FAIL  the dashboard did not start"); fail++; }
+else {
+  for (const p of ["/", "/waiting", "/queue", "/rooms", "/ready", "/sources", "/voice"]) {
+    check(`${p} renders`, (await GET(p)).status, 200);
+  }
+  check("an unknown path is a 404, not a stack trace", (await GET("/nope")).status, 404);
+
+  const q = await GET("/queue");
+  // The whole point: the words appear, the markup does not.
+  check("a hostile post body is escaped, not executed", /<img src=x onerror/.test(q.body), false);
+  check("...and its script tag never reaches the page", /<script>fetch/.test(q.body), false);
+  check("...while the text itself is still shown", /&lt;img src=x/.test(q.body), true);
+  // A CDN reference added later would break loudly instead of quietly making a
+  // local-only dashboard phone home.
+  const head = await fetch(base + "/");
+  check("nothing may load from anywhere", /default-src 'none'/.test(head.headers.get("content-security-policy") ?? ""), true);
+
+  // The only writes in the product, and they are clicks.
+  const post = async (p, form) => (await fetch(base + p, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(form), redirect: "manual" })).status;
+  check("marking sent redirects rather than rendering", await post("/mark", { id: "t3_evil", mark: "sent" }), 303);
+  check("...and it lands in the store", /t3_evil/.test(readFileSync(join(DW, "marks.jsonl"), "utf8")), true);
+  // Permanent, across every project — the same ledger the CLI writes.
+  check("...and retires that person for good", /mallory/.test(readFileSync(join(DW, "contacted.jsonl"), "utf8")), true);
+  check("the queue is empty once they are answered", /Nobody is waiting/.test((await GET("/queue")).body), true);
+
+  check("answering a room's rules redirects", await post("/room", { place: "smallbusiness", answer: "no" }), 303);
+  // The markdown file is the record, and the file always wins — answering here
+  // and answering in an editor have to be the same act.
+  check("...and writes the same markdown the CLI reads",
+    /promotion_allowed:\s*no/.test(readFileSync(join(DW, "rooms", "smallbusiness.md"), "utf8")), true);
+  check("...which the CLI then honours",
+    /does not allow it/.test(esFails2(["watch", "smallbusiness"], DW)), true);
+}
+srv.kill();
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
