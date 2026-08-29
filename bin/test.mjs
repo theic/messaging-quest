@@ -63,12 +63,21 @@ check("the author's /u/ prefix is not part of the name", parsed[0].author, "me")
 check("the date comes from <updated>", parsed[0].at, "2026-08-28T10:00:00+00:00");
 
 // String surgery that silently reads the wrong page is worse than a crash.
-check("a comment's thread is its permalink minus the comment",
+check("a comment's thread is the prefix up to the post id",
   threadOf({ kind: "comment", url: "https://reddit.com/r/x/comments/p1/slug/c1/" }),
-  "https://reddit.com/r/x/comments/p1/slug");
-check("a post's thread is itself",
+  "https://reddit.com/r/x/comments/p1");
+// Reddit hands out TWO permalink shapes and the web UI's has a literal
+// "comment" segment. Dropping the last segment produces ".../p1/comment" —
+// a string that reads as a thread, is not one, and gets checked as though it
+// were. Found on a real permalink copied out of a browser.
+check("...and the web UI's /comment/ shape resolves to the same thread",
+  threadOf({ kind: "comment", url: "https://www.reddit.com/r/founder/comments/1vp3m8y/comment/p4lamwb/" }),
+  "https://www.reddit.com/r/founder/comments/1vp3m8y");
+check("a post's thread is itself, slug or no slug",
   threadOf({ kind: "post", url: "https://reddit.com/r/x/comments/p1/slug/" }),
-  "https://reddit.com/r/x/comments/p1/slug");
+  "https://reddit.com/r/x/comments/p1");
+check("a url with no post id at all is not guessed at",
+  threadOf({ kind: "comment", url: "https://reddit.com/r/x/" }), null);
 
 /* ------------------------------------------------------------ classifying */
 
