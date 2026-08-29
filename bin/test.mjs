@@ -21,6 +21,7 @@ import { conversation, byUrgency } from "../lib/conversation.mjs";
 import { refuse, verdictOf, bansPromotion, scoped } from "../lib/sources.mjs";
 import { fromDescription, isParody, readRoomFile, roomFile } from "../lib/rules.mjs";
 import { longestSharedRun, repeats, claims, inventedLinks, RUN_LIMIT } from "../lib/guards.mjs";
+import { standing, readiness, burst, mix } from "../lib/ready.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ES = join(here, "es.mjs");
@@ -269,8 +270,11 @@ check("a judged-unfit post never appears", /t3_b/.test(es2(["queue"])), false);
 
 // The ledger. Showing the same person twice is what makes a queue feel like a
 // lottery, and it is permanent across every project by design.
-es2(["mark", "t3_a", "sent"]);
-check("marking sent retires that person", /never appear in a queue again/.test(es2(["mark", "t3_c", "sent"])), true);
+// --anyway, because this store has no comment history in r/smallbusiness and
+// Phase 4's gate now refuses a reply into a room you have no standing in. That
+// refusal has its own tests below; these two are about the ledger.
+es2(["mark", "t3_a", "sent", "--anyway"]);
+check("marking sent retires that person", /never appear in a queue again/.test(es2(["mark", "t3_c", "sent", "--anyway"])), true);
 writeFileSync(join(D2, "marks.jsonl"), "");
 check("...and they stay gone even if the mark is lost", /queue is empty/.test(es2(["queue"])), true);
 
@@ -337,6 +341,59 @@ const dup = es3(["draft", "t3_y", "--save"], `you could try ${PHRASE} today`);
 check("...but the same phrasing aimed at somebody else is", /REPEATED PHRASING/.test(dup), true);
 check("a clean draft says so plainly", /No repeated phrasing, no invented links/.test(es3(["draft", "t3_y", "--save"], "what does the thing actually do?")), true);
 check("nothing is ever rejected outright — you are the one sending it", /You send it yourself/.test(dup), true);
+
+/* ------------------------------------------------------- phase 4 — the gate */
+
+const at = Date.parse("2026-08-29T12:00:00Z");
+const cmt = (id, sub, when) => ({ id, kind: "comment", url: `https://www.reddit.com/r/${sub}/comments/p/s/${id}/`, at: when });
+const seen = (ids, state) => new Map(ids.map((i) => [i, [{ state }]]));
+
+// Counting comments is not measuring standing. Fourteen comments in a room you
+// are filtered out of is fourteen invisible comments, and a count alone reports
+// it as ready. This is the join that needs Phase 0 and that no tool without it
+// can make.
+const filtered = standing([cmt("a", "SaaS", "2026-08-27T10:00:00Z")], seen(["a"], "filtered"), at);
+check("comments that a stranger cannot see are not standing", readiness(filtered.get("SaaS"), null).state, "not ready");
+check("...and it says more will not help", /More of them will not help/.test(readiness(filtered.get("SaaS"), null).why), true);
+
+const visible = standing(["a", "b", "c"].map((i, n) => cmt(i, "smallbusiness", `2026-08-${10 + n * 8}T10:00:00Z`)), seen(["a", "b", "c"], "visible"), at);
+check("visible history in a room is ready", readiness(visible.get("smallbusiness"), null).state, "ready");
+// Crowd Control's maximum tier filters people with no history in the room. That
+// is documented behaviour, so it is the one mechanical gate here.
+check("no history at all is the documented filter case", readiness(null, null).state, "not ready");
+check("one visible comment is membership, but thin", readiness(standing([cmt("a", "x", "2026-08-27T10:00:00Z")], seen(["a"], "visible"), at).get("x"), null).state, "thin");
+// Unchecked is not a pass. It is a different word.
+check("unchecked history is unknown, not ready", readiness(standing([cmt("a", "x", "2026-08-27T10:00:00Z")], new Map(), at).get("x"), null).state, "unknown");
+check("a room whose rules forbid it is not a warm-up problem", readiness(visible.get("smallbusiness"), { state: "banned" }).state, "not ready");
+
+// §02, stated: refuse a third reply in one subreddit inside 24h, and a sixth
+// overall. The measured shape was 11 replies in 83.9 minutes across 7 rooms.
+const two = [{ at: "2026-08-29T11:00:00Z", place: "x" }, { at: "2026-08-29T10:00:00Z", place: "x" }];
+check("a third reply in one room inside 24h is the burst shape", burst(two, "x", at).scope, "room");
+check("...but a first reply elsewhere is fine", burst(two, "y", at), null);
+check("a sixth overall is the burst shape", burst(Array.from({ length: 5 }, (_, i) => ({ at: `2026-08-29T0${i}:00:00Z`, place: `p${i}` })), "z", at).scope, "all");
+check("yesterday's replies do not count against today", burst([{ at: "2026-08-27T10:00:00Z", place: "x" }, { at: "2026-08-27T11:00:00Z", place: "x" }], "x", at), null);
+
+// The ratio is a mirror and a dishonest promise. Reddit enforces no sitewide
+// rule, so the note must travel with the number, always.
+check("the mix is a ratio", mix(20, 4).ratio, 4);
+check("...and never a threshold", /enforces no sitewide ratio/.test(mix(20, 4).note), true);
+check("no outreach yet is not a ratio of zero", mix(20, 0).ratio, null);
+
+// The gate through the CLI: refused by default, overridable, because a tool
+// that cannot be overruled just gets worked around.
+const box4 = mkdtempSync(join(tmpdir(), "earshot-gate-"));
+const env4 = { ...process.env, EARSHOT_DIR: join(box4, ".earshot") };
+const es4 = (a) => { try { return execFileSync(process.execPath, [ES, ...a], { env: env4, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }); } catch (e) { return `${e.stdout || ""}${e.stderr || ""}`; } };
+es4(["init"]);
+writeFileSync(join(env4.EARSHOT_DIR, "found.jsonl"), JSON.stringify({ id: "t3_z", place: "SaaS", url: "https://reddit.com/r/SaaS/comments/z/y/", author: "zed", title: "t", body: "b", posted_at: "2026-08-29T09:00:00Z", seen_at: "2026-08-29T10:00:00Z", probe: "SaaS:new" }) + "\n");
+const blocked = es4(["mark", "t3_z", "sent"]);
+check("replying where you have no standing is refused", /not logged/.test(blocked), true);
+check("...and the refusal names the measured shape", /83\.9 minutes/.test(blocked), true);
+check("...and offers the override rather than just saying no", /--anyway/.test(blocked), true);
+check("the override works, because you are the one posting", /logged as answered/.test(es4(["mark", "t3_z", "sent", "--anyway"])), true);
+// A skip is not a reply, so the gate has no business touching it.
+check("a skip is never gated", /discarded/.test(es4(["mark", "t3_z", "skip"])), true);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

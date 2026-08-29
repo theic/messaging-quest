@@ -30,6 +30,7 @@ import { fromDescription, isParody, sidebarUrl, roomFile, readRoomFile } from ".
 import { measureVoice, mergeVoice, voiceRules, voiceSummary, lengthCeiling, MIN_SAMPLE_CHARS } from "../lib/voice.mjs";
 import { signalWritingRules, communityRisks } from "../lib/writing.mjs";
 import { repeats, claims, inventedLinks, RUN_LIMIT } from "../lib/guards.mjs";
+import { standing, readiness, burst, mix, CQS_NOTE, PER_ROOM_24H, OVERALL_24H } from "../lib/ready.mjs";
 
 const DIR = process.env.EARSHOT_DIR || ".earshot";
 const F = (n) => join(DIR, n);
@@ -704,8 +705,28 @@ cmds.queue = (args) => {
 
 cmds.mark = (args) => {
   const [id, mark] = args;
-  if (!id || !["sent", "skip"].includes(mark)) die("usage: es mark <item-id> <sent|skip>");
+  if (!id || !["sent", "skip"].includes(mark)) die("usage: es mark <item-id> <sent|skip> [--anyway]");
   const it = found().get(id) || die(`no such item: ${id}`);
+
+  // The gate. It fires before the mark is written, and only on `sent` — a skip
+  // is not a reply. Cancel is the default and "post anyway" is the weaker
+  // option, which is the one pattern worth taking wholesale from a competitor;
+  // what is NOT taken is their fixed seven-day timer, because a timer is not a
+  // safety check.
+  if (mark === "sent" && !args.includes("--anyway")) {
+    const place = it.place ?? subredditOf(it.url) ?? "?";
+    const b = burst(sentLog(), place);
+    const stand = readiness(standing([...items().values()], checksById()).get(place), roomState(place));
+    const stop = b ? b.why : stand.state === "not ready" ? `you are not ready in r/${place} — ${stand.why}` : null;
+    if (stop) {
+      console.log(`  not logged — ${stop}.\n`);
+      console.log(`  The shape that cost this project its visibility was eleven replies in`);
+      console.log(`  83.9 minutes across seven subreddits with no history in any of them.`);
+      console.log(`  The limits here are ${PER_ROOM_24H} a room and ${OVERALL_24H} overall in 24 hours.\n`);
+      console.log(`  If you have already posted it, say so:  es mark ${id} sent --anyway`);
+      return;
+    }
+  }
   append("marks.jsonl", { id, mark, at: now() });
   if (mark === "sent" && it.author) {
     // Permanent, and across every project. Cheaper to write than to explain
@@ -835,6 +856,65 @@ const saveDraft = (it, text, fp) => {
   console.log(`You send it yourself, from your own account. Nothing here posts.`);
 };
 
+/* ------------------------------------------------------- phase 4 — the gate */
+
+/** Everything you have marked as answered, with the room it was in. The
+ *  governor's whole input. */
+const sentLog = () => {
+  const all = found();
+  return readJsonl("marks.jsonl").filter((m) => m.mark === "sent")
+    .map((m) => ({ at: m.at, place: all.get(m.id)?.place ?? subredditOf(all.get(m.id)?.url ?? "") ?? "?" }));
+};
+
+/**
+ * Where you stand, room by room.
+ *
+ * §06 calls this the shareable artifact, and the reasoning is worth keeping in
+ * front of whoever changes it: nobody screenshots a lead queue, because it is
+ * private and slightly embarrassing. People absolutely screenshot a tool that
+ * told them no. So this is built to be legible on its own, out of context, to
+ * somebody who does not have the tool.
+ */
+cmds.ready = (args) => {
+  const only = args[0] ? String(args[0]).replace(/^\/?r\//, "") : null;
+  const mine = [...items().values()];
+  const rooms = standing(mine, checksById());
+
+  // Rooms you have probed but never spoken in are the ones most worth showing:
+  // an empty row here is the whole point of the command.
+  for (const pr of readJsonl("probes.jsonl")) if (!rooms.has(pr.place)) rooms.set(pr.place, null);
+  for (const src of sources()) if (!rooms.has(src.place)) rooms.set(src.place, null);
+
+  const names = [...rooms.keys()].filter((p) => !only || p.toLowerCase() === only.toLowerCase()).sort();
+  if (!names.length) return console.log(only ? `nothing known about r/${only} yet.` : `no rooms yet — \`es sync\` to read your own history, or \`es probe <sub>\`.`);
+
+  for (const place of names) {
+    const r = rooms.get(place);
+    const v = readiness(r, roomState(place));
+    const label = { ready: "ready    ", thin: "thin     ", unknown: "unknown  ", "not ready": "not ready" }[v.state];
+    console.log(`  ${label}  r/${place}`);
+    console.log(`             ${wrap(v.why, 66, "             ")}`);
+    if (r?.quiet_days != null && r.quiet_days > 14 && v.state !== "not ready")
+      console.log(`             last comment ${r.quiet_days} days ago`);
+  }
+
+  // The mirror, and the sentence that stops it becoming a promise.
+  const sent = sentLog();
+  const m = mix(mine.filter((i) => i.kind === "comment").length, sent.length);
+  console.log(`\n  ${m.seen} of your comments seen · ${m.outreach} answered from the queue${m.ratio ? ` · about ${m.ratio.toFixed(1)} to 1` : ""}`);
+  console.log(`  ${wrap(m.note, 74, "  ")}`);
+  console.log(`\n  ${wrap(CQS_NOTE, 74, "  ")}`);
+};
+
+const wrap = (text, width, pad) => {
+  const out = []; let line = "";
+  for (const w of String(text).split(/\s+/)) {
+    if ((line + " " + w).trim().length > width) { out.push(line.trim()); line = w; } else line += " " + w;
+  }
+  if (line.trim()) out.push(line.trim());
+  return out.join(`\n${pad}`);
+};
+
 /* ------------------------------------------------------------------- main */
 
 const [, , cmd, ...args] = process.argv;
@@ -864,8 +944,10 @@ find — other people, and the rooms it refuses to look in
   judge < verdicts.json   [{n, fit, why}] — the model lives outside this process
   queue [--json]          who is waiting for an answer from you
   mark <id> sent|skip     answered, or discard. "sent" retires that person
-                          from every future queue, permanently
+                          from every future queue, permanently. Refused if the
+                          burst limits or your standing say no; --anyway posts
 
+  ready [<sub>]           where you stand, room by room, and your mix
   voice                   how you write, measured from your own comments
   draft <id>              the material for answering one person
   draft <id> --save       save a reply and run the refusals over it

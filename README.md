@@ -193,6 +193,57 @@ disk, this one flags 25 of 120 pairs, with a real 19-word identical run in it.
 A duplicate detector that never fires is worse than none, because it is also a
 reassurance.
 
+## Where you stand
+
+```bash
+node bin/es.mjs ready
+```
+
+```
+  thin       r/Entrepreneur
+             1 visible comment here. You are a member, which is what Crowd
+             Control tests, but membership is made of second and third replies
+             last comment 27 days ago
+  not ready  r/SaaS
+             all 1 of your comments here are invisible to strangers. More of
+             them will not help
+  not ready  r/freelance
+             no comments here at all. Crowd Control's maximum tier filters
+             exactly this, by definition
+  ready      r/smallbusiness
+             7 visible comments over 21 days
+```
+
+The r/SaaS line is the one no other tool can produce, because it needs the
+first half of this one: a comment you cannot be seen making is not standing,
+and counting comments alone reports it as ready.
+
+`mark <id> sent` is refused when the burst limits or your standing say no — two
+replies per room and five overall in 24 hours, from the shape that actually
+caused the damage here: **eleven replies in 83.9 minutes across seven
+subreddits with no history in any of them.** The refusal always offers
+`--anyway`, because you are the one posting and a tool that cannot be overruled
+just gets worked around.
+
+### What it counts, and what it refuses to
+
+The warm-up is a countdown over **signals**, not days. A competitor ships this
+as a fixed seven-day timer with a badge reading "Browse only, 6 days left". The
+pattern is worth taking wholesale; the timer is not — waiting a week in a room
+you have never spoken in leaves you exactly as filterable as you were on day
+one.
+
+And the self-promotion ratio is shown as a mirror, never as a rule. The 1:5
+figure is folklore. Reddit's own words: promotional content *"is not inherently
+considered to be spam"*, some communities abide by a 10% rule, and — verbatim —
+*"It is ultimately up to you and your team to decide what works best for your
+community."* There is no sitewide ratio. You can hit a perfect 1:5 and still be
+filtered, so selling it as safety is a checkable false claim.
+
+Contributor Quality Score is named and not scored. It is account age, email
+verification and network signals, none of it readable from a keyless surface. A
+number invented for it would be decoration.
+
 ## What the words mean
 
 | | |
