@@ -26,24 +26,49 @@ r/SaaS  1 of yours
 
 ## What it is
 
-A single Node script. No dependencies, no account, no API key, no server, no
-model, no bill. It reads your own public profile the way a logged-out stranger
-reads it, re-reads each thread you took part in, and tells you which of the
-things you said a stranger can actually see.
+A dashboard on your own machine and a CLI underneath it. No account, no hosted
+anything, no bill. It reads your own public profile the way a logged-out
+stranger reads it, re-reads each thread you took part in, and tells you which of
+the things you said a stranger can actually see. Then it goes and finds the
+people asking for what you sell.
 
 It stores everything in `.earshot/` in the directory you run it from, as
-append-only JSONL you can read with `cat`.
+append-only JSONL you can read with `cat`, and four markdown files you can open
+in any editor.
+
+**It has zero dependencies. All of it.** `npm install` installs nothing —
+every verb, every screen, and all three model seats run on a bare Node 18. The
+model layer is [lib/llm.mjs](lib/llm.mjs): fetch, a JSON-schema check, and a
+tool loop, ~250 lines you can read in one sitting. A tool that holds your
+prospect list and your API key should not come with a supply chain, so this
+one doesn't. The models themselves stay optional — each screen that wants one
+says so and offers the manual path instead.
 
 ## Install
 
-Node 18 or newer. Nothing else.
+Node 18 or newer.
 
 ```bash
-git clone https://github.com/YOUR-NAME/earshot && cd earshot
-node bin/es.mjs init
+git clone https://github.com/YOUR-NAME/earshot && cd earshot && node bin/es.mjs init
 ```
 
-## Use
+Then open the dashboard and set it up there:
+
+```bash
+node bin/es.mjs serve
+```
+
+That is `http://127.0.0.1:8787`, and everything this tool does is reachable from
+it — onboarding, the queue, your prospects, the memory files, the models.
+(`npm start` does the same thing; the direct form is spelled out because
+Windows PowerShell blocks npm's `.ps1` shim under its default execution
+policy, and there is no reason to make anybody debug that for a tool with
+nothing to install.)
+
+For the scout, judge and writer, add an OpenRouter key on **Settings**. That
+is the whole step — there are no libraries to install.
+
+### Or drive it from the terminal
 
 ```bash
 node bin/es.mjs me <your-reddit-username>
@@ -52,6 +77,9 @@ node bin/es.mjs check     # re-read each thread, logged out
 node bin/es.mjs status    # what became of the things you said
 node bin/es.mjs back      # who replied to you and is still waiting
 ```
+
+The CLI is still the one implementation of every verb — the dashboard's buttons
+spawn it rather than reimplementing it, so the two can never drift.
 
 `check` takes about a minute per thread. That is not politeness — logged out,
 Reddit answers one request a minute per address, measured. The tool waits rather
@@ -131,17 +159,53 @@ room cannot be watched.
 "I could not read the rules, go and look" is worth more than a confident
 80/100.
 
-## Judging, and where the model is not
+## Judging, and where the model is
 
 `tick` reads feeds and stores what is new. That loop is plain code — **no model
-runs in it.** Judging is a bounded call that happens outside this process
-entirely: `pending` prints what needs a verdict as numbered JSON, and `judge`
-takes `[{n, fit, why}]` back on stdin.
+runs in it**, and that is not going to change: it is the loop that spends the
+one-request-a-minute budget, and a model in it would be a model deciding how to
+spend your address's quota.
 
-That is what keeps the tool free, local and model-swappable: point it at
-whatever you already pay for. Every verdict is stamped with a hash of your
-`rule.md`, so when the queue changes you can tell whether it was your rule or
-the model that moved.
+Judging is a bounded call, and you have two ways to make it:
+
+- **In the dashboard.** Press *Judge*, and the judge model scores everything
+  pending against your `rule.md`, five at a time.
+- **Outside this process entirely.** `pending` prints what needs a verdict as
+  numbered JSON, and `judge` takes `[{n, fit, why}]` back on stdin. Point it at
+  whatever you already pay for — the MCP server below makes your Claude or
+  ChatGPT that judge, and then no OpenRouter key is needed at all.
+
+Both write through the same code path — the dashboard calls the model and then
+hands the result to `es judge`, because that is what stamps the rubric hash,
+clears the pending list and settles the probe. Two implementations of that is
+how a queue starts disagreeing with itself.
+
+Every verdict is stamped with a hash of your `rule.md`, so when the queue
+changes you can tell whether it was your rule or the model that moved.
+
+### The models
+
+Three roles, because they are not the same job. A flash model is genuinely good
+enough at *"does this person have the problem, yes or no"* and runs on
+everything; the writer runs once per reply and the output goes out under your
+name.
+
+| Role | Default | Per M in/out |
+|---|---|---|
+| **judge** | `deepseek/deepseek-v4-flash-0731` | $0.065 / $0.18 |
+| **scout** | `z-ai/glm-5.3` | $1.40 / $4.40 |
+| **writer** | `moonshotai/kimi-k3` | $3.00 / $15.00 |
+
+The judge default was moved off GLM 5.3 Flash on a measurement: reasoning is
+mandatory on that endpoint, and ~300 forced reasoning tokens made the
+cheapest-per-token model eleven times the price per verdict and six times
+slower. The measurement is in [lib/models.mjs](lib/models.mjs), dated.
+
+All three are changeable on **Settings**, which shows what each costs and what
+judging a hundred posts would come to — about a cent on the defaults. Each role
+falls back down its own list of alternates when a provider errors, using
+OpenRouter's model-level `models:` array, because a `tick` that dies on one
+provider's `429` has spent its minute-per-read budget and produced nothing.
 
 `mark <id> sent` retires that person from every future queue, permanently.
 Showing you the same human twice is what makes a queue feel like a lottery.
@@ -247,12 +311,37 @@ number invented for it would be decoration.
 ## The dashboard
 
 ```bash
-node bin/es.mjs serve          # then open http://127.0.0.1:8787
+node bin/es.mjs serve      # then open http://127.0.0.1:8787
 ```
 
-Seven views over the same `.earshot/` directory the CLI reads: **Standing**
-(what became of what you said), **Waiting**, **Queue**, **Rooms**, **Ready**,
-**Sources**, **Voice**.
+Everything is here. Not a window onto the CLI — the whole product.
+
+| | |
+|---|---|
+| **Setup** | Paste your URL, the scout reads it, you confirm what it found one card at a time. |
+| **Queue** | One person, one card, the draft already there. |
+| **Prospects** | Everybody found, judged, answered, skipped or retired. Searchable, paginated, undoable. |
+| **Standing** | What became of the things you said. |
+| **Waiting** · **Ready** · **Voice** | Who is owed an answer, where you stand, how you write. |
+| **Sources** · **Rooms** | What is watched, and whose rules have been read. |
+| **Memory** | The four markdown files, edited in the browser. |
+| **Settings** | Your OpenRouter key, a model per role, and what each costs. |
+
+Every verb that reads Reddit is a button, and every one of them is long — a
+minute per request, measured. They run as jobs with a progress strip at the top
+of every page and a Stop button, because a `check` over twenty threads is a
+twenty-minute job and a request handler is not where that belongs.
+
+### Prospects, and the undo that was missing
+
+Marking somebody answered retires them from every future queue, permanently and
+across every project. That is the right default — showing you the same human
+twice is what makes a queue feel like a lottery — but until now there was no
+screen that could show you the list, and no way back from a misclick.
+
+`contacted.jsonl` stays append-only. An undo appends `{author, removed: true}`
+and the last word about a person wins, so the history of the mistake is still on
+disk rather than edited out of it.
 
 It is bound to `127.0.0.1`, never `0.0.0.0` — that one argument is the whole
 "you, not me, are the data controller" position expressed as a bind address.
@@ -276,10 +365,65 @@ bodies are escaped at a single seam, and a test feeds the dashboard an `<img
 onerror>` payload and asserts the markup never reaches the browser. If that test
 ever goes red, a Reddit post can run script in your session.
 
-**Nothing loads from anywhere.** The pages ship
-`Content-Security-Policy: default-src 'none'`, so a later edit that reaches for a
-CDN font breaks loudly instead of quietly making a local-only dashboard phone
-home.
+**Nothing loads from anywhere.** The pages ship `Content-Security-Policy:
+default-src 'none'` as the base, so a later edit that reaches for a CDN font,
+an analytics snippet or a hosted script breaks loudly instead of quietly making
+a local-only dashboard phone home.
+
+Two sources are allowed and both are this process: `script-src 'self'` for the
+one local file that paints the job progress strip, and `connect-src 'self'` for
+the one endpoint it polls. Every other resource type is still refused by
+default rather than by omission. Before the job runner there was no script at
+all — which was a stronger guarantee and also meant a minute-long job could not
+report progress without reloading the page under your cursor.
+
+## Platforms are skills
+
+Reddit is not wired through the tool — it is a folder. `skills/reddit/` holds
+a `SKILL.md` (what the platform is, its norms, its measured facts) and an
+`adapter.mjs` (how to read it, how fast it may be read, which shapes of
+reading it refuses). The engine — store, pacing, judging, dashboard, hub —
+asks the adapter and knows nothing else.
+
+Connecting another platform is writing that same folder and dropping it into
+`.earshot/skills/` — it loads without touching the repo, and on a name
+collision yours wins. `node bin/es.mjs platforms` shows what is loaded. The
+contract is [skills/README.md](skills/README.md), it is deliberately small,
+and it grows by extraction from platforms that exist rather than speculation
+about ones that might. Reddit stays the only built-in until it is mastered;
+a tool that half-reads five platforms is worse than one that reads one
+properly.
+
+## Plug it into what you already use
+
+The dashboard is one surface, not the product. The same store speaks three
+other ways:
+
+- **Your Claude / ChatGPT app, via MCP.** `bin/mcp.mjs` serves seven tools
+  over stdio — status, queue, pending, judge, draft material, save draft,
+  mark — plus the four memory files as resources. The assistant on the other
+  end is a model, so it can *be* the judge and the writer: judged against
+  your `rule.md`, drafting from your measured voice and `me.md`, refusals
+  relayed verbatim. Used this way earshot needs no OpenRouter key at all.
+
+  ```bash
+  claude mcp add earshot -- node bin/mcp.mjs
+  ```
+
+- **Your messenger, via OpenClaw.** Copy
+  [integrations/openclaw/SKILL.md](integrations/openclaw/SKILL.md) into your
+  agent's skills directory and it knows the verbs, the etiquette it inherits,
+  and the line it must not cross (it drafts; you send).
+
+- **Other machines, via the hub.** `node bin/hub.mjs` serves what one machine
+  found as a read-only feed on its own port — public posts only, never
+  verdicts, marks or people. Everything that makes a queue *yours* happens on
+  your machine. See the sharing section below.
+
+What is deliberately not pluggable: nothing exposes `probe`/`tick`/`sync` to a
+chat surface. Reading costs a minute a request and belongs to the machine that
+watches, not to a conversation that times out — and no surface, anywhere, can
+post.
 
 ## What the words mean
 
@@ -366,10 +510,11 @@ check is written down where somebody will find it.
 
 ## Licence
 
-ELv2 (Elastic License 2.0) — the licence named in the roadmap, chosen so the tool
-can be given away without a hosted competitor reselling it.
+ELv2 (Elastic License 2.0) — the canonical text is in [LICENSE](LICENSE).
 
-**The `LICENSE` file is not in this repo yet.** Paste the canonical text from
-<https://www.elastic.co/licensing/elastic-license> before the repo goes public;
-it is not reproduced here from memory, because a licence transcribed
-approximately is worse than no licence file.
+In one breath: use it, change it, redistribute it, for yourself or your
+company, free. The one thing you may not do is sell it to others as a managed
+service. That line is chosen deliberately: it keeps the local tool honestly
+free forever while leaving room for a first-party hosted version to fund the
+work — the same trade Elastic, and half the infrastructure you already run,
+settled on.

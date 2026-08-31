@@ -1,14 +1,17 @@
 {
   "name": "earshot",
-  "version": "0.1.0",
-  "description": "Find out what Reddit actually did to the comments you wrote.",
+  "version": "0.3.0",
+  "description": "Find out what Reddit actually did to the comments you wrote — and answer the people who are asking for what you sell.",
   "type": "module",
   "bin": {
     "es": "./bin/es.mjs"
   },
   "scripts": {
-    "test": "node bin/test.mjs && node --test bin/voice-test.mjs",
-    "serve": "node bin/serve.mjs"
+    "start": "node bin/serve.mjs",
+    "serve": "node bin/serve.mjs",
+    "hub": "node bin/hub.mjs",
+    "mcp": "node bin/mcp.mjs",
+    "test": "node bin/test.mjs && node --test bin/voice-test.mjs"
   },
   "license": "Elastic-2.0",
   "engines": {
@@ -17,6 +20,11 @@
   "files": [
     "bin",
     "lib",
-    "README.md"
-  ]
+    "skills",
+    "integrations",
+    "README.md",
+    "PLAN.md",
+    "LICENSE"
+  ],
+  "//": "Zero runtime dependencies, deliberately. The model layer is lib/llm.mjs — fetch, a JSON-schema check, and a tool loop — so `npm install` installs nothing, there is no supply chain to audit, and the whole tool runs on a bare Node 18. Before removing this property, read the header of lib/llm.mjs for what adding a framework back would actually buy."
 }

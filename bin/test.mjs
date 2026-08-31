@@ -15,11 +15,14 @@ import { mkdtempSync, readFileSync, writeFileSync, appendFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseFeed, threadOf, waitFor, ANON_GAP_MS } from "../lib/reddit.mjs";
+import { parseFeed, threadOf, waitFor, ANON_GAP_MS } from "../skills/reddit/feed.mjs";
 import { classify, history } from "../lib/verdict.mjs";
 import { conversation, byUrgency } from "../lib/conversation.mjs";
-import { refuse, verdictOf, bansPromotion, scoped } from "../lib/sources.mjs";
-import { fromDescription, isParody, readRoomFile, roomFile } from "../lib/rules.mjs";
+import { refuse, scoped } from "../skills/reddit/shapes.mjs";
+import { verdictOf } from "../lib/probe.mjs";
+import { fromDescription, isParody, readRoomFile, roomFile, bansPromotion } from "../lib/rules.mjs";
+import { conforms } from "../lib/llm.mjs";
+import { loadPlatforms, platform, roomOf } from "../lib/platform.mjs";
 import { longestSharedRun, repeats, claims, inventedLinks, RUN_LIMIT } from "../lib/guards.mjs";
 import { standing, readiness, burst, mix } from "../lib/ready.mjs";
 
@@ -429,10 +432,20 @@ writeFileSync(join(DW, "found.jsonl"), JSON.stringify({
 writeFileSync(join(DW, "verdicts.jsonl"), JSON.stringify({ id: "t3_evil", fit: true, why: "stuck", rule: "abc12345", at: "2026-08-28T10:00:00Z" }) + "\n");
 writeFileSync(join(DW, "probes.jsonl"), JSON.stringify({ place: "smallbusiness", q: null, url: "u", read: 1, at: "2026-08-28T10:00:00Z" }) + "\n");
 
-const PORT = 8000 + (process.pid % 900);
-const srv = spawn(process.execPath, [SERVE, "--port", String(PORT)], { env: { ...process.env, EARSHOT_DIR: DW }, stdio: ["ignore", "pipe", "pipe"] });
-const base = `http://127.0.0.1:${PORT}`;
-const up = async () => { for (let i = 0; i < 80; i++) { try { await fetch(base + "/"); return true; } catch { await new Promise((r) => setTimeout(r, 50)); } } return false; };
+// Port 0 — the OS hands out a free one, and serve prints the port it actually
+// bound. A guessed port collided with a running hub once and every request in
+// this section quietly interrogated the wrong server.
+const srv = spawn(process.execPath, [SERVE, "--port", "0"], { env: { ...process.env, EARSHOT_DIR: DW }, stdio: ["ignore", "pipe", "pipe"] });
+const base = await new Promise((resolve) => {
+  let out = "";
+  const t = setTimeout(() => resolve(null), 8000);
+  srv.stdout.on("data", (d) => {
+    out += d;
+    const m = out.match(/http:\/\/127\.0\.0\.1:(\d+)/);
+    if (m) { clearTimeout(t); resolve(`http://127.0.0.1:${m[1]}`); }
+  });
+});
+const up = async () => { if (!base) return false; for (let i = 0; i < 80; i++) { try { await fetch(base + "/"); return true; } catch { await new Promise((r) => setTimeout(r, 50)); } } return false; };
 const GET = async (p) => { const r = await fetch(base + p); return { status: r.status, body: await r.text() }; };
 
 if (!(await up())) { console.log("FAIL  the dashboard did not start"); fail++; }
@@ -469,6 +482,33 @@ else {
     /does not allow it/.test(esFails2(["watch", "smallbusiness"], DW)), true);
 }
 srv.kill();
+
+/* ------------------------------------------------------ platforms as skills */
+
+// The loader is the one door between lib/ and skills/. If it silently loaded
+// nothing, every room would resolve to "?" and standing would be empty — a
+// quiet break, which is what this file is for.
+await loadPlatforms(null);
+check("the reddit skill loads", platform("reddit")?.name, "Reddit");
+check("roomOf resolves through whichever platform recognises the url",
+  roomOf("https://www.reddit.com/r/smallbusiness/comments/abc/def/"), "smallbusiness");
+check("roomOf says null, not a guess, for a url no platform knows", roomOf("https://example.com/post/1"), null);
+
+/* -------------------------------------------------- the JSON-schema check */
+
+// One malformed element must void the batch LOUDLY — the alternative is a
+// verdict written from a field that was not there.
+const V = {
+  type: "object", required: ["verdicts"],
+  properties: { verdicts: { type: "array", items: {
+    type: "object", required: ["n", "fit", "why"],
+    properties: { n: { type: "number" }, fit: { type: "boolean" }, why: { type: "string" } } } } },
+};
+check("a valid verdict conforms", conforms(V, { verdicts: [{ n: 1, fit: true, why: "x" }] }), null);
+check("a missing field is named, with its path", conforms(V, { verdicts: [{ n: 1, why: "x" }] }), "$.verdicts[0].fit is missing");
+check("a wrong type is named, with both types", conforms(V, { verdicts: [{ n: "1", fit: true, why: "x" }] }),
+  "$.verdicts[0].n should be a number, got string");
+check("prose where an array belongs is refused", conforms(V, { verdicts: "all fine" }), "$.verdicts should be an array, got string");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

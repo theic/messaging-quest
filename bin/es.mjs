@@ -22,12 +22,15 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } fr
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import { ANON_GAP_MS, waitFor, read, userFeed, threadFeed, commentFeed, threadOf, subredditOf } from "../lib/reddit.mjs";
+import reddit from "../skills/reddit/adapter.mjs";
+import { loadPlatforms, platforms } from "../lib/platform.mjs";
 import { classify, history, STATES } from "../lib/verdict.mjs";
 import { conversation, byUrgency } from "../lib/conversation.mjs";
-import { scoped, submissions, refuse, verdictOf, pct } from "../lib/sources.mjs";
+import { scoped, submissions, refuse } from "../skills/reddit/shapes.mjs";
+import { verdictOf } from "../lib/probe.mjs";
 import { fromDescription, isParody, sidebarUrl, roomFile } from "../lib/rules.mjs";
 import { store, FILES } from "../lib/store.mjs";
+import { seedMissing } from "../lib/memory.mjs";
 import { measureVoice, mergeVoice, voiceRules, voiceSummary, lengthCeiling, MIN_SAMPLE_CHARS } from "../lib/voice.mjs";
 import { signalWritingRules, communityRisks } from "../lib/writing.mjs";
 import { repeats, claims, inventedLinks, RUN_LIMIT } from "../lib/guards.mjs";
@@ -35,6 +38,13 @@ import { standing, readiness, burst, mix, CQS_NOTE, PER_ROOM_24H, OVERALL_24H } 
 
 const DIR = process.env.EARSHOT_DIR || ".earshot";
 const F = (n) => join(DIR, n);
+
+// The registry finds skills/ and <DIR>/skills/. This CLI still speaks to the
+// reddit adapter by name — mastering one platform before connecting a second
+// is the plan, not an accident — but everything platform-mechanical it uses
+// comes through that adapter, and the store resolves rooms via the registry.
+await loadPlatforms(DIR);
+const { gapMs: ANON_GAP_MS, waitFor, read, userFeed, threadFeed, commentFeed, threadOf, roomOf: subredditOf } = reddit;
 const now = () => new Date().toISOString();
 const die = (m) => { console.error(`earshot: ${m}`); process.exit(1); };
 const sha = (s) => createHash("sha256").update(String(s)).digest("hex");
@@ -88,32 +98,6 @@ async function fetchAnon(url, { quiet = false } = {}) {
   return r;
 }
 
-const RULE_SEED = `# Fit rule
-
-A post is a fit **iff** the author is a person who has the problem and is
-visibly working at it, and is **not** selling a solution to it or advising
-somebody else about it.
-
-## Answer YES when
-- They describe the difficulty in their own words.
-- They ask how to solve it.
-- They show what it currently costs them.
-
-## The near miss
-- Pitching their own product or service.
-- Answering somebody else's question rather than having the problem.
-- A tactic write-up, case study or launch. A war story is not somebody stuck.
-- Already solved it, reporting back in the past tense.
-- **Advertising.** Somebody offering the thing, however softly, is not somebody
-  who needs it. This clause leaks without being written down.
-- **Job seekers.** "Looking for work" is a different need from the one you
-  solve, and it reads as a fit to every judge that has not been told otherwise.
-
-## When you cannot tell
-Answer YES. A wrong yes costs one line in a queue you skim. A wrong no costs a
-person nobody will ever know existed. Uncertainty is a yes, not a fallback.
-`;
-
 /* --------------------------------------------------------------- commands */
 
 const cmds = {};
@@ -122,8 +106,11 @@ cmds.init = () => {
   mkdirSync(DIR, { recursive: true });
   mkdirSync(join(DIR, "rooms"), { recursive: true });
   for (const f of FILES) if (!existsSync(F(f))) writeFileSync(F(f), "");
-  if (!existsSync(F("rule.md"))) writeFileSync(F("rule.md"), RULE_SEED);
-  console.log(`ready — ${DIR}/\n\nNext:  es me <your-reddit-username>\n       es sync\n       es check\n\nWhen you want to find people: edit ${DIR}/rule.md, then \`es probe <subreddit> --q "<phrase>"\`.`);
+  // rule.md, project.md, icp.md and me.md. They live in lib/memory.mjs because
+  // the dashboard edits them and the agents read them, and a seed defined in
+  // two places is a rubric that means two things.
+  seedMissing(DIR);
+  console.log(`ready — ${DIR}/\n\nThe quickest way in is the dashboard:  es serve\n\nOr by hand:  es me <your-reddit-username>\n             es sync\n             es check\n\nWhen you want to find people: edit ${DIR}/rule.md, then \`es probe <subreddit> --q "<phrase>"\`.`);
 };
 
 cmds.me = (args) => {
@@ -394,6 +381,79 @@ cmds.log = (args) => {
 
 /** §04, and it is also just correct: content deleted from Reddit should not
  *  live on here. The hash stays so an edit is still detectable; the words go. */
+/**
+ * Take what another machine already found, instead of reading it again.
+ *
+ * The hub costs a minute a request to fill, exactly as this would; the point is
+ * that it costs a minute ONCE rather than once per person watching the same
+ * room. Ten clients on five shared sources is fifty reads an hour done
+ * separately and five done here.
+ *
+ * What arrives is public posts and nothing else. Everything that makes the
+ * queue yours happens after this line and on this machine: the verdicts are
+ * judged against YOUR rule.md, the drafts are written in YOUR voice, and
+ * `contacted` is consulted here — so somebody you have already answered never
+ * enters your queue, and the hub is never told that you answered them.
+ *
+ *   es pull https://hub.example.com --token es_… [--limit 500]
+ */
+cmds.pull = async (args) => {
+  const base = String(args[0] || die(`usage: es pull <hub-url> --token <token>`)).replace(/\/+$/, "");
+  const limit = args.includes("--limit") ? Number(args[args.indexOf("--limit") + 1]) : 500;
+
+  // Cursors are per hub, so pulling from two of them does not make each one
+  // skip what the other already advanced past. The token is remembered here
+  // too, so a scheduled `es pull <url>` needs no secret on its command line —
+  // a token in a cron entry is a token in every process list on the machine.
+  const cursorFile = F("pull.json");
+  const state = existsSync(cursorFile) ? JSON.parse(readFileSync(cursorFile, "utf8")) : {};
+  const token = (args.includes("--token") ? args[args.indexOf("--token") + 1] : null)
+    ?? process.env.EARSHOT_FEED_TOKEN ?? state[base]?.token;
+  if (!token) die("no token — pass --token once and it is remembered, or set EARSHOT_FEED_TOKEN");
+  let cursor = state[base]?.cursor ?? "";
+
+  const known = found(), gone = contacted(), p = pending();
+  let added = 0, skipped = 0, pages = 0;
+
+  for (;;) {
+    const u = `${base}/feed?after=${encodeURIComponent(cursor)}&limit=${limit}`;
+    let r;
+    try {
+      r = await fetch(u, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) });
+    } catch (e) {
+      die(`could not reach the hub: ${e.message}`);
+    }
+    if (r.status === 401) die("the hub refused that token");
+    if (!r.ok) die(`the hub answered ${r.status}`);
+    const body = await r.json();
+    pages++;
+
+    for (const it of body.items ?? []) {
+      if (!it.id || known.has(it.id)) { skipped++; continue; }
+      // Somebody you have already written to is not a new lead, ever. Checked
+      // HERE rather than at the hub, because the hub must never be told who
+      // that is.
+      if (it.author && gone.has(String(it.author).toLowerCase())) { skipped++; continue; }
+      const row = { ...it, via: base, pulled_at: now() };
+      append("found.jsonl", row);
+      known.set(it.id, row);
+      p.push({ n: p.length + 1, id: it.id, probe: it.probe ?? `${base}:feed` });
+      added++;
+    }
+
+    cursor = body.cursor ?? cursor;
+    if (!body.more) break;
+  }
+
+  setPending(p);
+  state[base] = { cursor, at: now(), token };
+  writeFileSync(cursorFile, JSON.stringify(state, null, 2) + "\n");
+
+  console.log(`${added} new from ${base}${skipped ? `, ${skipped} already known or already answered` : ""}${pages > 1 ? ` (${pages} pages)` : ""}.`);
+  if (added) console.log(`\nThey are judged against YOUR rule.md, on this machine:  es judge   (or press Judge in the dashboard)`);
+  else console.log(`\nNothing new. The cursor is at ${cursor || "the beginning"}.`);
+};
+
 cmds.sweep = () => {
   const cutoff = Date.now() - BODY_TTL_MS;
   let n = 0, m = 0;
@@ -547,6 +607,18 @@ cmds.sources = () => {
     const r = lr.get(s.id);
     console.log(`${s.id.padEnd(34)} ${String(seen.filter((f) => f.probe === s.id).length).padStart(4)} found   ${!r ? "never read" : r.ok ? `read ${r.at.slice(0, 16).replace("T", " ")}` : `ERROR ${r.err ?? ""}`}`);
   }
+};
+
+/** The platforms this install can read. One today, on purpose — the contract
+ *  in skills/README.md grows by extraction from a mastered platform, not by
+ *  speculation about unmeasured ones. */
+cmds.platforms = () => {
+  for (const p of platforms()) {
+    console.log(`${p.id.padEnd(12)} ${p.name.padEnd(10)} ${p.origin.padEnd(9)} one read per ${Math.round(p.gapMs / 1000)}s`);
+  }
+  console.log(`\nA platform is a skill: a folder with a SKILL.md and an adapter.mjs.`);
+  console.log(`Built-in ones live in skills/; drop your own into ${DIR}/skills/ and it loads.`);
+  console.log(`The contract is skills/README.md.`);
 };
 
 /** Read every source whose cadence is up. Plain code — there is no model in
@@ -909,6 +981,16 @@ find — other people, and the rooms it refuses to look in
 
   serve [--port N]        the dashboard, on localhost, in your browser
   sweep                   drop stored bodies past 48h
+  platforms               the platforms this install can read — each one is a
+                          skill folder; drop your own into .earshot/skills/
+
+sharing one machine's reading with several
+
+  pull <hub-url> --token <t>   take what another machine already found, instead
+                          of spending a minute a request reading it again.
+                          Public posts only. Judged here, against YOUR rule.md
+  node bin/hub.mjs        BE that machine: a read-only feed of found.jsonl on
+                          its own port. Tunnel to THAT, never to the dashboard
 
 Nothing here posts, messages, votes, or reads anybody else's account.`);
   process.exit(cmd ? 1 : 0);

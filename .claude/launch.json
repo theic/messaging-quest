@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "earshot",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["bin/es.mjs", "serve"],
+      "port": 8787,
+      "url": "http://127.0.0.1:8787"
+    }
+  ]
+}

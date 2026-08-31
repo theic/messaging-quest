@@ -24,6 +24,15 @@ const UA =
  * Hence 65s rather than 61s, and hence the 429 path in `es.mjs` is the
  * authority rather than this constant: it waits out the number Reddit itself
  * reports. This value only decides how often that path has to be used.
+ *
+ * Explained later (2026-08-31): what was measured here is Reddit's 2026-06-11
+ * RSS throttle — ~1 request/minute/IP, announced to moderators as an
+ * anti-scraping change alongside the May 2026 removal of unauthenticated
+ * .json. So this number is the platform's enforced ceiling, not a comfortable
+ * distance below it: there is ZERO headroom above this gap, and RSS itself
+ * was named as a surface under review. That is why reading is designed to
+ * survive on more than one lane — see PLAN.md ("Reading survives by never
+ * depending on one lane") and research/market-2026-08-31.md.
  */
 export const ANON_GAP_MS = 65_000;
 
