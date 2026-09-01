@@ -29,7 +29,7 @@ import { history, STATES } from "../lib/verdict.mjs";
 import { standing, readiness, burst, mix, PER_ROOM_24H, OVERALL_24H, CQS_NOTE } from "../lib/ready.mjs";
 import { sidebarUrl, roomFile } from "../lib/rules.mjs";
 import { mergeVoice, voiceRules, voiceSummary, applyVoiceAnswers, VOICE_UNSURE } from "../lib/voice.mjs";
-import { nextCards, readStash, patchStash } from "../lib/cards.mjs";
+import { nextCards, readStash, patchStash, proposable } from "../lib/cards.mjs";
 import { relayBroker } from "../lib/relay.mjs";
 import { jobStore } from "../lib/jobs.mjs";
 import { MEMORY, readMemory, readOne, writeMemory, seedMissing, memoryProgress } from "../lib/memory.mjs";
@@ -1143,6 +1143,17 @@ function actCard({ card, action, choice, text }) {
     const existing = existsSync(S.roomPath(place)) ? readFileSync(S.roomPath(place), "utf8") : roomFile(place, null);
     S.writeRoom(place, existing.replace(/^promotion_allowed:.*$/mi, `promotion_allowed: ${picked}`));
     return { ok: true };
+  }
+
+  if (id === "agent.propose") {
+    const p = proposable(readStash(DIR).agent_card?.verb);
+    patchStash(DIR, { agent_card: null });   // either way, the card is spent
+    if (act !== "do" || !p) return { ok: true };
+    // The verb is re-parsed from the STASH, never taken from the request —
+    // the client only ever says "do" or "dismiss" to whatever the server
+    // itself wrote there.
+    if (p.verb === "judge" || p.verb === "draft") { startAgentic(p.verb, p.args); return { ok: true }; }
+    return spawn(p.verb, p.args);
   }
 
   if (id === "work.judge") {

@@ -39,6 +39,7 @@ import { z } from "zod";
 import { seat } from "../lib/models.mjs";
 import { memoryContext, readOne } from "../lib/memory.mjs";
 import { PER_ROOM_24H, OVERALL_24H } from "../lib/ready.mjs";
+import { proposable, patchStash } from "../lib/cards.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const ES = join(ROOT, "bin", "es.mjs");
@@ -111,6 +112,23 @@ const makeTools = (dir) => [
     description: "Read one of the memory files verbatim: rule.md, project.md, icp.md, me.md, persona.md. You may not write them — propose text and tell the operator where it goes.",
     schema: z.object({ file: z.enum(["rule.md", "project.md", "icp.md", "me.md", "persona.md"]) }),
   }),
+  tool(async ({ question, why, verb }) => {
+    // The allowlist is parsed in the zero-dep heart (lib/cards.mjs), and the
+    // server RE-parses it from its own stash at act time — so nothing this
+    // tool writes can widen what the button does beyond what its label says.
+    const p = proposable(verb);
+    if (!p) return "not a proposable verb — allowed: judge | tick | sync | draft <item-id> | probe <room> [phrase]";
+    patchStash(dir, { agent_card: { question: String(question ?? "").slice(0, 140), why: String(why ?? "").slice(0, 400), verb: String(verb).trim(), at: new Date().toISOString() } });
+    return `proposed — "${p.label}" is on the operator's deck now. One proposal stands at a time; proposing again replaces it.`;
+  }, {
+    name: "propose",
+    description: "Put ONE suggestion on the operator's deck as a card: a question (what you suggest and why it is now), a why (the evidence, concretely), and a verb from: judge | tick | sync | draft <item-id> | probe <room> [phrase]. Use this instead of asking them to go and press something — the card IS you pressing it, minus the click, which stays theirs. One proposal at a time; the newest replaces the last.",
+    schema: z.object({
+      question: z.string().describe("The suggestion, as a card title. 'Probe r/freelance for \"how do I find clients\"?'"),
+      why: z.string().describe("Why this, why now — concrete: numbers from the queue, a quote, a gap."),
+      verb: z.string().describe("Exactly one of: judge | tick | sync | draft <item-id> | probe <room> [phrase]"),
+    }),
+  }),
   tool(async () => {
     // The same deck the panel renders — the strategist should never guess
     // what the operator is being shown. EARSHOT_RELAY is the dashboard's own
@@ -153,7 +171,8 @@ House rules, non-negotiable:
 - The pacing limits stand: ${PER_ROOM_24H} replies per room and ${OVERALL_24H} overall in 24 hours.
   If the governor refuses a send, that is the answer — relay its reason.
 - Reading verbs (sync, probe, tick) run on the server's clock, not in chat.
-  Point the operator at the card or dashboard button instead.
+  When one is the right next move, use the propose tool — the card is you
+  reaching for the button; the click stays the operator's.
 - Judge only against rule.md. Draft only from draft_material. Never invent a
   first-person claim me.md does not support.
 - The memory files are the operator's to edit. Propose; never pretend you saved.`;

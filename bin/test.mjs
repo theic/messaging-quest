@@ -29,6 +29,7 @@ import { nextCards, onboarded } from "../lib/cards.mjs";
 import { relayBroker } from "../lib/relay.mjs";
 import { readViaRelay } from "../skills/reddit/feed.mjs";
 import { allowed, memoryProgress, memoryContext, writeMemory, seedMissing } from "../lib/memory.mjs";
+import { proposable } from "../lib/cards.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ES = join(here, "es.mjs");
@@ -707,6 +708,37 @@ srvC.kill();
   check("a dark lane is a failed read with the relay named", /^relay:/.test(dark.error), true);
   stub.close();
 }
+
+/* -------------------------------------------------------- agent proposals */
+
+// The strategist may reach for buttons it can see but not press. The
+// allowlist is a security boundary: it lives in the zero-dep heart so this
+// suite guards it without the brain installed, and the server re-parses the
+// verb from its own stash at act time — the card can never do more than its
+// label says.
+
+check("the specialist may propose judging", proposable("judge")?.label, "Judge them");
+check("...a probe, phrase and all", proposable("probe saas how do I get clients")?.args, ["saas", "--q", "how do I get clients"]);
+check("...a specific draft", proposable("draft t3_abc12")?.args, ["t3_abc12"]);
+check("it may NOT propose marking something sent", proposable("mark t3_x sent"), null);
+check("...or watching a room the probe has not earned", proposable("watch saas"), null);
+check("...or anything with a flag smuggled in", proposable("tick --limit 99"), null);
+
+const proposalSnap = snap({
+  account: { name: "x" }, stash: { welcomed: true, agent_card: { question: "Judge the backlog?", why: "4 waiting", verb: "judge" } },
+  memory: memDone, sources: [{ place: "saas" }], rooms: [{ place: "saas", state: "yes" }], itemCount: 3,
+});
+check("a proposal lands on the deck with the verb's own label",
+  nextCards(proposalSnap).find((c) => c.kind === "agent.propose")?.primary.label, "Judge them");
+check("...riding second, behind the system's own top action",
+  nextCards(proposalSnap)[1]?.kind, "agent.propose");
+// The first live proposal was stashed mid-onboarding and never rendered,
+// which made the strategist's "it's on your deck now" a lie. Never again:
+check("a proposal is visible during onboarding too",
+  nextCards(snap({ stash: { agent_card: { question: "q", why: "w", verb: "tick" } } }))[1]?.kind, "agent.propose");
+check("a proposal with a verb outside the law never renders",
+  nextCards({ ...proposalSnap, stash: { ...proposalSnap.stash, agent_card: { question: "x", why: "y", verb: "rm -rf /" } } })
+    .some((c) => c.kind === "agent.propose"), false);
 
 /* ---------------------------------------------------------------- persona */
 

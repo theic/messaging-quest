@@ -234,9 +234,18 @@ may resell it as a managed service, which is exactly the twin's moat.
    cannot disagree. Verified live: asked "what is on my panel?", it named
    the actual card, explained why answering it unblocks drafting, and
    flagged two fit-passing queue items it would skip on etiquette grounds.
-   Still open from this item: a proposal the strategist makes arriving AS a
-   card (needs an agent-proposed card kind + approval mapping), and named
-   parallel research tasks.
+   Proposals-as-cards landed the same day: a `propose` tool whose verbs come
+   from an allowlist parsed in the zero-dep heart (`proposable()` — judge,
+   tick, sync, draft <id>, probe <room> [phrase]; mark and watch are
+   deliberately NOT on it), rendered as a card that rides second on the deck
+   — behind the system's own top action, visible during onboarding too — and
+   re-parsed by the server from its own stash at act time, so the card can
+   never do more than its label says. This also resolves the "no reading
+   verbs from chat" tension cleanly: the agent cannot run a probe, but it
+   can deal a card offering one; the click stays the operator's and the
+   server runs it on its own clock. Verified live: asked for a suggestion,
+   it proposed drafting the freshest fit, and the card appeared at deck
+   position 1 in its own words. Still open: named parallel research tasks.
 4. **Publish.** Public repo, npm name claimed, CI badge on the tests, the
    Web Store listing (the predecessor's submission kit is written), and the
    open OpenClaw/ClawHub skill aimed at the occupied slot.
