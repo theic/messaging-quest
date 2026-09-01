@@ -1,5 +1,7 @@
 # earshot
 
+[![tests](https://github.com/theic/earshot/actions/workflows/ci.yml/badge.svg)](https://github.com/theic/earshot/actions/workflows/ci.yml)
+
 **Find out what Reddit actually did to the comments you wrote — and who is
 still waiting on an answer from you.**
 
