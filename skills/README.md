@@ -43,6 +43,13 @@ Optional, and simply absent elsewhere:
   `commentFeed(url)`, `threadOf(item)` — what `sync`/`check`/`back` need to
   read *your* words the way a stranger sees them. A platform without these
   cannot run those verbs, and the engine says so rather than guessing.
+- `readViaRelay(base, url)` — the same read through the operator's own
+  browser (`lib/relay.mjs` is the broker; the extension is the reader). The
+  engine offers it to **finding** reads only, when the anonymous lane is
+  refused; the visibility verbs never take it, because logged-out *is* the
+  measurement. A relayed body must go through the same outcome logic as an
+  anonymous one — the day the two seats judge a body differently is the day
+  one of them starts lying.
 
 ## What a SKILL.md is for
 

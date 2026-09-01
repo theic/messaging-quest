@@ -1,8 +1,11 @@
-// The service worker does two small things and nothing else: the toolbar icon
-// opens the side panel, and a once-a-minute alarm asks the local server how
-// many cards are waiting so the badge can say so. All reading of Reddit stays
-// on the server's clock (a minute a request, measured); nothing here fetches
-// anything but our own loopback address.
+// The service worker does three small things and nothing else: the toolbar
+// icon opens the side panel; a once-a-minute alarm asks the local server how
+// many cards are waiting so the badge can say so; and the same alarm runs one
+// relay pass (relay.js) so a read the anonymous lane refused can be answered
+// by this browser even with the panel closed. The pace stays the server's —
+// the alarm only ever picks up what the governed engine already queued.
+
+import { relayPass } from "./relay.js";
 
 const DEFAULT_BASE = "http://127.0.0.1:8787";
 
@@ -15,6 +18,7 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== "deck") return;
   const { base } = await chrome.storage.local.get({ base: DEFAULT_BASE });
+  relayPass(base).catch(() => {});   // the catch-up path; the panel long-polls when open
   try {
     const res = await fetch(`${base}/api/cards`, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) throw new Error(String(res.status));

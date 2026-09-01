@@ -30,6 +30,7 @@ import { standing, readiness, burst, mix, PER_ROOM_24H, OVERALL_24H, CQS_NOTE } 
 import { sidebarUrl, roomFile } from "../lib/rules.mjs";
 import { mergeVoice, voiceRules, voiceSummary, applyVoiceAnswers, VOICE_UNSURE } from "../lib/voice.mjs";
 import { nextCards, readStash, patchStash } from "../lib/cards.mjs";
+import { relayBroker } from "../lib/relay.mjs";
 import { jobStore } from "../lib/jobs.mjs";
 import { MEMORY, readMemory, readOne, writeMemory, seedMissing, memoryProgress } from "../lib/memory.mjs";
 import { MODELS, ROLES, chosen, choose, readKey, writeKey, hasKey, keySource, judgeEstimate, money } from "../lib/models.mjs";
@@ -1204,6 +1205,10 @@ const backTo = (form, req) => {
 
 const JSON_HEAD = { "content-type": "application/json", "cache-control": "no-store" };
 
+/** The browser read lane's broker — one per server, because the server is the
+ *  long-lived process the extension is attached to. */
+const RELAY = relayBroker();
+
 /** Read a JSON body, refusing anything that is not declared as one. The
  *  declaration is the CSRF boundary: a cross-origin page cannot send
  *  application/json without a preflight, and nothing here answers preflights. */
@@ -1222,11 +1227,47 @@ const server = createServer((req, res) => {
   if (url.pathname === "/api/cards" && req.method === "GET") {
     try {
       const cards = nextCards(cardSnapshot());
-      return res.writeHead(200, JSON_HEAD).end(JSON.stringify({ cards, jobs: J.running().map((j) => ({ label: j.label, note: j.note })) }));
+      return res.writeHead(200, JSON_HEAD).end(JSON.stringify({
+        cards,
+        jobs: J.running().map((j) => ({ label: j.label, note: j.note })),
+        relay: { attached: RELAY.attached(), pending: RELAY.pending() },
+      }));
     } catch (e) {
       console.error(e);
       return res.writeHead(500, JSON_HEAD).end(JSON.stringify({ error: e.message }));
     }
+  }
+
+  /* The browser read lane (lib/relay.mjs — the law of the lane is written
+   * there). /read is what a CLI child calls and holds open; /jobs is the
+   * extension asking "anything for me?" (long-polled from the panel); /answer
+   * is the body coming back. GET only by construction: a job carries a URL
+   * and nothing else. */
+  if (url.pathname === "/api/relay/read" && req.method === "POST") {
+    return jsonBody(req)
+      .then(async (body) => {
+        const out = await RELAY.read(String(body.url ?? ""));
+        res.writeHead(out.error ? 502 : 200, JSON_HEAD).end(JSON.stringify(out));
+      })
+      .catch((e) => res.writeHead(400, JSON_HEAD).end(JSON.stringify({ error: e.message })));
+  }
+
+  if (url.pathname === "/api/relay/jobs" && req.method === "GET") {
+    const wait = Math.min(25_000, Math.max(0, Number(url.searchParams.get("wait")) || 0));
+    return RELAY.claim(wait)
+      .then((jobs) => res.writeHead(200, JSON_HEAD).end(JSON.stringify({ jobs })))
+      .catch(() => res.writeHead(200, JSON_HEAD).end(JSON.stringify({ jobs: [] })));
+  }
+
+  if (url.pathname === "/api/relay/answer" && req.method === "POST") {
+    return jsonBody(req)
+      .then((body) => {
+        const took = RELAY.answer(body.id, body);
+        // A late answer for a job that already timed out is not an error —
+        // the fetch simply outlived the caller's patience.
+        res.writeHead(200, JSON_HEAD).end(JSON.stringify({ ok: true, took }));
+      })
+      .catch((e) => res.writeHead(400, JSON_HEAD).end(JSON.stringify({ error: e.message })));
   }
 
   if (url.pathname === "/api/cards/act" && req.method === "POST") {
@@ -1298,6 +1339,7 @@ const server = createServer((req, res) => {
       "card.js": ["card.js", "text/javascript; charset=utf-8"],
       "sidepanel.js": ["sidepanel.js", "text/javascript; charset=utf-8"],
       "insert.js": ["insert.js", "text/javascript; charset=utf-8"],
+      "relay.js": ["relay.js", "text/javascript; charset=utf-8"],
     };
     const hit = PANEL[url.pathname.slice("/panel/".length)];
     if (!hit) return res.writeHead(404, JSON_HEAD).end(JSON.stringify({ error: "not part of the panel" }));
@@ -1344,6 +1386,10 @@ export function serve(port = PORT) {
       // The port the OS actually granted, not the one asked for — `--port 0`
       // means "any free one", and the log line is how a caller learns which.
       console.log(`earshot  http://127.0.0.1:${server.address().port}`);
+      // Children inherit this, which is how a tick spawned by a button knows a
+      // relay broker exists. A tick run from a bare terminal has no broker and
+      // stays honestly anonymous — that asymmetry is the design, not a gap.
+      process.env.EARSHOT_RELAY = `http://127.0.0.1:${server.address().port}`;
       console.log(`reading ${DIR}/ — localhost only, nothing leaves this machine.`);
       console.log(hasKey(DIR) ? `OpenRouter key found — the scout, judge and writer are available.` : `no OpenRouter key — add one at /settings to turn on the scout, judge and writer.`);
       console.log(`ctrl-c to stop.`);

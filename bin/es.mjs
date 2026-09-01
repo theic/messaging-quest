@@ -44,7 +44,7 @@ const F = (n) => join(DIR, n);
 // is the plan, not an accident — but everything platform-mechanical it uses
 // comes through that adapter, and the store resolves rooms via the registry.
 await loadPlatforms(DIR);
-const { gapMs: ANON_GAP_MS, waitFor, read, userFeed, threadFeed, commentFeed, threadOf, roomOf: subredditOf } = reddit;
+const { gapMs: ANON_GAP_MS, waitFor, read, readViaRelay, userFeed, threadFeed, commentFeed, threadOf, roomOf: subredditOf } = reddit;
 const now = () => new Date().toISOString();
 const die = (m) => { console.error(`earshot: ${m}`); process.exit(1); };
 const sha = (s) => createHash("sha256").update(String(s)).digest("hex");
@@ -72,14 +72,21 @@ const sources = S.sources;
 // a second `es check` in the same minute walks straight through.
 const clock = () => (existsSync(F("clock")) ? Number(readFileSync(F("clock"), "utf8")) : 0);
 
-async function fetchAnon(url, { quiet = false } = {}) {
+/**
+ * Which failed reads are worth offering to the browser lane: the shapes that
+ * mean "this address is refused", not "the network hiccuped". A timeout gets
+ * retried by the next tick; a 403 will be a 403 tomorrow too.
+ */
+const BLOCKED_SHAPES = /^(http_403|rate_limited)$|not a feed/;
+
+async function fetchAnon(url, { quiet = false, relay = false } = {}) {
   const wait = waitFor(clock());
   if (wait > 0) {
     if (!quiet) process.stdout.write(`  waiting ${Math.ceil(wait / 1000)}s — anonymous Reddit answers one request a minute\n`);
     await sleep(wait);
   }
   writeFileSync(F("clock"), String(Date.now()));
-  const r = await read(url);
+  let r = await read(url);
   append("reads.jsonl", { url, at: now(), ok: r.ok, err: r.ok ? null : r.error, n: r.ok ? r.entries.length : 0 });
   // A 429 means the gap was not enough; wait it out and say so rather than
   // recording a finding that is really our own impatience.
@@ -93,7 +100,24 @@ async function fetchAnon(url, { quiet = false } = {}) {
     // verdict was in fact reached from a good read — and the ledger is the
     // thing somebody checks when they doubt the verdict.
     append("reads.jsonl", { url, at: now(), ok: again.ok, err: again.ok ? null : again.error, n: again.ok ? again.entries.length : 0, retry: true });
-    return again;
+    r = again;
+  }
+
+  /* The browser lane — the fallback for a FINDING read the anonymous lane
+   * refused. `relay: true` is passed by exactly two callers, tick and probe,
+   * and a test counts them: sync, check and back measure what a logged-out
+   * stranger sees, and a logged-in read would answer that question wrongly
+   * while looking right. EARSHOT_RELAY is set by the dashboard server for its
+   * children; a bare terminal run has no broker and stays honestly anonymous.
+   * Pace is unchanged either way — the relayed attempt only ever follows a
+   * governed one, so reads stay at least one gap apart no matter the seat. */
+  const broker = process.env.EARSHOT_RELAY;
+  if (!r.ok && relay && broker && readViaRelay && BLOCKED_SHAPES.test(r.error)) {
+    if (!quiet) process.stdout.write("  refused anonymously — asking your browser to read it\n");
+    const b = await readViaRelay(broker, url);
+    append("reads.jsonl", { url, at: now(), ok: b.ok, err: b.ok ? null : b.error, n: b.ok ? b.entries.length : 0, via: "browser" });
+    if (!quiet && !b.ok) process.stdout.write(`  the browser lane said: ${b.error}\n`);
+    return b;
   }
   return r;
 }
@@ -501,7 +525,7 @@ cmds.probe = async (args) => {
   if (no) return refused(no);
 
   console.log(`probing r/${place}${q ? ` for "${q}"` : " (new submissions)"}\n`);
-  const r = await fetchAnon(url);
+  const r = await fetchAnon(url, { relay: true });   // finding — the browser lane may answer
   if (!r.ok) return console.log(`  could not read it: ${r.error}\n  That is a failed read, not a verdict on the room.`);
   // A subreddit that does not exist is answered by a silent redirect to a
   // search feed, with a 200. Only the final URL gives it away.
@@ -638,7 +662,7 @@ cmds.tick = async (args) => {
   const p = pending();
   let total = 0;
   for (const s of due) {
-    const r = await fetchAnon(s.url);
+    const r = await fetchAnon(s.url, { relay: true });   // finding — the browser lane may answer
     append("reads.jsonl", { source: s.id, at: now(), ok: r.ok, err: r.ok ? null : r.error, n: r.ok ? r.entries.length : 0 });
     if (!r.ok) { console.log(`  ${s.id}: ${r.error}`); continue; }
     let fresh = 0;

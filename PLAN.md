@@ -203,6 +203,11 @@ may resell it as a managed service, which is exactly the twin's moat.
   served by the dashboard. The strategist on Deep Agents (`agent/`,
   `npm run brain`, `/api/agent`) with the CLI as its hands and SKILL.md as
   its education. 161 engine tests + the voice suite, green.
+- 0.4.x (2026-09-01, same day): the browser read lane — `lib/relay.mjs`
+  broker + `/api/relay/*` + the extension as reader; finding reads fall back
+  to the user's own session when the anonymous lane refuses; the
+  visibility-verbs-stay-anonymous doctrine pinned by a test that counts the
+  call sites. 179 engine tests green.
 
 ## Next, in order
 
@@ -210,11 +215,16 @@ may resell it as a managed service, which is exactly the twin's moat.
    card onboarding end to end on a real project, a week of ticks, three
    replies that landed via insert → Reddit's button → "I posted it".
    Everything below gates on this testimony.
-2. **The browser read lane.** Rebuild the predecessor's relay through this
-   extension: the server queues GET-only read jobs, the panel executes them
-   in the user's session, adapters declare `transport: browser`. This is the
-   RSS-ceiling survival plan made real, and it must land before the anon
-   lane's eviction notice does. Alongside: measure the private feed token.
+2. **The browser read lane — BUILT 2026-09-01, one measurement left.** The
+   relay landed as engine plumbing rather than an adapter declaration (a
+   simpler shape than the "transport: browser" flag this item first
+   imagined): `lib/relay.mjs` brokers GET-only jobs in the dashboard server,
+   the extension claims and answers them in the user's session (panel
+   long-polls, service-worker alarm catches up), and `fetchAnon` falls back
+   to the lane — for tick and probe only, a count a test pins — when the
+   anonymous read comes back 403/429/blocked. Same pace, same three-outcome
+   parsing, `via: "browser"` in the ledger. Still to do from this item:
+   measure Reddit's account-bound private feed token as a finding fallback.
 3. **The specialist grows up.** `persona.md` as a proper memory file; the
    strategist behind cards (a proposal it makes arrives as a card, not as
    chat); parallel research subagents on real tasks ("explore this thread's

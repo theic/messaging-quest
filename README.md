@@ -97,6 +97,16 @@ No Chrome? The same deck is served at `http://127.0.0.1:8787/panel/` —
 everything works there except typing into the composer (you get the draft on
 your clipboard instead).
 
+The extension is also the **second reading lane**. Anonymous Reddit sits at a
+measured ceiling — one request a minute, and RSS itself is under review — so
+when a *finding* read (a probe, a tick) is refused anonymously, the engine
+hands that one URL to your browser, which reads it in your own session and
+hands the body back. GET only, by construction; your own visible per-site
+permission; same pace as everything else. The visibility checks never take
+this lane: what a logged-out stranger sees can only be measured logged out,
+and the tool would rather fail honestly than answer that question from the
+wrong seat.
+
 ### Or drive it from the terminal
 
 ```bash

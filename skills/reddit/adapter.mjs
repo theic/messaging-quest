@@ -8,7 +8,7 @@
 // `roomOf`, and holds `gapMs` between requests. Connect a second platform by
 // writing this same folder for it; skills/README.md is the contract.
 
-import { ANON_GAP_MS, waitFor, read, parseFeed, userFeed, threadFeed, commentFeed, threadOf, subredditOf } from "./feed.mjs";
+import { ANON_GAP_MS, waitFor, read, readViaRelay, parseFeed, userFeed, threadFeed, commentFeed, threadOf, subredditOf } from "./feed.mjs";
 import { scoped, submissions, refuse } from "./shapes.mjs";
 import { sidebarUrl, isParody } from "../../lib/rules.mjs";
 
@@ -26,6 +26,11 @@ export default {
   /** Three outcomes, never two: {ok:false, error} | {ok:true, entries, ...}.
    *  "Nothing there" is only ever expressible by the second. */
   read,
+  /** The same read through the operator's own browser (optional member —
+   *  lib/relay.mjs is the broker). The engine offers it to FINDING reads
+   *  only, when the anonymous lane is refused; the visibility verbs never
+   *  take it, because logged-out is the measurement. */
+  readViaRelay,
   parseFeed,
 
   /* ------------------------------------------------------------- finding */

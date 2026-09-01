@@ -10,6 +10,7 @@
 // presses Reddit's own button), and talking to the strategist.
 
 import { renderCard } from "./card.js";
+import { relayPass, RELAY_ORIGINS } from "./relay.js";
 
 // In the extension the server is looked up in storage (8787 unless changed);
 // served as a page (/panel/ on the server itself), the server is by definition
@@ -35,8 +36,8 @@ async function load() {
   try {
     const res = await fetch(`${base}/api/cards`, { signal: AbortSignal.timeout(6000) });
     if (!res.ok) throw new Error(`server said ${res.status}`);
-    const { cards, jobs } = await res.json();
-    showJobs(jobs);
+    const { cards, jobs, relay } = await res.json();
+    showJobs(jobs, relay);
     show(cards?.[0] ?? null);
     schedule(cards?.[0], jobs);
   } catch {
@@ -70,8 +71,44 @@ function showDown() {
   }, () => load());
 }
 
-function showJobs(jobs) {
-  jobsLine.textContent = (jobs ?? []).map((j) => `${j.label}${j.note ? ` — ${j.note}` : ""}`).join(" · ");
+function showJobs(jobs, relay) {
+  const parts = (jobs ?? []).map((j) => `${j.label}${j.note ? ` — ${j.note}` : ""}`);
+  if (relay?.pending > 0) parts.push(`${relay.pending} read${relay.pending === 1 ? "" : "s"} waiting on this browser`);
+  jobsLine.textContent = parts.join(" · ");
+  updateRelayHint(relay);
+}
+
+/**
+ * The lane is dark for exactly one fixable reason: the reddit.com site grant.
+ * When reads are queued and the grant is missing, say so with a button —
+ * chrome.permissions.request only works inside the click that asked.
+ */
+async function updateRelayHint(relay) {
+  if (!ext || !relay || relay.pending === 0) return;
+  const has = await ext.permissions.contains({ origins: RELAY_ORIGINS }).catch(() => false);
+  if (has) return;
+  errorLine.hidden = false;
+  errorLine.replaceChildren();
+  errorLine.append("The engine has reads waiting for this browser, and this browser has no reddit.com permission yet. ");
+  const b = document.createElement("button");
+  b.textContent = "Grant it";
+  b.type = "button";
+  b.addEventListener("click", async () => {
+    const ok = await ext.permissions.request({ origins: RELAY_ORIGINS }).catch(() => false);
+    if (ok) { errorLine.hidden = true; relayPass(base).catch(() => {}); }
+  });
+  errorLine.append(b);
+}
+
+/** While the panel is open it IS the fast path: one long-poll at a time,
+ *  each holding on the server until a read arrives or 20s pass. */
+async function relayLoop() {
+  if (!ext) return;
+  for (;;) {
+    try { await relayPass(base, { wait: 20000 }); }
+    catch { /* server gone; the deck poller shows the down card */ }
+    await new Promise((r) => setTimeout(r, 1200));
+  }
 }
 
 /** Waits poll themselves; everything else refreshes on act or on the alarm. */
@@ -229,4 +266,5 @@ savedBase.then(({ base: saved }) => {
   });
   line.append(a);
   load();
+  relayLoop();
 });

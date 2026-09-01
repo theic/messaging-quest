@@ -26,6 +26,8 @@ import { loadPlatforms, platform, roomOf } from "../lib/platform.mjs";
 import { longestSharedRun, repeats, claims, inventedLinks, RUN_LIMIT } from "../lib/guards.mjs";
 import { standing, readiness, burst, mix } from "../lib/ready.mjs";
 import { nextCards, onboarded } from "../lib/cards.mjs";
+import { relayBroker } from "../lib/relay.mjs";
+import { readViaRelay } from "../skills/reddit/feed.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ES = join(here, "es.mjs");
@@ -630,8 +632,93 @@ else {
   check("the agent route answers an empty message without a model", agentEmpty.status, 200);
   check("...and a real one without a key is an error that names the fix",
     /key|not installed/.test((await agentReal.json()).error ?? ""), true);
+
+  /* The read lane, end to end over HTTP: a read blocks, a "browser" claims
+     it, answers with a feed, and the blocked read resolves with the body. */
+  const reading = fetch(baseC + "/api/relay/read", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ url: "https://www.reddit.com/r/saas/new.rss" }),
+  });
+  await new Promise((r) => setTimeout(r, 150));
+  const claimed = (await (await fetch(baseC + "/api/relay/jobs")).json()).jobs;
+  check("a waiting read is claimable by a browser", claimed.length, 1);
+  check("...and the deck reports the lane as attached", (await (await fetch(baseC + "/api/cards")).json()).relay.attached, true);
+  await fetch(baseC + "/api/relay/answer", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: claimed[0].id, status: 200, body: feed, finalUrl: claimed[0].url }),
+  });
+  const relayed = await (await reading).json();
+  check("the answered body reaches the caller", relayed.status, 200);
+  check("...verbatim", /t1_aaa/.test(relayed.body), true);
 }
 srvC.kill();
+
+/* -------------------------------------------------------- the browser lane */
+
+// The broker: everything times out, nothing is fetched twice, and only a
+// platform's own rooms may ride the user's cookies.
+
+{
+  const b = relayBroker({ ttlMs: 60_000 });
+  check("the lane is https only", (await b.read("http://www.reddit.com/r/x/new.rss")).error, "relay reads https only");
+  check("the lane refuses a URL no platform recognises",
+    (await b.read("https://example.com/feed.rss")).error, "relay reads only a platform's own rooms");
+
+  const p = b.read("https://www.reddit.com/r/saas/new.rss");
+  const jobs = await b.claim();
+  check("a queued read is handed to exactly one claimer", jobs.length, 1);
+  check("...and never handed out twice", (await b.claim()).length, 0);
+  b.answer(jobs[0].id, { status: 200, body: "<feed></feed>", finalUrl: jobs[0].url });
+  check("the answer resolves the read", (await p).status, 200);
+  check("an answer for a job that is gone is late, not an error", b.answer("r999", { status: 200 }), false);
+
+  const fast = relayBroker({ ttlMs: 120 });
+  const dead = await fast.read("https://www.reddit.com/r/saas/new.rss");
+  check("a read nobody claims dies with its reason", /unanswered/.test(dead.error), true);
+
+  const tiny = relayBroker({ cap: 1 });
+  tiny.read("https://www.reddit.com/r/a/new.rss");
+  check("the queue has a ceiling", (await tiny.read("https://www.reddit.com/r/b/new.rss")).error, "relay queue is full");
+}
+
+// The relayed body goes through the SAME three-outcome logic as the anonymous
+// lane — a block page or a silent redirect is the same lie from either seat.
+{
+  const { createServer } = await import("node:http");
+  const answers = [
+    { status: 200, body: feed, finalUrl: "https://www.reddit.com/r/x/new.rss" },
+    { status: 200, body: "<html>blocked</html>", finalUrl: "https://www.reddit.com/r/x/new.rss" },
+    { error: "no browser attached" },
+  ];
+  const stub = createServer((req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(answers.shift()));
+  });
+  await new Promise((r) => stub.listen(0, "127.0.0.1", r));
+  const stubBase = `http://127.0.0.1:${stub.address().port}`;
+
+  const good = await readViaRelay(stubBase, "https://www.reddit.com/r/x/new.rss");
+  check("a relayed feed parses like an anonymous one", good.ok && good.entries.length, 1);
+  check("...and says which seat read it", good.via, "browser");
+  const blocked = await readViaRelay(stubBase, "https://www.reddit.com/r/x/new.rss");
+  check("a block page through the relay is still an error, never 'empty'", blocked.ok, false);
+  const dark = await readViaRelay(stubBase, "https://www.reddit.com/r/x/new.rss");
+  check("a dark lane is a failed read with the relay named", /^relay:/.test(dark.error), true);
+  stub.close();
+}
+
+// THE DOCTRINE, pinned: only the finding verbs may take the browser lane.
+// sync/check/back measure what a logged-out stranger sees, and a logged-in
+// read would answer that question wrongly while looking right. If this count
+// moves, somebody changed who is allowed to ride the user's session — that
+// must be a decision, not a drive-by.
+{
+  const src = readFileSync(ES, "utf8");
+  check("exactly two call sites — tick and probe — may use the browser lane",
+    (src.match(/fetchAnon\([^)]*relay: true/g) ?? []).length, 2);
+  check("the visibility verbs pass no relay flag at all",
+    (src.match(/fetchAnon\((userFeed|threadFeed|commentFeed)[^)]*relay/g) ?? []).length, 0);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

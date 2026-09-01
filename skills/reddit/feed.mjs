@@ -140,8 +140,44 @@ export async function read(url) {
     return { ok: false, error: e.name === "TimeoutError" ? "timeout" : `network: ${e.message}` };
   }
 
-  if (res.status === 429) return { ok: false, error: "rate_limited", retryAfter: Number(res.headers.get("x-ratelimit-reset")) || 60 };
-  if (!res.ok) return { ok: false, error: `http_${res.status}` };
+  return outcomeOf(url, {
+    status: res.status,
+    text,
+    finalUrl: res.url || url,
+    retryAfter: Number(res.headers.get("x-ratelimit-reset")) || 60,
+  });
+}
+
+/**
+ * The same read, through the operator's own browser (lib/relay.mjs — the
+ * dashboard hands the URL to the extension, which fetches it in the user's
+ * session and hands the body back). ONLY the finding verbs may take this
+ * lane: a logged-in read answers "what is there", never "what does a
+ * stranger see", and the visibility verbs exist to ask the second question.
+ * The response goes through the identical outcome logic — a block page or a
+ * silent redirect is the same lie from either seat.
+ */
+export async function readViaRelay(base, url) {
+  const { relayRead } = await import("../../lib/relay.mjs");
+  const got = await relayRead(base, url);
+  if (got.error) return { ok: false, error: `relay: ${got.error}` };
+  // The wire says `body`; the outcome logic says `text`. Map it HERE, once —
+  // a missing mapping made every relayed 200 read as a block page, caught by
+  // the parse test, which is why that test exists.
+  return {
+    ...outcomeOf(url, { status: got.status, text: got.body, finalUrl: got.finalUrl, retryAfter: got.retryAfter }),
+    via: "browser",
+  };
+}
+
+/**
+ * Status first, body second, three outcomes always — one implementation for
+ * both seats, because the day the anonymous path and the browser path judge
+ * a body differently is the day one of them starts lying.
+ */
+function outcomeOf(url, { status, text, finalUrl, retryAfter }) {
+  if (status === 429) return { ok: false, error: "rate_limited", retryAfter: Number(retryAfter) || 60 };
+  if (status < 200 || status >= 300) return { ok: false, error: `http_${status}` };
 
   // 200 with a page of HTML is Reddit's network-security block wearing a
   // feed's clothes. A body that is not Atom is an error outcome, never "empty".
@@ -150,7 +186,7 @@ export async function read(url) {
   // A subreddit or user that does not exist is answered by a SILENT REDIRECT to
   // a search feed, status 200, perfectly well-formed. The only thing that
   // distinguishes it is the final URL, so it is compared rather than trusted.
-  const redirected = res.url && stripQuery(res.url) !== stripQuery(url);
+  const redirected = Boolean(finalUrl) && stripQuery(finalUrl) !== stripQuery(url);
 
   const entries = parseFeed(text);
   return {
@@ -161,7 +197,7 @@ export async function read(url) {
      *  text a logged-out reader gets, so it travels with every read. */
     subtitle: decode(tag(text.split("<entry")[0], "subtitle")).trim() || null,
     redirected,
-    finalUrl: res.url || url,
+    finalUrl: finalUrl || url,
     /** The read hit the page ceiling, so what it did NOT contain proves nothing. */
     truncated: entries.length >= PAGE,
   };
