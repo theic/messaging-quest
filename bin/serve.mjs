@@ -560,7 +560,7 @@ Change it and the queue may change — that is the point, and it is why the hash
   const files = readMemory(DIR);
   return render("/memory", "Memory", `
 <h1>Memory</h1>
-<p class="sub">Four markdown files on your disk. They decide who reaches your queue and how a draft sounds.
+<p class="sub">Five markdown files on your disk. They decide who reaches your queue, how a draft sounds, and who the strategist is.
 The model proposes them; you press Save. Nothing here is written without a keystroke behind it.</p>
 ${files.map((m) => `<div class="card">
 <div class="row" style="border:0;padding:0"><b>${esc(m.title)}</b>

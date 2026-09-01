@@ -33,7 +33,7 @@ the things you said a stranger can actually see. Then it goes and finds the
 people asking for what you sell.
 
 It stores everything in `.earshot/` in the directory you run it from, as
-append-only JSONL you can read with `cat`, and four markdown files you can open
+append-only JSONL you can read with `cat`, and five markdown files you can open
 in any editor.
 
 **The engine has zero dependencies. All of it.** `npm install` installs
@@ -53,7 +53,7 @@ the conversational strategist lives in `agent/` on Deep Agents, installs with
 Node 18 or newer.
 
 ```bash
-git clone https://github.com/YOUR-NAME/earshot && cd earshot && node bin/es.mjs init
+git clone https://github.com/theic/earshot && cd earshot && node bin/es.mjs init
 ```
 
 Then open the dashboard and set it up there:
@@ -363,7 +363,7 @@ Everything is here. Not a window onto the CLI — the whole product.
 | **Standing** | What became of the things you said. |
 | **Waiting** · **Ready** · **Voice** | Who is owed an answer, where you stand, how you write. |
 | **Sources** · **Rooms** | What is watched, and whose rules have been read. |
-| **Memory** | The four markdown files, edited in the browser. |
+| **Memory** | The five markdown files, edited in the browser. |
 | **Settings** | Your OpenRouter key, a model per role, and what each costs. |
 
 Every verb that reads Reddit is a button, and every one of them is long — a
@@ -440,7 +440,8 @@ other ways:
 
 - **Your Claude / ChatGPT app, via MCP.** `bin/mcp.mjs` serves seven tools
   over stdio — status, queue, pending, judge, draft material, save draft,
-  mark — plus the four memory files as resources. The assistant on the other
+  mark — plus four of the five memory files as resources (persona.md stays
+  out: the assistant on this pipe is also your judge). The assistant on the other
   end is a model, so it can *be* the judge and the writer: judged against
   your `rule.md`, drafting from your measured voice and `me.md`, refusals
   relayed verbatim. Used this way earshot needs no OpenRouter key at all.
@@ -457,7 +458,7 @@ other ways:
 - **Other machines, via the hub.** `node bin/hub.mjs` serves what one machine
   found as a read-only feed on its own port — public posts only, never
   verdicts, marks or people. Everything that makes a queue *yours* happens on
-  your machine. See the sharing section below.
+  your machine.
 
 - **A colleague, via the strategist.** `npm run brain` installs `agent/` —
   the one dependency-carrying directory, built on Deep Agents — and the
@@ -531,7 +532,8 @@ here is computed from those.
 
 ## Why the measurements are in the source
 
-Every URL and field in `lib/reddit.mjs` carries the date it was measured, because
+Every URL and field in [skills/reddit/feed.mjs](skills/reddit/feed.mjs) carries
+the date it was measured, because
 most of what is written about reading Reddit is out of date in a specific and
 expensive way. `/r/<sub>/new.json` and every other `.json` path returns 403 with
 a page of HTML; `.rss` returns 200 in the same second from the same address. A
@@ -545,7 +547,8 @@ to open.
 ## Tests
 
 ```bash
-node bin/test.mjs
+node bin/test.mjs                # the engine, the cards, the seams
+node --test bin/voice-test.mjs   # the voice fingerprint
 ```
 
 They cover only the things that would break quietly — a body that gets

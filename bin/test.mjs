@@ -769,6 +769,25 @@ check("a proposal with a verb outside the law never renders",
   check("...and never about the persona, even once it is written", /Vera/.test(ctx), false);
 }
 
+// The MCP pipe obeys the same boundary end-to-end. The assistant on the other
+// side holds the judge tool, so resources/list handing it the persona would be
+// the leak the block above pins — through a different door.
+{
+  const MCP = join(here, "mcp.mjs");
+  const rpc = [
+    JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }),
+    JSON.stringify({ jsonrpc: "2.0", id: 2, method: "resources/list" }),
+  ].join("\n") + "\n";
+  const out = execFileSync(process.execPath, [MCP], {
+    input: rpc, encoding: "utf8",
+    env: { ...process.env, EARSHOT_DIR: DC }, stdio: ["pipe", "pipe", "pipe"],
+  });
+  const listed = out.split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((m) => m.id === 2)?.result?.resources ?? [];
+  check("MCP serves the four working files as resources", listed.length, 4);
+  check("...and the persona is not among them — that assistant is also the judge",
+    listed.some((r) => r.name === "persona.md"), false);
+}
+
 // THE DOCTRINE, pinned: only the finding verbs may take the browser lane.
 // sync/check/back measure what a logged-out stranger sees, and a logged-in
 // read would answer that question wrongly while looking right. If this count

@@ -29,7 +29,7 @@
 // newline-delimited JSON-RPC, and that is thirty lines of plumbing.
 
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,7 +38,7 @@ import { MEMORY, readOne } from "../lib/memory.mjs";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const ES = join(ROOT, "bin", "es.mjs");
 const DIR = process.env.EARSHOT_DIR || ".earshot";
-const VERSION = "0.3.0";
+const VERSION = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version;
 
 if (!existsSync(DIR)) {
   console.error(`earshot mcp: no ${DIR}/ in ${process.cwd()} — run \`es init\` there first, or set EARSHOT_DIR`);
@@ -137,7 +137,9 @@ const TOOLS = [
 
 /* -------------------------------------------------------------- resources */
 
-const RESOURCES = MEMORY.map((m) => ({
+/* persona.md (optional: true) stays home: the assistant on this pipe holds the
+   judge tool, and a judge that has read your persona judges in character. */
+const RESOURCES = MEMORY.filter((m) => !m.optional).map((m) => ({
   uri: `earshot://memory/${m.file}`,
   name: m.file,
   description: m.what,

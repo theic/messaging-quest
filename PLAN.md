@@ -52,8 +52,9 @@ surfaces    the Chrome extension (primary: the deck in a side panel, and the
             the CLI (scripts, cron, OpenClaw — one implementation of every verb)
             the MCP server (Claude/ChatGPT/any MCP host — bin/mcp.mjs)
             the hub feed (other machines — bin/hub.mjs, the only outward port)
-memory      four markdown files the human owns. The model proposes; a person
-            presses Save. rule.md's hash rides on every verdict.
+memory      five markdown files the human owns. The model proposes; a person
+            presses Save. rule.md's hash rides on every verdict; persona.md
+            reaches only the strategist.
 ```
 
 **The heart has zero runtime dependencies; the brain carries them.** The
