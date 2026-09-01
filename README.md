@@ -71,8 +71,18 @@ Windows PowerShell blocks npm's `.ps1` shim under its default execution
 policy, and there is no reason to make anybody debug that for a tool with
 nothing to install.)
 
-For the scout, judge and writer, add an OpenRouter key on **Settings**. That
-is the whole step — there are no libraries to install.
+For the scout, judge and writer, pick where the models run on **Settings**.
+Three plans, one file, and everything that reads Reddit needs none of them:
+
+| Plan | What it needs | What it costs |
+|---|---|---|
+| **Paid** | an OpenRouter key | cents per hundred verdicts; the writer is the seat that costs |
+| **Free** | the same key, no credit on it | nothing — OpenRouter's free variants, at 20 requests a minute and 50 a day (1,000 a day once $10 of credit was ever bought), read off its docs 2026-09-01 |
+| **Local** | Ollama, or any OpenAI-compatible server, on this machine | nothing, and nothing leaves the machine; minutes per batch on a CPU |
+
+`mq models use free` does the same from the terminal, and each plan keeps its
+own picks, so a week on the free one does not lose the paid writer you chose.
+There are no libraries to install on any of them.
 
 ### The specialist in your browser
 
@@ -248,6 +258,35 @@ falls back down its own list of alternates when a provider errors, using
 OpenRouter's model-level `models:` array, because a `tick` that dies on one
 provider's `429` has spent its minute-per-read budget and produced nothing.
 
+**The free plan** was picked the same way, on 2026-09-01: every free model on
+OpenRouter that takes a tool call was asked the judge's own two-item verdict,
+and the two that answered best were then given the scout's real tool loop
+and the writer's real material.
+
+| Role | Free default | Measured |
+|---|---|---|
+| **judge** | `poolside/laguna-s-2.1:free` | 5.2s and 4.7s, zero reasoning tokens, conformed first ask, agreed with the paid judge |
+| **scout** | `minimax/minimax-m2.7:free` | three pages and a conforming proposal in 27s + 14s |
+| **writer** | `minimax/minimax-m2.7:free` | three specific options in 13s, none with a template phrase |
+
+The whole table, including the models that were full (Gemma 4 and GLM 5.2
+answered 429 on every ask) or refused, is in [lib/models.mjs](lib/models.mjs)
+with the numbers. A 429 from a free provider is that plan's weather, so the
+free fallbacks are picked to be different providers — two of them, because
+OpenRouter takes three entries in a fallback list and refuses a fourth.
+
+**The local plan** talks to `http://127.0.0.1:11434/v1` — Ollama's
+OpenAI-compatible endpoint — with no key, and to any other address you give
+it (`mq models url <base-url>`; LM Studio, llama.cpp and vLLM speak the same
+protocol on other ports). The default tag for every seat is `qwen3.5:9b`,
+which fits a 16 GB machine and makes tool calls through Ollama, and it is
+**not measured**: this project has had no local box to measure on, and the
+Settings page says so rather than dressing a guess as a number. Two things
+that are known: start Ollama with a window the scout can read a page into
+(`OLLAMA_CONTEXT_LENGTH=32768 ollama serve` — the default silently drops the
+start of a long page), and if your server accepts `tool_choice` and ignores
+it, the JSON inside the prose answer is taken, checked by the same validator.
+
 `mark <id> sent` retires that person from every future queue, permanently.
 Showing you the same human twice is what makes a queue feel like a lottery.
 
@@ -276,6 +315,14 @@ by **move**: answering the literal question, versus answering what is behind it,
 versus pointing at whoever already solved it. Never three tones of one sentence.
 If there is only one honest thing to say, one option is a correct answer.
 
+How it sounds is part of the rules, since 2026-09-01: one person who has done
+the thing, typing to one other person — the answer in the first sentence,
+their words rather than marketing words, an opinion rather than padding, and
+none of the phrases nobody types to a stranger ("great question", "hope this
+helps", "at the end of the day"). The measured fingerprint still outranks all
+of that on casing, sentence length and punctuation: the register says what a
+comment is, the fingerprint says how you type.
+
 ### The two refusals
 
 `--save` runs them and stays loud:
@@ -287,6 +334,10 @@ If there is only one honest thing to say, one option is a correct answer.
   `me.md` for you to check. A competitor was observed posting *"at my last job i
   used [product] for some basic bridge work during intake"* into a clinical
   thread under a real name. Nobody had ever had that job.
+- **Template phrases.** The phrases nobody types to one person — "hope this
+  helps", "great question", "at the end of the day" — named back, plus the em
+  dash unless you have been seen typing one. Phrases, never vocabulary: "that
+  said" is what people write, "that being said" is what templates write.
 - Plus the inherited one: any URL not lifted from the thread is invented.
 
 Nothing is rejected outright, because you are the one sending it.
@@ -367,7 +418,7 @@ Everything is here. Not a window onto the CLI — the whole product.
 | **Sources** · **Rooms** | What is watched, and whose rules have been read. |
 | **Memory** | The five markdown files, edited in the browser. |
 | **Skills** | Everything installed: what runs, what refused to load, and the choice when two skills serve one purpose. |
-| **Settings** | Your OpenRouter key, a model per role, and what each costs. |
+| **Settings** | Where the models run — paid, free or local — a model per seat, and what each costs. |
 
 Every verb that reads Reddit is a button, and every one of them is long — a
 minute per request, measured. They run as jobs with a progress strip at the top

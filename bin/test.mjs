@@ -600,7 +600,7 @@ check("prose where an array belongs is refused", conforms(V, { verdicts: "all fi
 const snap = (over = {}) => ({
   stash: {},
   account: null,
-  hasKey: false,
+  hasModel: false,
   memory: { done: 0, total: 4, files: [
     { file: "rule.md", filled: false }, { file: "project.md", filled: false },
     { file: "icp.md", filled: false }, { file: "me.md", filled: false }] },
@@ -919,6 +919,135 @@ check("a proposal with a verb outside the law never renders",
     (src.match(/fetchAnon\([^)]*relay: true/g) ?? []).length, 2);
   check("the visibility verbs pass no relay flag at all",
     (src.match(/fetchAnon\((userFeed|threadFeed|commentFeed)[^)]*relay/g) ?? []).length, 0);
+}
+
+/* -------------------------------------------------------------- the plans */
+
+// Three ways to fill a seat, one file, and nothing above lib/models.mjs
+// knowing which. What would break quietly: a plan switch that kept the old
+// plan's picks, a local seat that demanded a key, an OpenRouter-only request
+// field reaching a local server, a fallback list that silently did nothing.
+{
+  const { plan, setPlan, chosen, choose, seat, hasModel, cost, localConfig, setLocal, LOCAL_URL } = await import("../lib/models.mjs");
+  const { complete, structured, salvage } = await import("../lib/llm.mjs");
+  const envWas = { MQ_PLAN: process.env.MQ_PLAN, MQ_LOCAL_URL: process.env.MQ_LOCAL_URL, MQ_LOCAL_KEY: process.env.MQ_LOCAL_KEY, OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY };
+  for (const k of Object.keys(envWas)) delete process.env[k];
+  const boxM = mkdtempSync(join(tmpdir(), "mq-models-"));
+
+  check("the plan is paid until somebody says otherwise", plan(boxM), "paid");
+  check("...and a seat on it needs a key", (() => { try { seat(boxM, "judge"); return "no throw"; } catch (e) { return /no OpenRouter key/.test(e.message); } })(), true);
+  writeFileSync(join(boxM, "models.json"), JSON.stringify({ judge: "qwen/qwen3.7-flash" }));
+  check("a flat models.json — the old shape — still names the paid picks", chosen(boxM).judge, "qwen/qwen3.7-flash");
+  setPlan(boxM, "free");
+  check("switching to free keeps the paid pick where it was", chosen(boxM, "paid").judge, "qwen/qwen3.7-flash");
+  check("...and the free plan starts from its own measured default", chosen(boxM).judge, "poolside/laguna-s-2.1:free");
+  check("every free default is a free variant", Object.values(chosen(boxM)).every((m) => /:free$/.test(m)), true);
+  check("a pick from another plan's menu is refused, not stored",
+    (() => { try { choose(boxM, "judge", "moonshotai/kimi-k3"); return "stored"; } catch { return "refused"; } })(), "refused");
+  check("nothing on the free plan is billed", cost(boxM, "writer", 1e6, 1e6), 0);
+  process.env.OPENROUTER_API_KEY = "sk-or-test";
+  check("a fallback list never exceeds three — OpenRouter refuses four with a 400 (measured 2026-09-01)",
+    ["judge", "scout", "writer"].every((r) => seat(boxM, r).models.length <= 3 && true), true);
+  delete process.env.OPENROUTER_API_KEY;
+  setPlan(boxM, "local");
+  check("the local plan fills a seat with no key at all", hasModel(boxM), true);
+  const local = seat(boxM, "judge");
+  check("...at Ollama's address by default", local.baseUrl, LOCAL_URL);
+  check("...with none of OpenRouter's fields", [local.openrouter, local.models], [false, null]);
+  choose(boxM, "writer", "gemma4:12b");
+  check("...and any tag the operator names goes through as written", chosen(boxM).writer, "gemma4:12b");
+  check("a server address without a scheme is refused",
+    (() => { try { setLocal(boxM, { baseUrl: "localhost:11434" }); return "kept"; } catch { return "refused"; } })(), "refused");
+  setLocal(boxM, { baseUrl: "http://10.0.0.5:8080/v1/" });
+  check("...a good one is kept, trailing slash removed", localConfig(boxM).baseUrl, "http://10.0.0.5:8080/v1");
+  process.env.MQ_PLAN = "paid";
+  check("MQ_PLAN in the environment outranks the file", plan(boxM), "paid");
+  delete process.env.MQ_PLAN;
+
+  // What actually leaves the machine, per plan — captured by a stub that
+  // speaks just enough OpenAI to answer.
+  const { createServer } = await import("node:http");
+  const seenReqs = [];
+  let reply = { choices: [{ message: { role: "assistant", content: "ok" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } };
+  const stubM = createServer((req, res) => {
+    let b = "";
+    req.on("data", (d) => (b += d));
+    req.on("end", () => {
+      seenReqs.push({ auth: req.headers.authorization ?? null, body: JSON.parse(b) });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(reply));
+    });
+  });
+  await new Promise((r) => stubM.listen(0, "127.0.0.1", r));
+  setLocal(boxM, { baseUrl: `http://127.0.0.1:${stubM.address().port}/v1` });
+  await complete(seat(boxM, "judge"), [{ role: "user", content: "hi" }]);
+  check("a local request carries no bearer header when there is no key", seenReqs[0].auth, null);
+  check("...and none of OpenRouter's routing fields", ["models", "provider"].filter((k) => k in seenReqs[0].body), []);
+  setLocal(boxM, { key: "secret-1" });
+  await complete(seat(boxM, "judge"), [{ role: "user", content: "hi" }]);
+  check("a local server that wants a key gets it", seenReqs[1].auth, "Bearer secret-1");
+  await complete({ ...seat(boxM, "judge"), openrouter: true, models: ["a", "b"] }, [{ role: "user", content: "hi" }]);
+  check("an OpenRouter seat sends its fallback list and routing", [seenReqs[2].body.models, seenReqs[2].body.provider?.allow_fallbacks], [["a", "b"], true]);
+  // A server that takes tool_choice and ignores it answers in prose. The
+  // JSON inside is the answer — checked by the same validator.
+  const V2 = { type: "object", required: ["verdicts"], properties: { verdicts: { type: "array" } } };
+  reply = { choices: [{ message: { role: "assistant", content: "Sure, here you go:\n```json\n{\"verdicts\": [{\"n\": 1, \"fit\": true, \"why\": \"x\"}]}\n```" } }] };
+  const got = await structured(seat(boxM, "judge"), [{ role: "user", content: "judge" }], V2, { name: "verdicts" });
+  check("a conforming JSON object inside a prose answer is the answer", got.data.verdicts[0].n, 1);
+  check("...and one call was enough", seenReqs.length, 4);
+  check("prose with no conforming object is not salvaged", salvage("the answer is {\"verdicts\": \"none\"}", V2), null);
+  stubM.close();
+  for (const [k, v] of Object.entries(envWas)) if (v !== undefined) process.env[k] = v;
+}
+
+/* ------------------------------------------------------- template phrases */
+
+// The third flag on a draft. Phrases, never vocabulary — and the em dash
+// only against a voice that has not been seen typing one.
+{
+  const { tells } = await import("../lib/guards.mjs");
+  check("the phrases nobody types to one person are named", tells("Great question! Hope this helps, and good luck!"), ["great question", "hope this helps", "good luck"]);
+  check("a plain reply carries none", tells("Move the migration out of the deploy step. It bit us on a managed db too, what are you on?"), []);
+  check("the em dash counts against an unmeasured voice", tells("Do it — now."), ["em dash"]);
+  check("...and not against somebody seen typing one", tells("Do it — now.", { dashes: { value: "yes" } }), []);
+  check("'as someone who' is a tell only as an opener", tells("I asked, as someone who cares."), []);
+}
+
+/* -------------------------------------------------------- the 404 finding */
+
+// A profile that 404s to a stranger stores nothing, so every "nothing stored
+// yet" screen used to swallow the tool's loudest finding. The read ledger
+// remembers; these pin that every surface asks it.
+{
+  const box4 = mkdtempSync(join(tmpdir(), "mq-404-"));
+  const D4 = join(box4, ".mq");
+  execFileSync(process.execPath, [ES, "init"], { env: { ...process.env, MQ_DIR: D4 }, stdio: "ignore" });
+  writeFileSync(join(D4, "account.json"), JSON.stringify({ name: "ghost_42", added: "2026-08-31T00:00:00Z" }));
+  appendFileSync(join(D4, "reads.jsonl"), JSON.stringify({ url: "https://www.reddit.com/user/ghost_42.rss?limit=100", at: "2026-09-01T14:33:51Z", ok: false, err: "http_404", n: 0 }) + "\n");
+  const st = esFails2(["status"], D4);
+  check("`status` after a 404 profile read reports the finding, not 'nothing stored'", /404 — logged out/.test(st) && !/nothing stored yet/.test(st), true);
+  check("...with the appeal address and the date of the read", /reddit\.com\/appeals/.test(st) && /2026-09-01 14:33/.test(st), true);
+
+  const srv4 = spawn(process.execPath, [SERVE, "--port", "0"], { env: { ...process.env, MQ_DIR: D4 }, stdio: ["ignore", "pipe", "pipe"] });
+  const base4 = await new Promise((resolve) => {
+    let out = "";
+    const t = setTimeout(() => resolve(null), 8000);
+    srv4.stdout.on("data", (d) => { out += d; const m = out.match(/http:\/\/127\.0\.0\.1:(\d+)/); if (m) { clearTimeout(t); resolve(`http://127.0.0.1:${m[1]}`); } });
+  });
+  if (!base4) { console.log("FAIL  the 404 dashboard did not start"); fail++; }
+  else {
+    const G4 = async (p) => { const r = await fetch(base4 + p); return { status: r.status, body: await r.text() }; };
+    const home = await G4("/");
+    check("the Standing page says the profile does not render", /does not render/.test(home.body) && !/Nothing stored yet/.test(home.body), true);
+    check("...and Ready says the same, not 'no standing measured'", /does not render/.test((await G4("/ready")).body), true);
+    // Settings on each plan renders, and a plan switch is one POST.
+    check("Settings shows the three plans", /Where the models run/.test((await G4("/settings")).body), true);
+    const sw = await fetch(base4 + "/settings/plan", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ plan: "local" }), redirect: "manual" });
+    check("switching the plan is a POST that comes straight back", sw.status, 303);
+    check("...and the local plan's page says, honestly, that nothing is listening yet",
+      /nothing is listening at http:\/\/127\.0\.0\.1:11434\/v1/.test((await G4("/settings")).body), true);
+  }
+  srv4.kill();
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

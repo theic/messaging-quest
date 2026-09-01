@@ -33,11 +33,16 @@ import { nextCards, readStash, patchStash, proposable } from "../lib/cards.mjs";
 import { relayBroker } from "../lib/relay.mjs";
 import { jobStore } from "../lib/jobs.mjs";
 import { MEMORY, readMemory, readOne, writeMemory, seedMissing, memoryProgress } from "../lib/memory.mjs";
-import { MODELS, ROLES, chosen, choose, readKey, writeKey, hasKey, keySource, judgeEstimate, money } from "../lib/models.mjs";
+import { PLANS, ROLES, LOCAL_URL, plan, setPlan, chosen, choose, localConfig, setLocal, probeLocal, modelInfo, alternatesFor,
+  readKey, writeKey, hasKey, hasModel, keySource, judgeEstimate, money } from "../lib/models.mjs";
 import { page, esc, empty, runBtn, tag, steps, setupBanner, APP_JS, CSP } from "../lib/ui.mjs";
 import { tokens, issueToken, revokeToken } from "../lib/feed.mjs";
 import { loadPlatforms } from "../lib/platform.mjs";
 import { skillState, readChoices, writeChoice } from "../lib/skills.mjs";
+// The reddit adapter by name, for one URL shape: the account's own profile
+// feed, so the read ledger can be asked what became of it. The CLI does the
+// same and for the same reason — one platform, mastered, before a second.
+import reddit from "../skills/reddit/adapter.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const ES = join(ROOT, "bin", "mq.mjs");
@@ -160,15 +165,35 @@ const views = {};
 
 /* --- Standing ------------------------------------------------------------ */
 
+/** The one finding an empty store can hide. A profile that 404s to a stranger
+ *  stores nothing — so "nothing stored" and "your account is invisible" look
+ *  identical from items.jsonl, and only the read ledger tells them apart. */
+const profile404 = () => {
+  const a = acct();
+  const r = a?.name ? S.lastReadOf(reddit.userFeed(a.name)) : null;
+  return r && !r.ok && r.err === "http_404" ? { name: a.name, at: r.at } : null;
+};
+const gone = ({ name, at }) => `
+<h1>Logged out, your profile does not render.</h1>
+<p class="sub">reddit.com/user/${esc(name)} answered <b>404</b> to a stranger (read ${esc(fmt(at))}).
+Nothing of yours is stored because there was nothing to read.</p>
+<div class="note"><b>That is the site-wide signal.</b> A suspended or shadowbanned account 404s to strangers
+while looking normal to you. Check it in a private window to confirm with your own eyes, then appeal at
+<a href="https://www.reddit.com/appeals" rel="noreferrer">reddit.com/appeals</a>.</div>
+<div class="actions">${runBtn("sync", "Read it again", { primary: true })}</div>`;
+
 views["/"] = () => {
   const items = S.items(), checks = S.checksById();
-  if (!items.size)
+  if (!items.size) {
+    const g = profile404();
+    if (g) return render("/", "Standing", gone(g));
     return render("/", "Standing", empty(
       "Nothing stored yet — Messaging Quest has not read your profile.",
       acct()?.name
         ? runBtn("sync", "Read my profile", { primary: true })
         : `<a class="btn primary" href="/setup">Set up Messaging Quest</a>`,
     ));
+  }
 
   const tally = new Map();
   let unchecked = 0;
@@ -261,6 +286,12 @@ const queueRows = () => {
 views["/queue"] = (url) => {
   const rows = queueRows();
   const pend = S.pending();
+  // The backlog behind the queue, said out loud even when the queue is full:
+  // a person working through five fits should know nineteen more are waiting
+  // on a verdict, or the "5" is a number that lies by omission.
+  const backlog = pend.length && rows.length
+    ? `<div class="note"><b>${pend.length} more found and waiting on a verdict.</b> ${runBtn("judge", `Judge ${pend.length} now`, { small: true })}</div>`
+    : "";
   if (!rows.length)
     return render("/queue", "Queue", empty(
       pend.length ? `${pend.length} post${pend.length === 1 ? "" : "s"} found and waiting on a verdict.` : "Nobody is waiting for an answer.",
@@ -278,6 +309,7 @@ views["/queue"] = (url) => {
 
   return render("/queue", "Queue", `
 <div data-deck>
+${backlog}
 <h1>One person</h1>
 <p class="sub">${at + 1} of ${rows.length} · r/${esc(it.place)} · ${tag(ready.state, ready.state === "ready" ? "ok" : ready.state === "not ready" ? "no" : "dim")}
   <span class="muted"> · <kbd>j</kbd> next · <kbd>s</kbd> skip · <kbd>o</kbd> open · <kbd>d</kbd> draft</span></p>
@@ -294,8 +326,9 @@ ${ready.state === "not ready" ? `<div class="note"><b>${esc(ready.why)}</b></div
   ${draft ? `<div class="said">${esc(draft.text)}</div>
     ${(draft.flags?.repeat ?? 0) >= 8 ? `<div class="note" style="margin-top:14px"><b>Repeated phrasing:</b> ${draft.flags.repeat} identical consecutive words you have used before.</div>` : ""}
     ${(draft.flags?.claims ?? 0) ? `<div class="note" style="margin-top:14px"><b>${draft.flags.claims} claim(s) about your history</b> — each is either true or it is the thing that ends the account.</div>` : ""}
-    ${(draft.flags?.links ?? 0) ? `<div class="note" style="margin-top:14px"><b>Invented link.</b> Not present in the thread we read.</div>` : ""}`
-    : hasKey(DIR)
+    ${(draft.flags?.links ?? 0) ? `<div class="note" style="margin-top:14px"><b>Invented link.</b> Not present in the thread we read.</div>` : ""}
+    ${(draft.flags?.tells ?? 0) ? `<div class="note" style="margin-top:14px"><b>Reads like a template.</b> ${draft.flags.tells} phrase${draft.flags.tells === 1 ? "" : "s"} nobody types to one person — <code>mq draft ${esc(it.id)} --save</code> names them.</div>` : ""}`
+    : hasModel(DIR)
       ? `<p class="sub">Nothing written for this one yet.</p>
          <div class="actions">${runBtn("draft", "Write a draft", { args: [it.id], primary: true })}</div>`
       : `<p class="sub">Add an OpenRouter key on <a href="/settings">Settings</a> and this writes itself.
@@ -454,9 +487,12 @@ views["/ready"] = () => {
   const stand = standing([...S.items().values()], S.checksById());
   const sent = S.sentLog();
   const m = mix([...S.items().values()].filter((i) => i.kind === "comment").length, sent.length);
-  if (!stand.size)
+  if (!stand.size) {
+    const g = profile404();
+    if (g) return render("/ready", "Ready", gone(g));
     return render("/ready", "Ready", empty("No standing measured yet — it is read off your own comments.",
       `${runBtn("sync", "Read my profile", { primary: true })}${runBtn("check", "Then check the threads")}`));
+  }
   return render("/ready", "Ready", `
 <h1>Where you stand</h1>
 <p class="sub">Read off your own comments and what a stranger can see of them. No invented threshold:
@@ -603,19 +639,16 @@ edit here, not a copy marshalled through a prompt.</p>`);
 /* --- Settings ------------------------------------------------------------ */
 
 views["/settings"] = async () => {
-  const key = readKey(DIR), src = keySource(DIR), pick = chosen(DIR);
+  const key = readKey(DIR), src = keySource(DIR), p = plan(DIR), P = PLANS[p], pick = chosen(DIR);
   const flash = takeFlash();
-  return render("/settings", "Settings", `
-<h1>Settings</h1>
-
-<h2>OpenRouter</h2>
-<p class="sub">Optional. Everything that reads Reddit works without one; the scout, the judge and the writer
-need a model, and this is your key on your machine for your bill. There is nothing to install —
-the key is the only requirement.</p>
-<div class="card">
+  const local = localConfig(DIR);
+  const probe = p === "local" ? await probeLocal(local.baseUrl) : null;
+  const installed = probe?.ok ? probe.models : [];
+  const menu = P.menu;
+  const keyCard = `<div class="card">
   <form method="POST" action="/settings/key">
     <div class="field">
-      <label for="k">API key ${src === "env" ? "— currently coming from <code>OPENROUTER_API_KEY</code> in your environment" : ""}</label>
+      <label for="k">OpenRouter API key ${src === "env" ? "— currently coming from <code>OPENROUTER_API_KEY</code> in your environment" : ""}</label>
       <input id="k" type="password" name="key" placeholder="${key ? "•".repeat(24) + " (saved)" : "sk-or-…"}" ${src === "env" ? "disabled" : ""}>
     </div>
     <div class="actions" style="margin-top:0">
@@ -624,28 +657,88 @@ the key is the only requirement.</p>
       <span class="muted">${key ? "a key is set" : "no key set"}</span>
     </div>
   </form>
+</div>`;
+  const localCard = `<div class="card">
+  <form method="POST" action="/settings/local">
+    <div class="field">
+      <label for="lu">Server address — anything that speaks OpenAI chat completions; Ollama's is the default</label>
+      <input id="lu" type="url" name="baseUrl" value="${esc(local.baseUrl)}" placeholder="${esc(LOCAL_URL)}">
+    </div>
+    <div class="field">
+      <label for="lk">Key, only if that server checks one</label>
+      <input id="lk" type="password" name="key" placeholder="${local.key ? "•".repeat(12) + " (saved)" : "usually empty"}">
+    </div>
+    <div class="actions" style="margin-top:0">
+      <button class="primary" type="submit">Save</button>
+      ${local.key ? `<button type="submit" name="clearKey" value="1">Remove key</button>` : ""}
+      <span class="${probe?.ok ? "ok" : "no"}" style="font-size:14px">${probe?.ok
+        ? `reachable — ${installed.length} model${installed.length === 1 ? "" : "s"} installed`
+        : esc(probe?.error ?? "")}</span>
+    </div>
+  </form>
+  <p class="muted" style="margin:12px 0 0">With Ollama: <code>ollama pull ${esc(pick.judge)}</code> for each seat below, and start it with a
+  window the scout can read a page into — <code>OLLAMA_CONTEXT_LENGTH=32768 ollama serve</code>. Its default window drops the
+  start of a long page without saying so.</p>
+</div>`;
+  const quota = p === "paid"
+    ? `Judging a hundred posts on the current pick costs about <b>${esc(money(judgeEstimate(DIR, 100)))}</b>.`
+    : p === "free"
+      ? `Nothing here is billed. OpenRouter's limits on free variants, read off its docs 2026-09-01: <b>20 requests a minute and 50 a day</b>,
+         or 1,000 a day once $10 of credit has ever been bought on the account. A judge batch is one request per five posts; a scout run is
+         one per page it reads. A provider being full (a 429 from upstream) is ordinary here — the fallbacks exist for exactly that.`
+      : `Nothing here is billed and nothing leaves this machine. The cost is time: a 9B model on a CPU takes minutes per judge batch,
+         not seconds, and the strip at the top of the page is what tells you it is working rather than stuck.`;
+  return render("/settings", "Settings", `
+<h1>Settings</h1>
+
+<h2>Where the models run</h2>
+<p class="sub">Everything that reads Reddit needs none of this. The scout, the judge and the writer need a model,
+and there are three places to get one.</p>
+<div class="grid">
+${Object.values(PLANS).map((q) => `<div class="card" style="margin:0${q.key === p ? ";border-top:6px solid var(--lime)" : ""}">
+  <div class="row" style="border:0;padding:0"><b>${esc(q.title)}</b>${q.key === p ? tag("in use", "ok") : ""}</div>
+  <p class="sub" style="margin:10px 0 12px;font-size:14px">${esc(q.what)}</p>
+  <form method="POST" action="/settings/plan"><input type="hidden" name="plan" value="${esc(q.key)}">
+    <button class="small ${q.key === p ? "" : "primary"}" type="submit" ${q.key === p ? "disabled" : ""}>${q.key === p ? "In use" : "Use this"}</button></form>
+</div>`).join("")}
 </div>
 
+<h2 style="margin-top:24px">${p === "local" ? "Your server" : "OpenRouter"}</h2>
+<p class="sub">${p === "local"
+    ? "Any OpenAI-compatible server on this machine or your network. No key unless it wants one."
+    : `${p === "free" ? "The free variants need a key too — making one costs nothing." : "Your key, on your machine, for your bill."} There is nothing to install; the key is the only requirement.`}</p>
+${p === "local" ? localCard : keyCard}
+
 <h2>Models</h2>
-<p class="sub">Balanced means the cheap fast model does the volume work and the good writer only writes.
-Prices are per million tokens, read off OpenRouter on 2026-08-30.</p>
-${Object.values(ROLES).map((r) => `<div class="card">
+<p class="sub">${p === "paid"
+    ? "Balanced means the cheap fast model does the volume work and the good writer only writes. Prices are per million tokens, read off OpenRouter on 2026-08-30."
+    : p === "free"
+      ? "Picked on a measurement, 2026-09-01: the same two-item verdict on every free model that takes a tool call. The notes carry the numbers, including the ones that were full."
+      : "Tags on your server. The suggestions are sized for a 16 GB machine and are not measured — this project has had no local box to measure on. When you have numbers, the note is where they go."}</p>
+${Object.values(ROLES).map((r) => {
+  const cur = pick[r.key];
+  const info = modelInfo(p, cur);
+  const alt = alternatesFor(r.key, p).filter((a) => a !== cur);
+  const options = p === "local"
+    ? [...new Set([cur, ...installed, ...Object.keys(menu)])].map((id) =>
+        `<option value="${esc(id)}" ${id === cur ? "selected" : ""}>${esc(id)}${installed.includes(id) ? " — installed" : menu[id] ? " — suggested" : ""}</option>`).join("")
+    : Object.values(menu).map((m) =>
+        `<option value="${esc(m.id)}" ${m.id === cur ? "selected" : ""}>${esc(m.label)} — ${p === "free" ? "free" : `$${m.in}/$${m.out} per M`}</option>`).join("");
+  const pulled = p !== "local" || !probe?.ok || installed.includes(cur);
+  return `<div class="card">
   <div class="row" style="border:0;padding:0"><b>${esc(r.title)}</b>
-    <span class="muted">${esc(MODELS[pick[r.key]]?.label ?? pick[r.key])}</span></div>
+    <span class="muted">${esc(info.label)}${pulled ? "" : ` — not pulled yet: <code>ollama pull ${esc(cur)}</code>`}</span></div>
   <p class="sub" style="margin:10px 0 12px;font-size:14px">${esc(r.what)}</p>
   <form method="POST" action="/settings/model" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
     <input type="hidden" name="role" value="${esc(r.key)}">
-    <select name="model" style="max-width:320px">
-      ${Object.values(MODELS).map((m) => `<option value="${esc(m.id)}" ${m.id === pick[r.key] ? "selected" : ""}>
-        ${esc(m.label)} — $${m.in}/$${m.out} per M</option>`).join("")}
-    </select>
+    <select name="model" style="max-width:320px">${options}</select>
+    ${p === "local" ? `<input type="text" name="custom" placeholder="or any tag: qwen3.5:27b" style="max-width:220px">` : ""}
     <button class="small" type="submit">Use this</button>
   </form>
-  <p class="muted" style="margin:10px 0 0">${esc(MODELS[pick[r.key]]?.note ?? "")}
-    Falls back to ${esc(r.alternates.join(", "))} on an error.</p>
-</div>`).join("")}
-<p class="sub" style="font-size:14px">Judging a hundred posts on the current pick costs about
-<b>${esc(money(judgeEstimate(DIR, 100)))}</b>.</p>
+  <p class="muted" style="margin:10px 0 0">${esc(info.note)}${alt.length ? ` Falls back to ${esc(alt.join(", "))} on an error.` : ""}</p>
+</div>`;
+}).join("")}
+<p class="sub" style="font-size:14px">${quota}</p>
 
 <h2>Sharing this machine's reading</h2>
 <p class="sub">Reading a source costs a minute a request. If several people watch the same rooms, this machine
@@ -730,14 +823,14 @@ ${steps(SETUP_STEPS, 1)}
 <h1>What do you sell?</h1>
 <p>Paste your own site. The scout reads it and the handful of pages it links to — pricing, product, about —
 and proposes the three files every later verdict is judged by. It proposes; you press Save.</p>
-${!hasKey(DIR) ? `<div class="note"><b>This step needs a model.</b>
-  <a href="/settings">Add an OpenRouter key</a> and come back, or
+${!hasModel(DIR) ? `<div class="note"><b>This step needs a model.</b>
+  <a href="/settings">Add an OpenRouter key or pick Local</a> and come back, or
   <a href="/memory">write the three files yourself</a> — the tool does not care which.</div>` : ""}
 <div class="card">
   <form method="POST" action="/setup/scout">
     <div class="field"><label for="site">Your website</label>
-      <input id="site" type="url" name="url" placeholder="https://example.com" required ${hasKey(DIR) ? "" : "disabled"}></div>
-    <button class="primary" type="submit" ${hasKey(DIR) && !running ? "" : "disabled"}>${running ? "Reading…" : "Read my site"}</button>
+      <input id="site" type="url" name="url" placeholder="https://example.com" required ${hasModel(DIR) ? "" : "disabled"}></div>
+    <button class="primary" type="submit" ${hasModel(DIR) && !running ? "" : "disabled"}>${running ? "Reading…" : "Read my site"}</button>
   </form>
 </div>
 ${job ? `<div class="card"><h2 style="margin-top:0">${esc(job.status === "running" ? "Reading" : job.status)}</h2>
@@ -856,7 +949,11 @@ const startAgentic = (verb, args) => {
       const { judgeItems } = await import("../lib/agents.mjs");
       const rule = readFileSync(S.F("rule.md"), "utf8");
       const verdicts = await judgeItems(DIR, items, rule, ctl);
-      if (!verdicts.length) { ctl.log("no verdicts came back — nothing written"); return; }
+      // Nothing back is a failure, not a quiet success: the first live judge
+      // run on the free plan finished "ok" in 0.8s with every batch refused
+      // (400, a fallback list one entry too long) and the only trace was a
+      // log the job store does not keep.
+      if (!verdicts.length) throw new Error(`no verdicts came back — ${verdicts.failed?.[0] ?? "nothing written"}`);
       // Hand them to the CLI rather than appending here: `mq judge` is what
       // stamps the rubric hash, clears pending and settles the probe, and two
       // implementations of that is how a queue starts disagreeing with itself.
@@ -875,8 +972,8 @@ const startAgentic = (verb, args) => {
       // it for a human to paste. This sends it.
       const prompt = await capture("draft", [id]);
       const { draftReply } = await import("../lib/agents.mjs");
-      const options = await draftReply(DIR, prompt, ctl);
-      if (!options.length) { ctl.log("nothing came back"); return; }
+      const { options, no_fit } = await draftReply(DIR, prompt, ctl);
+      if (!options.length) { ctl.log(no_fit ? `the writer declined: ${no_fit}` : "nothing came back"); return; }
       ctl.log(`\n${options.length} option${options.length === 1 ? "" : "s"}:`);
       for (const o of options) ctl.log(`\n— ${o.move}\n${o.text}`);
       // The first is saved so it lands on the card; the rest are in this log.
@@ -973,7 +1070,19 @@ const writes = {
   },
 
   "/settings/model": (form) => {
-    try { choose(DIR, String(form.get("role")), String(form.get("model"))); } catch { /* unknown ids ignored */ }
+    // A typed tag (local plan) beats the select; an unknown id on OpenRouter
+    // is ignored and the page keeps showing what actually runs.
+    try { choose(DIR, String(form.get("role")), String(form.get("custom") || form.get("model") || "")); } catch { /* unknown ids ignored */ }
+    return "/settings";
+  },
+  "/settings/plan": (form) => {
+    try { setPlan(DIR, String(form.get("plan"))); } catch { /* not a plan — the page shows which one runs */ }
+    return "/settings";
+  },
+  "/settings/local": (form) => {
+    // An empty key field means "leave it as it is"; the Remove button clears it.
+    const key = form.get("clearKey") ? "" : (String(form.get("key") ?? "").trim() || undefined);
+    try { setLocal(DIR, { baseUrl: String(form.get("baseUrl") ?? ""), key }); } catch { /* a bad address is refused; the page keeps the old one */ }
     return "/settings";
   },
 
@@ -1090,7 +1199,7 @@ function cardSnapshot() {
   return {
     stash,
     account: acct(),
-    hasKey: hasKey(DIR),
+    hasModel: hasModel(DIR),
     memory: memoryProgress(DIR),
     voice: mergeVoice(rawVoice?.measured ?? null, rawVoice?.user ?? null),
     scout,
@@ -1131,7 +1240,7 @@ function actCard({ card, action, choice, text }) {
   if (id === "onboard.url") {
     if (act === "manual") { patchStash(DIR, { manual: true }); return { ok: true }; }
     if (!/^https?:\/\//i.test(t)) return { error: "paste a full address, https://…" };
-    if (hasKey(DIR)) return startScout(t).error ? { error: "the scout is already running" } : { ok: true };
+    if (hasModel(DIR)) return startScout(t).error ? { error: "the scout is already running" } : { ok: true };
     patchStash(DIR, { url: t });
     return { ok: true };
   }
@@ -1511,7 +1620,12 @@ export function serve(port = PORT) {
       // stays honestly anonymous — that asymmetry is the design, not a gap.
       process.env.MQ_RELAY = `http://127.0.0.1:${server.address().port}`;
       console.log(`reading ${DIR}/ — localhost only, nothing leaves this machine.`);
-      console.log(hasKey(DIR) ? `OpenRouter key found — the scout, judge and writer are available.` : `no OpenRouter key — add one at /settings to turn on the scout, judge and writer.`);
+      const p = plan(DIR);
+      console.log(p === "local"
+        ? `models: the local plan — ${localConfig(DIR).baseUrl}; nothing is billed and nothing leaves this machine.`
+        : hasKey(DIR)
+          ? `models: the ${p} plan on OpenRouter — the scout, judge and writer are available.`
+          : `no OpenRouter key — add one at /settings (the free plan needs one too), or pick Local there to run a model on this machine.`);
       console.log(`ctrl-c to stop.`);
       resolve(server);
     });
