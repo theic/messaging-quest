@@ -576,6 +576,15 @@ check("...and the governor's no arrives as a disabled button that says why",
 check("a machine that is on and quiet says so honestly",
   nextCards(snap({ ...onb, rooms: [{ place: "saas", state: "yes" }] }))[0].id, "work.quiet");
 
+// PEOPLE OUTRANK SETUP — the day-one bug, pinned. Probing from the dashboard
+// filled a queue of twenty judged people while the panel, gating work behind
+// "a source is watched", kept asking which room to look in first.
+const noSources = { account: { name: "x" }, stash: allVoice, memory: memDone, sources: [], itemCount: 3 };
+check("a judged person deals even when nothing is watched yet",
+  nextCards(snap({ ...noSources, queue: [qItem] }))[0].kind, "work.reply");
+check("...and pending verdicts deal before the room question, not instead of it",
+  nextCards(snap({ ...noSources, pendingCount: 40 })).map((c) => c.id).slice(0, 2), ["work.judge", "onboard.room"]);
+
 /* ------------------------------------------------------------ the deck API */
 
 // A second throwaway server: the acts write, so they get their own dir.
