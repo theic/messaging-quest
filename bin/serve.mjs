@@ -1295,6 +1295,11 @@ const server = createServer((req, res) => {
   if (url.pathname === "/api/agent" && req.method === "POST") {
     return jsonBody(req)
       .then(async (body) => {
+        const message = String(body.message ?? "");
+        // Answered here, BEFORE the lazy import: an empty message is the panel
+        // pinging the seam, and "is anyone there" must not cost a brain install.
+        if (!message.trim())
+          return res.writeHead(200, JSON_HEAD).end(JSON.stringify({ reply: "Say something and I will answer." }));
         let strategist;
         try {
           ({ strategist } = await import("../agent/strategist.mjs"));
@@ -1306,7 +1311,7 @@ const server = createServer((req, res) => {
           }));
         }
         try {
-          const out = await strategist(DIR, String(body.message ?? ""), String(body.thread ?? "panel"));
+          const out = await strategist(DIR, message, String(body.thread ?? "panel"));
           res.writeHead(200, JSON_HEAD).end(JSON.stringify(out));
         } catch (e) {
           console.error(e);
