@@ -1,6 +1,6 @@
 # The plan
 
-earshot wants to be the open engine under SaaS marketing — the way OpenClaw
+Messaging Quest wants to be the open engine under SaaS marketing — the way OpenClaw
 became the standard for local assistants — and this file records what that
 means in decisions, so the next contributor argues with reasons rather than
 with archaeology. The market picture behind the newest decisions is measured,
@@ -40,7 +40,7 @@ heart       lib/ — the store, the pacing governor, the probe economics, the
             Knows no platform. Zero dependencies, non-arguable.
 skills      skills/<id>/ — a platform is a SKILL.md + adapter.mjs. Reddit is
             the first and deliberately the only one. Local skills load from
-            .earshot/skills/ without forking. Contract: skills/README.md.
+            .mq/skills/ without forking. Contract: skills/README.md.
 brain       agent/ — the strategist, on Deep Agents. The ONE directory that
             carries dependencies, behind one lazy import; everything else
             runs without it being installed (`npm run brain` turns it on).
@@ -55,6 +55,11 @@ surfaces    the Chrome extension (primary: the deck in a side panel, and the
 memory      five markdown files the human owns. The model proposes; a person
             presses Save. rule.md's hash rides on every verdict; persona.md
             reaches only the strategist.
+skills      the common directory. SKILL.md always; seats optional —
+            adapter (a platform), page (a dashboard screen), agent (a
+            colleague for the strategist). Two rings (skills/, .mq/skills/);
+            slots resolved in skills.json; doors in lib/platform.mjs,
+            bin/serve.mjs, agent/strategist.mjs.
 ```
 
 **The heart has zero runtime dependencies; the brain carries them.** The
@@ -68,12 +73,12 @@ install command between the two.
 ## Decisions of record
 
 **Not built on OpenClaw.** OpenClaw is an assistant *host*, not a library —
-the correct relationship is that an OpenClaw agent drives earshot, which
-`integrations/openclaw/SKILL.md` and the MCP server both provide. What earshot
+the correct relationship is that an OpenClaw agent drives Messaging Quest, which
+`integrations/openclaw/SKILL.md` and the MCP server both provide. What Messaging Quest
 takes from OpenClaw is the *pattern* that made it a standard: local-first, one
 job owned completely, markdown memory, skills as folders, nothing to install.
 
-**Not built on Hermes.** A model family plus a harness tuned for it. earshot
+**Not built on Hermes.** A model family plus a harness tuned for it. Messaging Quest
 is model-agnostic through OpenRouter on principle — any model can occupy a
 seat by id, including a Hermes model. The chassis must not belong to a vendor.
 
@@ -144,7 +149,7 @@ the moat — Reveddit does it free. "Never auto-posts" is now advertised by
 half a 30-tool category, so etiquette *stated* is worth nothing. Etiquette
 *enforced* — rules parsed, the forbidding sentence quoted back, limits that
 actually stop the click — is still shipped by nobody else, and it must be
-demonstrable: refusal receipts and `es ready` are product surface, built to
+demonstrable: refusal receipts and `mq ready` are product surface, built to
 be screenshotted. The moat is user-owned memory + enforced refusals + the
 open engine behind agent surfaces.
 
@@ -186,12 +191,34 @@ Adobe/Semrush) and subscription resistance in this audience is loud. Licence
 supports the split: Elastic-2.0 — free to use, modify, redistribute; nobody
 may resell it as a managed service, which is exactly the twin's moat.
 
+**Skills generalised: seats, slots, rings (2026-09-01).** The extension
+story stops being platform-only. One common directory (`skills/`, plus the
+local `.mq/skills/` ring that wins on id collision); one manifest (SKILL.md
+frontmatter, now with optional `provides: <slot>`); three executable seats,
+each behind a named door — `adapter.mjs` (lib/platform.mjs), `page.mjs`
+(bin/serve.mjs, PostHog's configurable-dashboard move at our scale),
+`agent.mjs` (agent/strategist.mjs adapts bare-Node modules into Deep Agents
+subagents — the Okara shape, one CMO with purpose-specific colleagues, as
+folders instead of a paywall). Competing implementations of one purpose
+coexist; the instance chooses in `skills.json` / the Skills screen /
+`mq skills use`, and an unresolved stalemate runs NOBODY, loudly — a guess
+there is a dashboard quietly running code the operator did not pick. The
+registry (lib/skills.mjs) only discovers and resolves; it never executes
+seat code. Contracts grow by extraction, same as ever.
+
+**The brand (2026-09-01).** Messaging Quest, settled: the working name
+earshot retired everywhere a person or a machine reads — package
+`messaging-quest` (npm name checked free 2026-09-01), bin `mq`, data dir
+`.mq/` with a one-time rename migration so nobody's queue starts over. The
+domain (play.messaging.quest) predates the rename; the repo home is
+theic/messaging-quest.
+
 ## Done
 
 - 0.1–0.2: listener, waiting-for-you, find, drafts, the gate; dashboard;
   models on OpenRouter with measured defaults; hub + pull federation.
 - 0.3.0: zero-dep model layer; platforms-as-skills with local override dir;
-  `es platforms`; MCP server (7 tools, 4 memory resources); OpenClaw skill;
+  `mq platforms`; MCP server (7 tools, 4 memory resources); OpenClaw skill;
   LICENSE (canonical ELv2); loader + schema-check tests; `--port 0`.
 - 2026-08-31: market check researched and recorded
   (research/market-2026-08-31.md).
@@ -209,6 +236,17 @@ may resell it as a managed service, which is exactly the twin's moat.
   to the user's own session when the anonymous lane refuses; the
   visibility-verbs-stay-anonymous doctrine pinned by a test that counts the
   call sites. 179 engine tests green.
+- 2026-09-01, published: branch pushed, PR #1 merged green, CI live (engine
+  jobs with NO install step on Ubuntu 18/22 + Windows 22; brain job installs
+  agent/ and imports the strategist keyless). CI's first run caught its
+  first real bug — the /api/agent empty-message answer sat behind the lazy
+  brain import, invisible on every machine that had agent/ installed.
+- 2026-09-01, the foundation for a community: the brand (Messaging Quest,
+  `mq`, `.mq/` with rename migration), the skill registry (rings, slots,
+  skills.json), three seats behind three doors (adapter / page / agent), the
+  Skills screen + `mq skills`, live re-resolution on choice,
+  CONTRIBUTING.md + skills/_template/ + the rewritten skills/README.md.
+  224 engine tests + 31 voice, green.
 
 ## Next, in order
 

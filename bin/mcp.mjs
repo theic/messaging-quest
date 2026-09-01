@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-// The MCP server — earshot as a set of tools inside whatever assistant you
+// The MCP server — Messaging Quest as a set of tools inside whatever assistant you
 // already talk to. Claude Code, Claude Desktop, a ChatGPT client, an OpenClaw
 // agent on your phone: anything that speaks MCP over stdio can triage your
 // queue from wherever you are.
 //
-//   node bin/mcp.mjs            (run from the directory that holds .earshot/)
+//   node bin/mcp.mjs            (run from the directory that holds .mq/)
 //
-// Claude Code:     claude mcp add earshot -- node <path-to>/bin/mcp.mjs
-// Claude Desktop:  {"mcpServers": {"earshot": {"command": "node",
+// Claude Code:     claude mcp add mq -- node <path-to>/bin/mcp.mjs
+// Claude Desktop:  {"mcpServers": {"mq": {"command": "node",
 //                    "args": ["<path-to>/bin/mcp.mjs"], "cwd": "<project dir>"}}}
 //
 // THE DIVISION OF LABOUR, and it is the interesting part: the assistant on the
@@ -16,7 +16,7 @@
 // `draft_material` hands it the same brief the dashboard's writer gets — your
 // measured voice, the room's risks, what you can honestly claim — so the reply
 // it drafts is written under your rules, not its defaults. Used this way,
-// earshot needs no OpenRouter key at all: the model you already pay for does
+// Messaging Quest needs no OpenRouter key at all: the model you already pay for does
 // the judging, and this process is just the store and the etiquette.
 //
 // What is DELIBERATELY absent: `probe`, `tick`, `sync` — the reading verbs.
@@ -34,14 +34,15 @@ import { createInterface } from "node:readline";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MEMORY, readOne } from "../lib/memory.mjs";
+import { dataDir } from "../lib/store.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const ES = join(ROOT, "bin", "es.mjs");
-const DIR = process.env.EARSHOT_DIR || ".earshot";
+const ES = join(ROOT, "bin", "mq.mjs");
+const DIR = dataDir();
 const VERSION = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version;
 
 if (!existsSync(DIR)) {
-  console.error(`earshot mcp: no ${DIR}/ in ${process.cwd()} — run \`es init\` there first, or set EARSHOT_DIR`);
+  console.error(`mq mcp: no ${DIR}/ in ${process.cwd()} — run \`mq init\` there first, or set MQ_DIR`);
   process.exit(1);
 }
 
@@ -51,7 +52,7 @@ if (!existsSync(DIR)) {
 const es = (args, stdin = null) =>
   new Promise((resolve) => {
     const child = execFile(process.execPath, [ES, ...args],
-      { env: { ...process.env, EARSHOT_DIR: DIR }, timeout: 120_000, maxBuffer: 4 * 1024 * 1024 },
+      { env: { ...process.env, MQ_DIR: DIR }, timeout: 120_000, maxBuffer: 4 * 1024 * 1024 },
       (err, stdout, stderr) => resolve({ ok: !err, text: `${stdout}${stderr ? `\n${stderr}` : ""}`.trim() }));
     if (stdin !== null) child.stdin.end(stdin);
   });
@@ -73,7 +74,7 @@ const TOOLS = [
   },
   {
     name: "pending",
-    description: "Numbered items that still need a fit verdict, as JSON [{n, author, title, body}]. YOU can act as the judge: read .earshot/rule.md (the rule_md resource), decide each, then call the judge tool.",
+    description: "Numbered items that still need a fit verdict, as JSON [{n, author, title, body}]. YOU can act as the judge: read .mq/rule.md (the rule_md resource), decide each, then call the judge tool.",
     inputSchema: { type: "object", properties: {} },
     run: () => es(["pending"]),
   },
@@ -108,7 +109,7 @@ const TOOLS = [
   },
   {
     name: "save_draft",
-    description: "Save a drafted reply and run earshot's refusals over it: repeated phrasing across your past drafts, invented links, and unverifiable first-person claims. Read the flags back to the operator — the draft is saved either way, and a human sends it themselves.",
+    description: "Save a drafted reply and run Messaging Quest's refusals over it: repeated phrasing across your past drafts, invented links, and unverifiable first-person claims. Read the flags back to the operator — the draft is saved either way, and a human sends it themselves.",
     inputSchema: {
       type: "object",
       required: ["id", "text"],
@@ -140,7 +141,7 @@ const TOOLS = [
 /* persona.md (optional: true) stays home: the assistant on this pipe holds the
    judge tool, and a judge that has read your persona judges in character. */
 const RESOURCES = MEMORY.filter((m) => !m.optional).map((m) => ({
-  uri: `earshot://memory/${m.file}`,
+  uri: `mq://memory/${m.file}`,
   name: m.file,
   description: m.what,
   mimeType: "text/markdown",
@@ -161,7 +162,7 @@ async function handle(msg) {
       return reply(id, {
         protocolVersion: params?.protocolVersion ?? "2025-06-18",
         capabilities: { tools: {}, resources: {} },
-        serverInfo: { name: "earshot", version: VERSION },
+        serverInfo: { name: "messaging-quest", version: VERSION },
       });
     case "notifications/initialized":
     case "notifications/cancelled":
@@ -180,7 +181,7 @@ async function handle(msg) {
       return reply(id, { resources: RESOURCES });
     case "resources/read": {
       const uri = String(params?.uri ?? "");
-      const file = uri.match(/^earshot:\/\/memory\/([\w.-]+)$/)?.[1];
+      const file = uri.match(/^mq:\/\/memory\/([\w.-]+)$/)?.[1];
       const doc = file && readOne(DIR, file);
       if (!doc) return fail(id, -32602, `no such resource: ${uri}`);
       return reply(id, { contents: [{ uri, mimeType: "text/markdown", text: doc.body }] });
@@ -204,4 +205,4 @@ rl.on("line", (line) => {
 // still owes its answer, so drain before leaving rather than killing it.
 rl.on("close", async () => { await Promise.allSettled([...inflight]); process.exit(0); });
 
-console.error(`earshot mcp: serving ${DIR}/ over stdio — 7 tools, ${RESOURCES.length} resources`);
+console.error(`mq mcp: serving ${DIR}/ over stdio — 7 tools, ${RESOURCES.length} resources`);

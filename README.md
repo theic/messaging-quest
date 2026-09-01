@@ -1,6 +1,6 @@
-# earshot
+# Messaging Quest
 
-[![tests](https://github.com/theic/earshot/actions/workflows/ci.yml/badge.svg)](https://github.com/theic/earshot/actions/workflows/ci.yml)
+[![tests](https://github.com/theic/messaging-quest/actions/workflows/ci.yml/badge.svg)](https://github.com/theic/messaging-quest/actions/workflows/ci.yml)
 
 **Find out what Reddit actually did to the comments you wrote — and who is
 still waiting on an answer from you.**
@@ -34,7 +34,7 @@ stranger reads it, re-reads each thread you took part in, and tells you which of
 the things you said a stranger can actually see. Then it goes and finds the
 people asking for what you sell.
 
-It stores everything in `.earshot/` in the directory you run it from, as
+It stores everything in `.mq/` in the directory you run it from, as
 append-only JSONL you can read with `cat`, and five markdown files you can open
 in any editor.
 
@@ -55,13 +55,13 @@ the conversational strategist lives in `agent/` on Deep Agents, installs with
 Node 18 or newer.
 
 ```bash
-git clone https://github.com/theic/earshot && cd earshot && node bin/es.mjs init
+git clone https://github.com/theic/messaging-quest && cd messaging-quest && node bin/mq.mjs init
 ```
 
 Then open the dashboard and set it up there:
 
 ```bash
-node bin/es.mjs serve
+node bin/mq.mjs serve
 ```
 
 That is `http://127.0.0.1:8787`, and everything this tool does is reachable from
@@ -76,13 +76,13 @@ is the whole step — there are no libraries to install.
 
 ### The specialist in your browser
 
-The primary way to *live* with earshot is the Chrome extension — one card at
+The primary way to *live* with Messaging Quest is the Chrome extension — one card at
 a time in a side panel: who to answer, the drafted reply, and the reason when
 the answer is "not yet".
 
 1. `chrome://extensions` → Developer mode → **Load unpacked** → pick this
    repo's `extension/` folder.
-2. Keep `node bin/es.mjs serve` running; pin the icon and click it.
+2. Keep `node bin/mq.mjs serve` running; pin the icon and click it.
 
 The panel deals the next action: setup runs as cards (your account, your URL
 — the scout reads your site while you answer nine one-tap questions about how
@@ -112,11 +112,11 @@ wrong seat.
 ### Or drive it from the terminal
 
 ```bash
-node bin/es.mjs me <your-reddit-username>
-node bin/es.mjs sync      # read your profile as a stranger sees it
-node bin/es.mjs check     # re-read each thread, logged out
-node bin/es.mjs status    # what became of the things you said
-node bin/es.mjs back      # who replied to you and is still waiting
+node bin/mq.mjs me <your-reddit-username>
+node bin/mq.mjs sync      # read your profile as a stranger sees it
+node bin/mq.mjs check     # re-read each thread, logged out
+node bin/mq.mjs status    # what became of the things you said
+node bin/mq.mjs back      # who replied to you and is still waiting
 ```
 
 The CLI is still the one implementation of every verb — the dashboard's buttons
@@ -161,11 +161,11 @@ The second half is monitoring — and it is mostly a list of things it will not
 read.
 
 ```bash
-node bin/es.mjs probe smallbusiness --q "how do I get clients"
-node bin/es.mjs rooms      # whose rules have been read, and whose have not
-node bin/es.mjs watch smallbusiness --q "how do I get clients"
-node bin/es.mjs tick       # read what is due
-node bin/es.mjs queue      # who is waiting for an answer from you
+node bin/mq.mjs probe smallbusiness --q "how do I get clients"
+node bin/mq.mjs rooms      # whose rules have been read, and whose have not
+node bin/mq.mjs watch smallbusiness --q "how do I get clients"
+node bin/mq.mjs tick       # read what is due
+node bin/mq.mjs queue      # who is waiting for an answer from you
 ```
 
 **A room you have not read the rules of cannot be watched.** Not warned about —
@@ -193,7 +193,7 @@ description is the community blurb. **The rule about recruiters is not in it.**
 So a keyless rules check would have returned "looks clear" for the one
 subreddit that most needed a no. Rather than ship that, the tool checks the
 description (free, and it does catch blunt cases) and otherwise records the
-room as **unanswered** — writing `.earshot/rooms/<sub>.md` with a line for you
+room as **unanswered** — writing `.mq/rooms/<sub>.md` with a line for you
 to fill in after reading the sidebar once. Until that line says something, the
 room cannot be watched.
 
@@ -217,7 +217,7 @@ Judging is a bounded call, and you have two ways to make it:
   ChatGPT that judge, and then no OpenRouter key is needed at all.
 
 Both write through the same code path — the dashboard calls the model and then
-hands the result to `es judge`, because that is what stamps the rubric hash,
+hands the result to `mq judge`, because that is what stamps the rubric hash,
 clears the pending list and settles the probe. Two implementations of that is
 how a queue starts disagreeing with itself.
 
@@ -254,9 +254,9 @@ Showing you the same human twice is what makes a queue feel like a lottery.
 ## Writing the reply
 
 ```bash
-node bin/es.mjs voice          # how you write, measured from your own comments
-node bin/es.mjs draft <id>     # the material for answering one person
-node bin/es.mjs draft <id> --save < reply.txt
+node bin/mq.mjs voice          # how you write, measured from your own comments
+node bin/mq.mjs draft <id>     # the material for answering one person
+node bin/mq.mjs draft <id> --save < reply.txt
 ```
 
 `voice` needs no new reads: your own comments are already stored by `sync`, so
@@ -301,7 +301,7 @@ reassurance.
 ## Where you stand
 
 ```bash
-node bin/es.mjs ready
+node bin/mq.mjs ready
 ```
 
 ```
@@ -352,7 +352,7 @@ number invented for it would be decoration.
 ## The dashboard
 
 ```bash
-node bin/es.mjs serve      # then open http://127.0.0.1:8787
+node bin/mq.mjs serve      # then open http://127.0.0.1:8787
 ```
 
 Everything is here. Not a window onto the CLI — the whole product.
@@ -366,6 +366,7 @@ Everything is here. Not a window onto the CLI — the whole product.
 | **Waiting** · **Ready** · **Voice** | Who is owed an answer, where you stand, how you write. |
 | **Sources** · **Rooms** | What is watched, and whose rules have been read. |
 | **Memory** | The five markdown files, edited in the browser. |
+| **Skills** | Everything installed: what runs, what refused to load, and the choice when two skills serve one purpose. |
 | **Settings** | Your OpenRouter key, a model per role, and what each costs. |
 
 Every verb that reads Reddit is a button, and every one of them is long — a
@@ -418,7 +419,7 @@ default rather than by omission. Before the job runner there was no script at
 all — which was a stronger guarantee and also meant a minute-long job could not
 report progress without reloading the page under your cursor.
 
-## Platforms are skills
+## Everything optional is a skill
 
 Reddit is not wired through the tool — it is a folder. `skills/reddit/` holds
 a `SKILL.md` (what the platform is, its norms, its measured facts) and an
@@ -426,14 +427,28 @@ a `SKILL.md` (what the platform is, its norms, its measured facts) and an
 reading it refuses). The engine — store, pacing, judging, dashboard, hub —
 asks the adapter and knows nothing else.
 
-Connecting another platform is writing that same folder and dropping it into
-`.earshot/skills/` — it loads without touching the repo, and on a name
-collision yours wins. `node bin/es.mjs platforms` shows what is loaded. The
-contract is [skills/README.md](skills/README.md), it is deliberately small,
-and it grows by extraction from platforms that exist rather than speculation
-about ones that might. Reddit stays the only built-in until it is mastered;
-a tool that half-reads five platforms is worse than one that reads one
-properly.
+That folder shape is the whole extension story, and it goes past platforms.
+A skill's `SKILL.md` teaches every agent the same bytes, and the files
+beside it plug in through named doors: `adapter.mjs` is a platform,
+`page.mjs` is a screen on the dashboard (rendered inside the house chrome,
+under the same CSP), `agent.mjs` is a colleague the strategist can hand a
+task to — written in bare Node, seated as a Deep Agents subagent when the
+brain is installed. A folder with only a `SKILL.md` is knowledge.
+
+Two skills may serve one purpose — declare the same `provides:` slot, and
+*you* pick which one runs, on the dashboard's **Skills** screen or with
+`mq skills use <slot> <id>`. Until a stalemate is settled, nobody runs and
+the screen says exactly that: a guess there would be your dashboard quietly
+running code you did not pick.
+
+Your own skills load from `.mq/skills/` without touching the repo (on a name
+collision, yours wins); the version for everybody is a pull request adding
+one folder to `skills/`. The contract is [skills/README.md](skills/README.md),
+the checklist is [CONTRIBUTING.md](CONTRIBUTING.md), and the starting point
+is `skills/_template/`. The contract grows by extraction from skills that
+exist rather than speculation about ones that might; Reddit stays the only
+built-in platform until it is mastered, because a tool that half-reads five
+platforms is worse than one that reads one properly.
 
 ## Plug it into what you already use
 
@@ -446,10 +461,10 @@ other ways:
   out: the assistant on this pipe is also your judge). The assistant on the other
   end is a model, so it can *be* the judge and the writer: judged against
   your `rule.md`, drafting from your measured voice and `me.md`, refusals
-  relayed verbatim. Used this way earshot needs no OpenRouter key at all.
+  relayed verbatim. Used this way Messaging Quest needs no OpenRouter key at all.
 
   ```bash
-  claude mcp add earshot -- node bin/mcp.mjs
+  claude mcp add mq -- node bin/mcp.mjs
   ```
 
 - **Your messenger, via OpenClaw.** Copy
@@ -515,8 +530,8 @@ because an account with genuinely nothing on it looks identical from outside.
 To tell the two apart, paste in a permalink you know you posted:
 
 ```bash
-node bin/es.mjs add https://reddit.com/r/.../comments/.../
-node bin/es.mjs check
+node bin/mq.mjs add https://reddit.com/r/.../comments/.../
+node bin/mq.mjs check
 ```
 
 That path is the one that still works when the profile itself is invisible,
@@ -528,7 +543,7 @@ It does not post, reply, vote, message, or read anybody else's account. It has
 no verb that writes to Reddit. It reads public feeds, logged out, one request a
 minute, and everything it learns stays on your disk.
 
-Stored comment bodies are dropped after 48 hours (`node bin/es.mjs sweep`); the
+Stored comment bodies are dropped after 48 hours (`node bin/mq.mjs sweep`); the
 ids, urls, dates, hashes and the full check history are kept, and every number
 here is computed from those.
 

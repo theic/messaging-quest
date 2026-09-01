@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// earshot — phase 0, the listener.
+// Messaging Quest — phase 0, the listener.
 //
 // It watches one thing: what Reddit did to the comments you already wrote. It
 // posts nothing, reads nobody else's account, calls no model, needs no key and
-// sends nothing anywhere. Everything is append-only JSONL in .earshot/.
+// sends nothing anywhere. Everything is append-only JSONL in .mq/.
 //
 // Why this and not a lead tool first: Reddit removed 154 million posts and
 // comments in one half-year, 44.7% of them by admins, and told almost nobody.
@@ -24,19 +24,20 @@ import { createHash } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import reddit from "../skills/reddit/adapter.mjs";
 import { loadPlatforms, platforms } from "../lib/platform.mjs";
+import { skillState, writeChoice } from "../lib/skills.mjs";
 import { classify, history, STATES } from "../lib/verdict.mjs";
 import { conversation, byUrgency } from "../lib/conversation.mjs";
 import { scoped, submissions, refuse } from "../skills/reddit/shapes.mjs";
 import { verdictOf } from "../lib/probe.mjs";
 import { fromDescription, isParody, sidebarUrl, roomFile } from "../lib/rules.mjs";
-import { store, FILES } from "../lib/store.mjs";
+import { store, FILES, dataDir } from "../lib/store.mjs";
 import { seedMissing } from "../lib/memory.mjs";
 import { measureVoice, mergeVoice, voiceRules, voiceSummary, lengthCeiling, MIN_SAMPLE_CHARS } from "../lib/voice.mjs";
 import { signalWritingRules, communityRisks } from "../lib/writing.mjs";
 import { repeats, claims, inventedLinks, RUN_LIMIT } from "../lib/guards.mjs";
 import { standing, readiness, burst, mix, CQS_NOTE, PER_ROOM_24H, OVERALL_24H } from "../lib/ready.mjs";
 
-const DIR = process.env.EARSHOT_DIR || ".earshot";
+const DIR = dataDir();
 const F = (n) => join(DIR, n);
 
 // The registry finds skills/ and <DIR>/skills/. This CLI still speaks to the
@@ -46,7 +47,7 @@ const F = (n) => join(DIR, n);
 await loadPlatforms(DIR);
 const { gapMs: ANON_GAP_MS, waitFor, read, readViaRelay, userFeed, threadFeed, commentFeed, threadOf, roomOf: subredditOf } = reddit;
 const now = () => new Date().toISOString();
-const die = (m) => { console.error(`earshot: ${m}`); process.exit(1); };
+const die = (m) => { console.error(`mq: ${m}`); process.exit(1); };
 const sha = (s) => createHash("sha256").update(String(s)).digest("hex");
 
 /** §04. Reddit requires deleting what was deleted from Reddit and recommends
@@ -69,7 +70,7 @@ const sources = S.sources;
 
 // Anonymously Reddit answers one request a minute, per address, measured. The
 // gap is therefore held ACROSS runs — a limit tracked only in memory is one that
-// a second `es check` in the same minute walks straight through.
+// a second `mq check` in the same minute walks straight through.
 const clock = () => (existsSync(F("clock")) ? Number(readFileSync(F("clock"), "utf8")) : 0);
 
 /**
@@ -107,11 +108,11 @@ async function fetchAnon(url, { quiet = false, relay = false } = {}) {
    * refused. `relay: true` is passed by exactly two callers, tick and probe,
    * and a test counts them: sync, check and back measure what a logged-out
    * stranger sees, and a logged-in read would answer that question wrongly
-   * while looking right. EARSHOT_RELAY is set by the dashboard server for its
+   * while looking right. MQ_RELAY is set by the dashboard server for its
    * children; a bare terminal run has no broker and stays honestly anonymous.
    * Pace is unchanged either way — the relayed attempt only ever follows a
    * governed one, so reads stay at least one gap apart no matter the seat. */
-  const broker = process.env.EARSHOT_RELAY;
+  const broker = process.env.MQ_RELAY;
   if (!r.ok && relay && broker && readViaRelay && BLOCKED_SHAPES.test(r.error)) {
     if (!quiet) process.stdout.write("  refused anonymously — asking your browser to read it\n");
     const b = await readViaRelay(broker, url);
@@ -134,14 +135,14 @@ cmds.init = () => {
   // the dashboard edits them and the agents read them, and a seed defined in
   // two places is a rubric that means two things.
   seedMissing(DIR);
-  console.log(`ready — ${DIR}/\n\nThe quickest way in is the dashboard:  es serve\n\nOr by hand:  es me <your-reddit-username>\n             es sync\n             es check\n\nWhen you want to find people: edit ${DIR}/rule.md, then \`es probe <subreddit> --q "<phrase>"\`.`);
+  console.log(`ready — ${DIR}/\n\nThe quickest way in is the dashboard:  mq serve\n\nOr by hand:  mq me <your-reddit-username>\n             mq sync\n             mq check\n\nWhen you want to find people: edit ${DIR}/rule.md, then \`mq probe <subreddit> --q "<phrase>"\`.`);
 };
 
 cmds.me = (args) => {
-  const name = String(args[0] || die("usage: es me <your-reddit-username>")).replace(/^\/?u\//, "").trim();
+  const name = String(args[0] || die("usage: mq me <your-reddit-username>")).replace(/^\/?u\//, "").trim();
   if (!/^[\w-]{3,20}$/.test(name)) die(`that does not look like a Reddit username: '${name}'`);
   writeFileSync(F("account.json"), JSON.stringify({ name, added: now() }, null, 2));
-  console.log(`listening for u/${name}.\n\nNothing is posted, nothing is sent, and only your own account is read.\nNext: es sync`);
+  console.log(`listening for u/${name}.\n\nNothing is posted, nothing is sent, and only your own account is read.\nNext: mq sync`);
 };
 
 /**
@@ -154,7 +155,7 @@ cmds.me = (args) => {
  * account with genuinely no comments looks identical.
  */
 cmds.sync = async () => {
-  const acct = account() || die("nobody to listen to yet — run: es me <your-reddit-username>");
+  const acct = account() || die("nobody to listen to yet — run: mq me <your-reddit-username>");
   console.log(`reading reddit.com/user/${acct.name} as a stranger would\n`);
   const r = await fetchAnon(userFeed(acct.name));
 
@@ -189,10 +190,10 @@ cmds.sync = async () => {
     console.log(`  Either you have not commented, or nothing you wrote is visible to strangers.`);
     console.log(`  Those look identical from here and the tool will not guess between them.`);
     console.log(`\n  To tell them apart: paste a permalink you know you posted —`);
-    console.log(`      es add <permalink>   then   es check`);
+    console.log(`      mq add <permalink>   then   mq check`);
     console.log(`  If it comes back 'filtered', the profile being empty is not an absence of writing.`);
   } else if (fresh) {
-    console.log(`\n  Next: es check`);
+    console.log(`\n  Next: mq check`);
   }
 };
 
@@ -204,7 +205,7 @@ cmds.sync = async () => {
  * profile-only tool cannot help.
  */
 cmds.add = (args) => {
-  const url = String(args[0] || die("usage: es add <reddit-permalink>")).split("?")[0].replace(/\/+$/, "");
+  const url = String(args[0] || die("usage: mq add <reddit-permalink>")).split("?")[0].replace(/\/+$/, "");
   if (!/^https?:\/\/(www\.|old\.)?reddit\.com\/r\/[^/]+\/comments\//i.test(url)) die("that is not a Reddit post or comment permalink");
   const parts = url.split("/");
   const post = parts[parts.indexOf("comments") + 1];
@@ -216,7 +217,7 @@ cmds.add = (args) => {
   const id = isComment ? `t1_${tail}` : `t3_${post}`;
   if (items().has(id)) return console.log(`already listening to ${id}`);
   append("items.jsonl", { id, kind: isComment ? "comment" : "post", url, author: account()?.name ?? null, at: null, title: null, body: "", body_sha256: null, seen_at: now(), source: "by hand" });
-  console.log(`added ${id}\n  ${url}\nNext: es check`);
+  console.log(`added ${id}\n  ${url}\nNext: mq check`);
 };
 
 /**
@@ -230,7 +231,7 @@ cmds.check = async (args) => {
   const all = args.includes("--all");
   const limit = args.includes("--limit") ? Number(args[args.indexOf("--limit") + 1]) : Infinity;
   const store = items();
-  if (!store.size) die("nothing to check yet — run `es sync` (or `es add <permalink>`)");
+  if (!store.size) die("nothing to check yet — run `mq sync` (or `mq add <permalink>`)");
 
   const checked = checksById();
   // An item is due if nobody has looked, OR if the last look BROKE. A failed
@@ -243,7 +244,7 @@ cmds.check = async (args) => {
     return h?.length && h[h.length - 1].state !== "error";
   };
   const todo = [...store.values()].filter((it) => all || !settled(it));
-  if (!todo.length) return console.log(`every item has a settled answer. \`es check --all\` re-reads them — that is how a change gets caught.`);
+  if (!todo.length) return console.log(`every item has a settled answer. \`mq check --all\` re-reads them — that is how a change gets caught.`);
 
   // group by conversation
   const groups = new Map();
@@ -290,12 +291,12 @@ cmds.check = async (args) => {
  * back into, and reading for it spends the same minute as one you can.
  */
 cmds.back = async (args) => {
-  const acct = account() || die("nobody to listen to yet — run: es me <your-reddit-username>");
+  const acct = account() || die("nobody to listen to yet — run: mq me <your-reddit-username>");
   const me = acct.name.toLowerCase();
   const days = args.includes("--days") ? Number(args[args.indexOf("--days") + 1]) : 14;
   const limit = args.includes("--limit") ? Number(args[args.indexOf("--limit") + 1]) : 25;
   const store = items();
-  if (!store.size) die("nothing stored yet — run `es sync`");
+  if (!store.size) die("nothing stored yet — run `mq sync`");
 
   const cutoff = Date.now() - days * 864e5;
   const checks = checksById();
@@ -309,7 +310,7 @@ cmds.back = async (args) => {
     return !unseen.has(history(checks.get(it.id) ?? []).state);
   }).slice(0, limit);
 
-  if (!todo.length) return console.log(`nothing from the last ${days} days that a stranger can still see. \`es back --days 60\` looks further back.`);
+  if (!todo.length) return console.log(`nothing from the last ${days} days that a stranger can still see. \`mq back --days 60\` looks further back.`);
   console.log(`${todo.length} of your comments from the last ${days} days.`);
   console.log(`At least ${Math.ceil((todo.length * ANON_GAP_MS) / 60_000)} minutes — one read each, because only a comment's own view carries its replies.\n`);
 
@@ -350,7 +351,7 @@ const line = (it) => {
 
 cmds.status = () => {
   const store = items(), checks = checksById(), acct = account();
-  if (!store.size) return console.log("nothing stored yet — run `es sync`.");
+  if (!store.size) return console.log("nothing stored yet — run `mq sync`.");
   const tally = new Map();
   const unchecked = [];
   for (const it of store.values()) {
@@ -362,7 +363,7 @@ cmds.status = () => {
   for (const [state, n] of [...tally].sort((a, b) => b[1] - a[1])) {
     console.log(`  ${String(n).padStart(4)}  ${state.padEnd(13)} ${STATES[state]}`);
   }
-  if (unchecked.length) console.log(`  ${String(unchecked.length).padStart(4)}  ${"unchecked".padEnd(13)} not looked at yet — es check`);
+  if (unchecked.length) console.log(`  ${String(unchecked.length).padStart(4)}  ${"unchecked".padEnd(13)} not looked at yet — mq check`);
 
   const invisible = [...store.values()].filter((it) => {
     const h = history(checks.get(it.id) ?? []);
@@ -419,21 +420,21 @@ cmds.log = (args) => {
  * `contacted` is consulted here — so somebody you have already answered never
  * enters your queue, and the hub is never told that you answered them.
  *
- *   es pull https://hub.example.com --token es_… [--limit 500]
+ *   mq pull https://hub.example.com --token es_… [--limit 500]
  */
 cmds.pull = async (args) => {
-  const base = String(args[0] || die(`usage: es pull <hub-url> --token <token>`)).replace(/\/+$/, "");
+  const base = String(args[0] || die(`usage: mq pull <hub-url> --token <token>`)).replace(/\/+$/, "");
   const limit = args.includes("--limit") ? Number(args[args.indexOf("--limit") + 1]) : 500;
 
   // Cursors are per hub, so pulling from two of them does not make each one
   // skip what the other already advanced past. The token is remembered here
-  // too, so a scheduled `es pull <url>` needs no secret on its command line —
+  // too, so a scheduled `mq pull <url>` needs no secret on its command line —
   // a token in a cron entry is a token in every process list on the machine.
   const cursorFile = F("pull.json");
   const state = existsSync(cursorFile) ? JSON.parse(readFileSync(cursorFile, "utf8")) : {};
   const token = (args.includes("--token") ? args[args.indexOf("--token") + 1] : null)
-    ?? process.env.EARSHOT_FEED_TOKEN ?? state[base]?.token;
-  if (!token) die("no token — pass --token once and it is remembered, or set EARSHOT_FEED_TOKEN");
+    ?? process.env.MQ_FEED_TOKEN ?? state[base]?.token;
+  if (!token) die("no token — pass --token once and it is remembered, or set MQ_FEED_TOKEN");
   let cursor = state[base]?.cursor ?? "";
 
   const known = found(), gone = contacted(), p = pending();
@@ -474,7 +475,7 @@ cmds.pull = async (args) => {
   writeFileSync(cursorFile, JSON.stringify(state, null, 2) + "\n");
 
   console.log(`${added} new from ${base}${skipped ? `, ${skipped} already known or already answered` : ""}${pages > 1 ? ` (${pages} pages)` : ""}.`);
-  if (added) console.log(`\nThey are judged against YOUR rule.md, on this machine:  es judge   (or press Judge in the dashboard)`);
+  if (added) console.log(`\nThey are judged against YOUR rule.md, on this machine:  mq judge   (or press Judge in the dashboard)`);
   else console.log(`\nNothing new. The cursor is at ${cursor || "the beginning"}.`);
 };
 
@@ -513,7 +514,7 @@ cmds.sweep = () => {
  * promotion is not worth a request, let alone a place in a queue.
  */
 cmds.probe = async (args) => {
-  const place = String(args[0] || die(`usage: es probe <subreddit> --q "<phrase>"`)).replace(/^\/?r\//, "").trim();
+  const place = String(args[0] || die(`usage: mq probe <subreddit> --q "<phrase>"`)).replace(/^\/?r\//, "").trim();
   const q = args.includes("--q") ? args[args.indexOf("--q") + 1] : null;
 
   if (isParody(place)) return refused(`r/${place} is a parody community — Reddit's "-jerk" suffix. A competitor's picker put one of these top of its list at 100/100.`);
@@ -557,7 +558,7 @@ cmds.probe = async (args) => {
   console.log(`\n  Its rules are NOT readable from here — measured, and the public description is not the rules list.`);
   console.log(`  Read them once:  ${sidebarUrl(place)}`);
   console.log(`  Then answer the line in ${roomPath(place)}`);
-  console.log(`\n  Judge what came back:  es pending    then    es judge < verdicts.json`);
+  console.log(`\n  Judge what came back:  mq pending    then    mq judge < verdicts.json`);
 };
 
 const refused = (why) => { console.log(`  refused — ${why}`); console.log(`  no source written. This is not a score, it is a no.`); };
@@ -572,7 +573,7 @@ const writeRoom = (place, found_) => {
 cmds.rooms = () => {
   const rows = readJsonl("probes.jsonl");
   const places = [...new Set(rows.map((r) => r.place))];
-  if (!places.length) return console.log(`no rooms probed yet — \`es probe <subreddit> --q "<phrase>"\``);
+  if (!places.length) return console.log(`no rooms probed yet — \`mq probe <subreddit> --q "<phrase>"\``);
   for (const place of places) {
     const st = roomState(place);
     const flag = st.state === "allowed" ? "ok " : st.state === "banned" ? "NO " : "?  ";
@@ -588,7 +589,7 @@ cmds.rooms = () => {
  * probe that did not clear the floor. Four ways to say no and one to say yes.
  */
 cmds.watch = (args) => {
-  const place = String(args[0] || die(`usage: es watch <subreddit> [--q "<phrase>"]`)).replace(/^\/?r\//, "").trim();
+  const place = String(args[0] || die(`usage: mq watch <subreddit> [--q "<phrase>"]`)).replace(/^\/?r\//, "").trim();
   const q = args.includes("--q") ? args[args.indexOf("--q") + 1] : null;
   const id = `${place}:${q ?? "new"}`.toLowerCase();
 
@@ -607,7 +608,7 @@ cmds.watch = (args) => {
   const v = verdicts();
   const mine = [...found().values()].filter((f) => f.probe === `${place}:${q ?? "new"}`);
   const judged = mine.filter((f) => v.has(f.id));
-  if (!judged.length) return refused(`nothing from r/${place} has been judged yet — run \`es probe\`, then \`es judge\`.`);
+  if (!judged.length) return refused(`nothing from r/${place} has been judged yet — run \`mq probe\`, then \`mq judge\`.`);
   const decision = verdictOf({ read: judged.length, fit: judged.filter((f) => v.get(f.id).fit).length });
   if (!decision.commit) return refused(decision.why);
 
@@ -617,7 +618,7 @@ cmds.watch = (args) => {
 };
 
 cmds.unwatch = (args) => {
-  const id = String(args[0] || die("usage: es unwatch <source-id>")).toLowerCase();
+  const id = String(args[0] || die("usage: mq unwatch <source-id>")).toLowerCase();
   append("sources.jsonl", { id, deleted: true, at: now() });
   console.log(`stopped watching ${id}. What it already found is untouched.`);
 };
@@ -643,6 +644,29 @@ cmds.platforms = () => {
   console.log(`\nA platform is a skill: a folder with a SKILL.md and an adapter.mjs.`);
   console.log(`Built-in ones live in skills/; drop your own into ${DIR}/skills/ and it loads.`);
   console.log(`The contract is skills/README.md.`);
+};
+
+/** The whole registry, not just the platforms: what runs, what is stuck on a
+ *  choice, what refused to load — with the fix printed beside each. */
+cmds.skills = async (args) => {
+  if (args[0] === "use") {
+    const [, slot, id] = args;
+    if (!slot || !id) die("usage: mq skills use <slot> <id>   (or: mq skills use <slot> --clear)");
+    writeChoice(DIR, slot, id === "--clear" ? null : id);
+    await loadPlatforms(DIR); // re-resolve now, so the line below tells the truth
+    const active = skillState().active.find((s) => s.provides === slot);
+    console.log(active ? `${slot} → ${active.id}` : `${slot} → nobody (no active skill provides it)`);
+    return;
+  }
+  const st = skillState();
+  for (const s of st.active)
+    console.log(`${s.id.padEnd(14)} ${(s.ring === "local" ? "yours" : "built-in").padEnd(9)} ${(s.provides ?? "knowledge").padEnd(22)} ${Object.keys(s.seats).join(", ") || "—"}`);
+  for (const c of st.conflicts)
+    console.log(`\n! ${c.slot} — ${c.why}\n  fix: mq skills use ${c.slot} <${c.candidates.join("|")}>`);
+  for (const r of st.refused)
+    console.log(`\nx ${r.id} (${r.ring}) — ${r.why}`);
+  if (!st.conflicts.length && !st.refused.length)
+    console.log(`\nEverything discovered is running. New skills: skills/README.md, CONTRIBUTING.md.`);
 };
 
 /** Read every source whose cadence is up. Plain code — there is no model in
@@ -681,7 +705,7 @@ cmds.tick = async (args) => {
     console.log(`  ${s.id}: ${r.entries.length} read, ${fresh} new`);
   }
   setPending(p);
-  console.log(`\n${total} new to judge — es pending`);
+  console.log(`\n${total} new to judge — mq pending`);
 };
 
 cmds.pending = () => {
@@ -725,7 +749,7 @@ cmds.judge = (args, stdin) => {
     if (!rows.length) continue;
     const d = verdictOf({ read: rows.length, fit: rows.filter((f) => v.get(f.id).fit).length });
     console.log(`  ${probe}: ${d.why}`);
-    if (d.commit) console.log(`    commit it with:  es watch ${probe.split(":")[0]}${probe.endsWith(":new") ? "" : ` --q "${probe.split(":").slice(1).join(":")}"`}`);
+    if (d.commit) console.log(`    commit it with:  mq watch ${probe.split(":")[0]}${probe.endsWith(":new") ? "" : ` --q "${probe.split(":").slice(1).join(":")}"`}`);
   }
 };
 
@@ -753,7 +777,7 @@ cmds.queue = (args) => {
 
 cmds.mark = (args) => {
   const [id, mark] = args;
-  if (!id || !["sent", "skip"].includes(mark)) die("usage: es mark <item-id> <sent|skip> [--anyway]");
+  if (!id || !["sent", "skip"].includes(mark)) die("usage: mq mark <item-id> <sent|skip> [--anyway]");
   const it = found().get(id) || die(`no such item: ${id}`);
 
   // The gate. It fires before the mark is written, and only on `sent` — a skip
@@ -771,7 +795,7 @@ cmds.mark = (args) => {
       console.log(`  The shape that cost this project its visibility was eleven replies in`);
       console.log(`  83.9 minutes across seven subreddits with no history in any of them.`);
       console.log(`  The limits here are ${PER_ROOM_24H} a room and ${OVERALL_24H} overall in 24 hours.\n`);
-      console.log(`  If you have already posted it, say so:  es mark ${id} sent --anyway`);
+      console.log(`  If you have already posted it, say so:  mq mark ${id} sent --anyway`);
       return;
     }
   }
@@ -816,7 +840,7 @@ cmds.voice = () => {
     // the em dash is the one case where the unknown state is a ban, because a
     // model left alone reaches for it every time.
     console.log(`\nThat one rule applies with no evidence, deliberately. Every other dimension`);
-    console.log(`stays silent until your own comments show it — run \`es sync\` for more samples.`);
+    console.log(`stays silent until your own comments show it — run \`mq sync\` for more samples.`);
   }
   console.log(`\nCorrect any line by editing ${DIR}/voice.json — what you say beats what was measured.`);
 };
@@ -829,7 +853,7 @@ cmds.voice = () => {
  * this free, local and swappable.
  */
 cmds.draft = (args, stdin) => {
-  const id = args[0] || die("usage: es draft <item-id>   (then: es draft <item-id> --save < reply.txt)");
+  const id = args[0] || die("usage: mq draft <item-id>   (then: mq draft <item-id> --save < reply.txt)");
   const it = found().get(id) || die(`no such item: ${id}`);
   const fp = mergeVoice(voiceOf()?.measured ?? null, voiceOf()?.user ?? null);
 
@@ -861,7 +885,7 @@ cmds.draft = (args, stdin) => {
   console.log(`\nUnder ${lengthCeiling(fp)} characters.`);
   if (me) console.log(`\n## What you can honestly say about yourself\n\n${me.slice(0, 1200)}`);
   else console.log(`\n## me.md is empty\n\nWrite ${DIR}/me.md — what you have actually built. Every first-person claim gets checked against it.`);
-  console.log(`\n---\nWhen you have a draft:  es draft ${id} --save < reply.txt`);
+  console.log(`\n---\nWhen you have a draft:  mq draft ${id} --save < reply.txt`);
 };
 
 const firstLine = (s) => String(s).split("\n").map((l) => l.trim()).find((l) => l && !l.startsWith("#")) ?? "";
@@ -929,7 +953,7 @@ cmds.ready = (args) => {
   for (const src of sources()) if (!rooms.has(src.place)) rooms.set(src.place, null);
 
   const names = [...rooms.keys()].filter((p) => !only || p.toLowerCase() === only.toLowerCase()).sort();
-  if (!names.length) return console.log(only ? `nothing known about r/${only} yet.` : `no rooms yet — \`es sync\` to read your own history, or \`es probe <sub>\`.`);
+  if (!names.length) return console.log(only ? `nothing known about r/${only} yet.` : `no rooms yet — \`mq sync\` to read your own history, or \`mq probe <sub>\`.`);
 
   for (const place of names) {
     const r = rooms.get(place);
@@ -970,9 +994,9 @@ cmds.serve = async (args) => {
 
 const [, , cmd, ...args] = process.argv;
 if (!cmd || !cmds[cmd]) {
-  console.log(`earshot — what did Reddit actually do to your comments?
+  console.log(`Messaging Quest — what did Reddit actually do to your comments?
 
-  init                    make .earshot/ here
+  init                    make .mq/ here
   me <username>           whose comments to listen to (yours)
   sync                    read your profile as a logged-out stranger
   add <permalink>         add one by hand — the path that still works
@@ -1006,7 +1030,10 @@ find — other people, and the rooms it refuses to look in
   serve [--port N]        the dashboard, on localhost, in your browser
   sweep                   drop stored bodies past 48h
   platforms               the platforms this install can read — each one is a
-                          skill folder; drop your own into .earshot/skills/
+                          skill folder; drop your own into .mq/skills/
+  skills                  the whole registry: running, stuck, refused
+  skills use <slot> <id>  when two skills serve one purpose, pick the one
+                          that runs (recorded in .mq/skills.json)
 
 sharing one machine's reading with several
 
@@ -1019,7 +1046,7 @@ sharing one machine's reading with several
 Nothing here posts, messages, votes, or reads anybody else's account.`);
   process.exit(cmd ? 1 : 0);
 }
-if (!existsSync(DIR) && cmd !== "init") die(`no ${DIR}/ here — run \`es init\` first`);
+if (!existsSync(DIR) && cmd !== "init") die(`no ${DIR}/ here — run \`mq init\` first`);
 // `judge` is the one place a verdict comes IN from outside — the model runs in
 // whatever you point at this, never in here.
 const wantsStdin = cmd === "judge" || (cmd === "draft" && args.includes("--save"));

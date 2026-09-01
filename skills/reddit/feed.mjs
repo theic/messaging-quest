@@ -21,7 +21,7 @@ const UA =
  * header's own round number suggests, or is aligned to something we cannot see.
  * Observed `reset` values across one run: 60, 44, 27, 9.
  *
- * Hence 65s rather than 61s, and hence the 429 path in `es.mjs` is the
+ * Hence 65s rather than 61s, and hence the 429 path in `mq.mjs` is the
  * authority rather than this constant: it waits out the number Reddit itself
  * reports. This value only decides how often that path has to be used.
  *

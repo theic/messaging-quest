@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Tests for the things that would break QUIETLY. A loud break shows up the
-// first time anybody runs `es check`; these are the ones that would keep
+// first time anybody runs `mq check`; these are the ones that would keep
 // working and start lying.
 //
 //   node bin/test.mjs
@@ -32,14 +32,14 @@ import { allowed, memoryProgress, memoryContext, writeMemory, seedMissing } from
 import { proposable } from "../lib/cards.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const ES = join(here, "es.mjs");
-const box = mkdtempSync(join(tmpdir(), "earshot-test-"));
-const env = { ...process.env, EARSHOT_DIR: join(box, ".earshot") };
+const ES = join(here, "mq.mjs");
+const box = mkdtempSync(join(tmpdir(), "mq-test-"));
+const env = { ...process.env, MQ_DIR: join(box, ".mq") };
 const es = (args) => execFileSync(process.execPath, [ES, ...args], { env, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
 // `check` reaches the network once it has work; we only want its plan, so a
 // non-zero exit that already printed the plan is a pass, not a failure.
 const esFails = (args) => { try { return es(args); } catch (e) { return `${e.stdout || ""}${e.stderr || ""}`; } };
-const esFails2 = (args, dir) => { try { return execFileSync(process.execPath, [ES, ...args], { env: { ...process.env, EARSHOT_DIR: dir }, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }); } catch (e) { return `${e.stdout || ""}${e.stderr || ""}`; } };
+const esFails2 = (args, dir) => { try { return execFileSync(process.execPath, [ES, ...args], { env: { ...process.env, MQ_DIR: dir }, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }); } catch (e) { return `${e.stdout || ""}${e.stderr || ""}`; } };
 
 let pass = 0, fail = 0;
 const check = (what, got, want) => {
@@ -169,7 +169,7 @@ check("the oldest wait comes first", byUrgency([{ at: "3" }, { at: "1" }, { at: 
 
 es(["init"]);
 es(["me", "u/tester"]);   // the /u/ prefix is what people paste
-const ITEMS = join(env.EARSHOT_DIR, "items.jsonl");
+const ITEMS = join(env.MQ_DIR, "items.jsonl");
 const item = (over = {}) => JSON.stringify({ id: "t1_aaa", kind: "comment", url: "https://reddit.com/r/x/comments/p1/slug/aaa/", author: "me", at: "2026-08-28T10:00:00Z", title: null, body: "what I actually said", body_sha256: "h", seen_at: new Date().toISOString(), source: "profile", ...over }) + "\n";
 
 writeFileSync(ITEMS, item());
@@ -177,7 +177,7 @@ appendFileSync(ITEMS, item({ body: "TRUNCATED RE-READ" }));
 
 // Checks accumulate; nothing is ever replaced. Overwriting here would silently
 // destroy the only thing this tool has that a private window does not.
-appendFileSync(join(env.EARSHOT_DIR, "checks.jsonl"),
+appendFileSync(join(env.MQ_DIR, "checks.jsonl"),
   JSON.stringify({ id: "t1_aaa", at: "2026-08-01T00:00:00Z", state: "visible", why: "", confident: true }) + "\n" +
   JSON.stringify({ id: "t1_aaa", at: "2026-08-03T00:00:00Z", state: "filtered", why: "", confident: true }) + "\n");
 check("status shows the change, not just the latest state", /visible -> filtered/.test(es(["status"])), true);
@@ -190,7 +190,7 @@ check("log replays every check in order", (es(["log"]).match(/t1_aaa/g) || []).l
 
 // A read that BROKE is not an answer. Letting one count as "checked" retires
 // the comment from the tool on a single timeout — quietly, and forever.
-writeFileSync(join(env.EARSHOT_DIR, "checks.jsonl"),
+writeFileSync(join(env.MQ_DIR, "checks.jsonl"),
   JSON.stringify({ id: "t1_aaa", at: "2026-08-04T00:00:00Z", state: "error", why: "timeout", confident: false }) + "\n");
 // An unroutable host, so this asserts the PLAN without sending anything to
 // Reddit: a test suite that quietly reads the live site is a test suite that
@@ -200,7 +200,7 @@ writeFileSync(ITEMS, item({ url: "https://reddit.invalid/r/x/comments/p1/slug/aa
 const plan = esFails(["check"]);
 check("an item whose last check errored is still due", /1 to check across 1 threads/.test(plan), true);
 check("...and the failed re-read is recorded as an error, not a removal", /error/.test(plan), true);
-writeFileSync(join(env.EARSHOT_DIR, "checks.jsonl"),
+writeFileSync(join(env.MQ_DIR, "checks.jsonl"),
   JSON.stringify({ id: "t1_aaa", at: "2026-08-04T00:00:00Z", state: "visible", why: "", confident: true }) + "\n");
 check("...and one with a real answer is not", /settled answer/.test(es(["check"])), true);
 
@@ -213,7 +213,7 @@ check("...but its hash survives, so an edit is still detectable", swept.body_sha
 check("...and so does the url", swept.url, "https://reddit.com/r/x/comments/p1/slug/aaa/");
 
 check("a pasted /u/ prefix is not part of the username",
-  JSON.parse(readFileSync(join(env.EARSHOT_DIR, "account.json"), "utf8")).name, "tester");
+  JSON.parse(readFileSync(join(env.MQ_DIR, "account.json"), "utf8")).name, "tester");
 
 // The governor. Every command is a fresh process, so the gap can only live on
 // disk — and the failure it prevents is silent: reads still "work" while the
@@ -251,11 +251,11 @@ check("nothing read is not a pass", verdictOf({ read: 0, fit: 0 }).commit, false
 
 /* ------------------------------------------------- phase 2 — through the CLI */
 
-const box2 = mkdtempSync(join(tmpdir(), "earshot-find-"));
-const env2 = { ...process.env, EARSHOT_DIR: join(box2, ".earshot") };
+const box2 = mkdtempSync(join(tmpdir(), "mq-find-"));
+const env2 = { ...process.env, MQ_DIR: join(box2, ".mq") };
 const es2 = (args, stdin) => { try { return execFileSync(process.execPath, [ES, ...args], { env: env2, input: stdin ?? "", encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }); } catch (e) { return `${e.stdout || ""}${e.stderr || ""}`; } };
 es2(["init"]);
-const D2 = env2.EARSHOT_DIR;
+const D2 = env2.MQ_DIR;
 
 check("a room nobody has read the rules for cannot be watched", /nobody has read/.test(es2(["watch", "smallbusiness"])), true);
 check("a parody sub cannot be watched at all", /parody/.test(es2(["watch", "somethingjerk"])), true);
@@ -327,11 +327,11 @@ check("trailing punctuation does not disguise it", inventedLinks("at https://mad
 
 /* --------------------------------------------------- phase 3 through the CLI */
 
-const box3 = mkdtempSync(join(tmpdir(), "earshot-draft-"));
-const env3 = { ...process.env, EARSHOT_DIR: join(box3, ".earshot") };
+const box3 = mkdtempSync(join(tmpdir(), "mq-draft-"));
+const env3 = { ...process.env, MQ_DIR: join(box3, ".mq") };
 const es3 = (args, stdin) => { try { return execFileSync(process.execPath, [ES, ...args], { env: env3, input: stdin ?? "", encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }); } catch (e) { return `${e.stdout || ""}${e.stderr || ""}`; } };
 es3(["init"]);
-const D3 = env3.EARSHOT_DIR;
+const D3 = env3.MQ_DIR;
 const one = (id) => JSON.stringify({ id, place: "smallbusiness", url: `https://reddit.com/r/smallbusiness/comments/${id}/y/`, author: "ann", title: "t", body: "I cannot find clients", body_sha256: "h", posted_at: "2026-08-28T09:00:00Z", seen_at: new Date().toISOString(), probe: "smallbusiness:new" }) + "\n";
 writeFileSync(join(D3, "found.jsonl"), one("t3_x") + one("t3_y"));
 
@@ -400,11 +400,11 @@ check("no outreach yet is not a ratio of zero", mix(20, 0).ratio, null);
 
 // The gate through the CLI: refused by default, overridable, because a tool
 // that cannot be overruled just gets worked around.
-const box4 = mkdtempSync(join(tmpdir(), "earshot-gate-"));
-const env4 = { ...process.env, EARSHOT_DIR: join(box4, ".earshot") };
+const box4 = mkdtempSync(join(tmpdir(), "mq-gate-"));
+const env4 = { ...process.env, MQ_DIR: join(box4, ".mq") };
 const es4 = (a) => { try { return execFileSync(process.execPath, [ES, ...a], { env: env4, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }); } catch (e) { return `${e.stdout || ""}${e.stderr || ""}`; } };
 es4(["init"]);
-writeFileSync(join(env4.EARSHOT_DIR, "found.jsonl"), JSON.stringify({ id: "t3_z", place: "SaaS", url: "https://reddit.com/r/SaaS/comments/z/y/", author: "zed", title: "t", body: "b", posted_at: "2026-08-29T09:00:00Z", seen_at: "2026-08-29T10:00:00Z", probe: "SaaS:new" }) + "\n");
+writeFileSync(join(env4.MQ_DIR, "found.jsonl"), JSON.stringify({ id: "t3_z", place: "SaaS", url: "https://reddit.com/r/SaaS/comments/z/y/", author: "zed", title: "t", body: "b", posted_at: "2026-08-29T09:00:00Z", seen_at: "2026-08-29T10:00:00Z", probe: "SaaS:new" }) + "\n");
 const blocked = es4(["mark", "t3_z", "sent"]);
 check("replying where you have no standing is refused", /not logged/.test(blocked), true);
 check("...and the refusal names the measured shape", /83\.9 minutes/.test(blocked), true);
@@ -413,15 +413,30 @@ check("the override works, because you are the one posting", /logged as answered
 // A skip is not a reply, so the gate has no business touching it.
 check("a skip is never gated", /discarded/.test(es4(["mark", "t3_z", "skip"])), true);
 
+// The rename migration: a directory written under the tool's earlier name is
+// carried over by rename — same data, current name, exactly once.
+{
+  const box5 = mkdtempSync(join(tmpdir(), "mq-rename-"));
+  const legacy = join(box5, ".earshot");
+  const envBare = { ...process.env };
+  delete envBare.MQ_DIR;
+  execFileSync(process.execPath, [ES, "init"], { cwd: box5, env: { ...envBare, MQ_DIR: legacy }, stdio: "ignore" });
+  writeFileSync(join(legacy, "items.jsonl"), JSON.stringify({ id: "t1_keep", kind: "comment", url: "https://reddit.com/r/x/comments/a/b/", author: "me", at: "2026-08-01T00:00:00Z" }) + "\n");
+  execFileSync(process.execPath, [ES, "status"], { cwd: box5, env: envBare, stdio: "ignore" });
+  const { existsSync: ex } = await import("node:fs");
+  check("an .earshot/ directory is renamed to .mq/ on first touch", ex(join(box5, ".mq")) && !ex(legacy), true);
+  check("...and the data came along", /t1_keep/.test(readFileSync(join(box5, ".mq", "items.jsonl"), "utf8")), true);
+}
+
 /* ------------------------------------------------------- the dashboard */
 // Served on localhost, so the interesting failures are not "does it render"
 // but "what does it render, and who can reach it".
 
 const { spawn } = await import("node:child_process");
 const SERVE = join(here, "serve.mjs");
-const boxW = mkdtempSync(join(tmpdir(), "earshot-web-"));
-const DW = join(boxW, ".earshot");
-execFileSync(process.execPath, [ES, "init"], { env: { ...process.env, EARSHOT_DIR: DW }, stdio: "ignore" });
+const boxW = mkdtempSync(join(tmpdir(), "mq-web-"));
+const DW = join(boxW, ".mq");
+execFileSync(process.execPath, [ES, "init"], { env: { ...process.env, MQ_DIR: DW }, stdio: "ignore" });
 writeFileSync(join(DW, "account.json"), JSON.stringify({ name: "tester", added: "2026-08-29T00:00:00Z" }));
 
 // A post body is a STRANGER'S TEXT. It is the one thing on the page nobody on
@@ -440,7 +455,7 @@ writeFileSync(join(DW, "probes.jsonl"), JSON.stringify({ place: "smallbusiness",
 // Port 0 — the OS hands out a free one, and serve prints the port it actually
 // bound. A guessed port collided with a running hub once and every request in
 // this section quietly interrogated the wrong server.
-const srv = spawn(process.execPath, [SERVE, "--port", "0"], { env: { ...process.env, EARSHOT_DIR: DW }, stdio: ["ignore", "pipe", "pipe"] });
+const srv = spawn(process.execPath, [SERVE, "--port", "0"], { env: { ...process.env, MQ_DIR: DW }, stdio: ["ignore", "pipe", "pipe"] });
 const base = await new Promise((resolve) => {
   let out = "";
   const t = setTimeout(() => resolve(null), 8000);
@@ -498,6 +513,68 @@ check("the reddit skill loads", platform("reddit")?.name, "Reddit");
 check("roomOf resolves through whichever platform recognises the url",
   roomOf("https://www.reddit.com/r/smallbusiness/comments/abc/def/"), "smallbusiness");
 check("roomOf says null, not a guess, for a url no platform knows", roomOf("https://example.com/post/1"), null);
+
+/* The registry beneath the door: rings, slots, and the choice that resolves
+   them. Two skills may serve one purpose; which one runs is the instance's
+   call, never a guess — and every refusal names its fix. */
+const { frontmatter, discoverSkills, resolveSkills, readChoices, writeChoice } = await import("../lib/skills.mjs");
+const { mkdirSync: mkd } = await import("node:fs");
+
+const fmParsed = frontmatter("---\nname: x\ndescription: d\nprovides: page:board\n---\nbody");
+check("frontmatter reads the scalars", [fmParsed.name, fmParsed.provides], ["x", "page:board"]);
+check("prose without fences is not a manifest", frontmatter("# just prose"), {});
+
+const ringbox = mkdtempSync(join(tmpdir(), "mq-skills-"));
+const RING1 = join(ringbox, "shipped"), RING2 = join(ringbox, "yours");
+const putSkill = (root, id, fmText, files = {}) => {
+  mkd(join(root, id), { recursive: true });
+  writeFileSync(join(root, id, "SKILL.md"), fmText);
+  for (const [n, body] of Object.entries(files)) writeFileSync(join(root, id, n), body);
+};
+putSkill(RING1, "alpha", "---\nname: alpha\ndescription: knows things\n---\n");
+putSkill(RING1, "board", "---\nname: board\ndescription: a board\nprovides: page:board\n---\n", { "page.mjs": "export default {}" });
+putSkill(RING1, "board2", "---\nname: board2\ndescription: another board\nprovides: page:board\n---\n", { "page.mjs": "export default {}" });
+putSkill(RING1, "_template", "---\nname: t\ndescription: t\n---\n");
+putSkill(RING1, "broken", "no frontmatter at all");
+putSkill(RING2, "alpha", "---\nname: alpha-local\ndescription: yours\n---\n");
+const RINGS = [{ root: RING1, ring: "built-in" }, { root: RING2, ring: "local" }];
+const disc = discoverSkills(null, RINGS);
+check("a folder whose manifest carries no name is refused with its reason",
+  disc.refused.find((r) => r.id === "broken")?.why.includes("name and description"), true);
+check("_template is not a skill", disc.found.some((s) => s.id === "_template"), false);
+check("your ring replaces the built-in on the same id", disc.found.find((s) => s.id === "alpha")?.name, "alpha-local");
+check("a seat is a file, detected and nothing more", disc.found.find((s) => s.id === "board")?.seats.page !== undefined, true);
+
+const res0 = resolveSkills(disc.found, {});
+check("knowledge is always active", res0.active.some((s) => s.id === "alpha"), true);
+check("two skills on one slot with no choice: neither is active", res0.active.some((s) => s.provides === "page:board"), false);
+check("...and the conflict names the slot and the fix", /page:board/.test(res0.conflicts[0]?.why), true);
+check("the choice file resolves it", resolveSkills(disc.found, { "page:board": "board2" }).active.find((s) => s.provides === "page:board")?.id, "board2");
+check("a stale choice is a conflict that names the ghost",
+  /"gone"/.test(resolveSkills(disc.found, { "page:board": "gone" }).conflicts[0]?.why), true);
+
+putSkill(RING2, "board3", "---\nname: board3\ndescription: your board\nprovides: page:board\n---\n", { "page.mjs": "export default {}" });
+check("a sole local candidate wins its slot — dropping the folder in was the choice",
+  resolveSkills(discoverSkills(null, RINGS).found, {}).active.find((s) => s.provides === "page:board")?.id, "board3");
+
+const choiceBox = mkdtempSync(join(tmpdir(), "mq-choice-"));
+writeChoice(choiceBox, "page:board", "board2");
+check("a choice round-trips through skills.json", readChoices(choiceBox)["page:board"], "board2");
+writeChoice(choiceBox, "page:board", null);
+check("...and a null choice clears it", readChoices(choiceBox)["page:board"] ?? null, null);
+
+/* End to end through the platform door: a local platform skill in a scratch
+   data dir loads beside the built-in, answers roomOf, and vanishes cleanly. */
+const platBox = mkdtempSync(join(tmpdir(), "mq-plat-"));
+putSkill(join(platBox, "skills"), "fakenet",
+  "---\nname: fakenet\ndescription: a test platform\nprovides: platform:fakenet\n---\n",
+  { "adapter.mjs": `export default { id: "fakenet", name: "FakeNet", gapMs: 1, read: () => ({ ok: false, error: "x" }), sourceUrl: () => "https://f.example/x", refuse: () => null, roomOf: (u) => /fakenet\\.example\\/g\\/(\\w+)/.exec(String(u))?.[1] ?? null, roomLabel: (p) => "g/" + p };` });
+await loadPlatforms(platBox);
+check("a local platform skill loads through the door", platform("fakenet")?.name, "FakeNet");
+check("...beside the built-in, not instead of it", platform("reddit")?.name, "Reddit");
+check("roomOf consults it", roomOf("https://fakenet.example/g/hall"), "hall");
+await loadPlatforms(null); // back to built-ins for the rest of the suite
+check("reloading from scratch drops what is gone", platform("fakenet"), null);
 
 /* -------------------------------------------------- the JSON-schema check */
 
@@ -588,10 +665,10 @@ check("...and pending verdicts deal before the room question, not instead of it"
 /* ------------------------------------------------------------ the deck API */
 
 // A second throwaway server: the acts write, so they get their own dir.
-const boxC = mkdtempSync(join(tmpdir(), "earshot-cards-"));
-const DC = join(boxC, ".earshot");
-execFileSync(process.execPath, [ES, "init"], { env: { ...process.env, EARSHOT_DIR: DC }, stdio: "ignore" });
-const srvC = spawn(process.execPath, [SERVE, "--port", "0"], { env: { ...process.env, EARSHOT_DIR: DC }, stdio: ["ignore", "pipe", "pipe"] });
+const boxC = mkdtempSync(join(tmpdir(), "mq-cards-"));
+const DC = join(boxC, ".mq");
+execFileSync(process.execPath, [ES, "init"], { env: { ...process.env, MQ_DIR: DC }, stdio: "ignore" });
+const srvC = spawn(process.execPath, [SERVE, "--port", "0"], { env: { ...process.env, MQ_DIR: DC }, stdio: ["ignore", "pipe", "pipe"] });
 const baseC = await new Promise((resolve) => {
   let out = "";
   const t = setTimeout(() => resolve(null), 8000);
@@ -757,7 +834,7 @@ check("a proposal with a verb outside the law never renders",
 // asked for; these pin the boundary.
 
 {
-  seedMissing(DC); // an older .earshot grows the new file, same as boot does
+  seedMissing(DC); // an older .mq grows the new file, same as boot does
   check("persona.md is editable memory", allowed("persona.md"), true);
   const prog = memoryProgress(DC);
   check("the editor lists it", prog.files.some((f) => f.file === "persona.md"), true);
@@ -780,12 +857,55 @@ check("a proposal with a verb outside the law never renders",
   ].join("\n") + "\n";
   const out = execFileSync(process.execPath, [MCP], {
     input: rpc, encoding: "utf8",
-    env: { ...process.env, EARSHOT_DIR: DC }, stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env, MQ_DIR: DC }, stdio: ["pipe", "pipe", "pipe"],
   });
   const listed = out.split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((m) => m.id === 2)?.result?.resources ?? [];
   check("MCP serves the four working files as resources", listed.length, 4);
   check("...and the persona is not among them — that assistant is also the judge",
     listed.some((r) => r.name === "persona.md"), false);
+}
+
+/* ------------------------------------------------- the page door, end to end */
+
+// A third throwaway server, whose scratch ring carries a page skill and a
+// deliberate slot stalemate: the door must mount the one and refuse to guess
+// the other, and the Skills screen must offer the fix it then accepts.
+{
+  const boxS = mkdtempSync(join(tmpdir(), "mq-door-"));
+  const DS = join(boxS, ".mq");
+  execFileSync(process.execPath, [ES, "init"], { env: { ...process.env, MQ_DIR: DS }, stdio: "ignore" });
+  putSkill(join(DS, "skills"), "board",
+    "---\nname: board\ndescription: a contributed page\nprovides: page:board\n---\n",
+    { "page.mjs": `export default { path: "/board", title: "Board", render: () => "<h2>hello from a skill</h2>" };` });
+  putSkill(join(DS, "skills"), "coin", "---\nname: coin\ndescription: heads\nprovides: probe:coin\n---\n");
+  putSkill(join(DS, "skills"), "coin2", "---\nname: coin2\ndescription: tails\nprovides: probe:coin\n---\n");
+  const srvS = spawn(process.execPath, [SERVE, "--port", "0"], { env: { ...process.env, MQ_DIR: DS }, stdio: ["ignore", "pipe", "pipe"] });
+  const baseS = await new Promise((resolve) => {
+    let out = "";
+    const t = setTimeout(() => resolve(null), 8000);
+    srvS.stdout.on("data", (d) => {
+      out += d;
+      const m = out.match(/http:\/\/127\.0\.0\.1:(\d+)/);
+      if (m) { clearTimeout(t); resolve(`http://127.0.0.1:${m[1]}`); }
+    });
+  });
+  if (!baseS) { console.log("FAIL  the page-door server did not start"); fail++; }
+  else {
+    const G = async (p) => { const r = await fetch(baseS + p); return { status: r.status, body: await r.text() }; };
+    check("a skill's page mounts beside the core views", (await G("/board")).status, 200);
+    check("...rendering its body inside the dashboard chrome", /hello from a skill/.test((await G("/board")).body), true);
+    check("...and the nav carries it", /href="\/board"/.test((await G("/")).body), true);
+    check("the Skills screen names the stalemate and its candidates", /probe:coin/.test((await G("/skills")).body), true);
+    const posted = await fetch(baseS + "/skills/choose", {
+      method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ slot: "probe:coin", id: "coin2" }), redirect: "manual",
+    });
+    check("a choice posts and returns to the Skills screen", posted.status, 303);
+    const after = (await G("/skills")).body;
+    check("...and the chosen skill is running, the stalemate gone",
+      /coin2/.test(after) && !/Needs a decision/.test(after), true);
+  }
+  srvS.kill();
 }
 
 // THE DOCTRINE, pinned: only the finding verbs may take the browser lane.

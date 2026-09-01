@@ -1,5 +1,5 @@
 {
-  "name": "earshot",
+  "name": "messaging-quest",
   "version": "0.4.0",
   "description": "Your marketing specialist, one card at a time: find out what Reddit actually did to the comments you wrote, and answer the people asking for what you sell. You press Post; it never does.",
   "keywords": [
@@ -15,16 +15,16 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/theic/earshot.git"
+    "url": "git+https://github.com/theic/messaging-quest.git"
   },
-  "homepage": "https://github.com/theic/earshot#readme",
+  "homepage": "https://github.com/theic/messaging-quest#readme",
   "bugs": {
-    "url": "https://github.com/theic/earshot/issues"
+    "url": "https://github.com/theic/messaging-quest/issues"
   },
   "author": "Serhii Lahutin",
   "type": "module",
   "bin": {
-    "es": "./bin/es.mjs"
+    "mq": "./bin/mq.mjs"
   },
   "scripts": {
     "start": "node bin/serve.mjs",
@@ -48,6 +48,7 @@
     "agent/strategist.mjs",
     "README.md",
     "PLAN.md",
+    "CONTRIBUTING.md",
     "LICENSE"
   ],
   "//": "Zero runtime dependencies, deliberately. The model layer is lib/llm.mjs — fetch, a JSON-schema check, and a tool loop — so `npm install` installs nothing, there is no supply chain to audit, and the whole tool runs on a bare Node 18. Before removing this property, read the header of lib/llm.mjs for what adding a framework back would actually buy."

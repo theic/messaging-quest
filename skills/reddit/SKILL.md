@@ -1,6 +1,7 @@
 ---
 name: reddit
 description: Read Reddit logged-out — visibility checks on your own words, and finding the people asking for what you sell. One request a minute, no account, no API key, nothing posted.
+provides: platform:reddit
 ---
 
 # Reddit, read as a stranger
