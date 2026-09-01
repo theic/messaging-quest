@@ -29,8 +29,8 @@
 
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, dirname, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createDeepAgent, createSkillsMiddleware, FilesystemBackend } from "deepagents";
 import { ChatOpenAI } from "@langchain/openai";
 import { MemorySaver } from "@langchain/langgraph";
@@ -38,6 +38,7 @@ import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { seat } from "../lib/models.mjs";
 import { memoryContext, readOne } from "../lib/memory.mjs";
+import { activeSkills, activeSeat } from "../lib/skills.mjs";
 import { PER_ROOM_24H, OVERALL_24H } from "../lib/ready.mjs";
 import { proposable, patchStash } from "../lib/cards.mjs";
 
@@ -186,13 +187,54 @@ House rules, non-negotiable:
 const saver = new MemorySaver();
 const agents = new Map();
 
-function agentFor(dir) {
+/* The agent door. A skill folder with an agent.mjs contributes a SUBAGENT —
+ * a colleague the strategist can hand a task to. The module itself is bare
+ * Node (the heart's rule: skills carry no dependencies); THIS file owns the
+ * LangChain runtime, so the adaptation happens here and nowhere else.
+ *
+ * The contract, deliberately small: default export
+ *   { name, description, prompt, tools?: [{ name, description, schema, run }] }
+ * with schema plain JSON Schema and run(args, { dir }) returning a string.
+ * The registry decides which agent skills are ACTIVE; a folder that lost its
+ * slot never reaches this seat. */
+async function skillSubagents(dir) {
+  const out = [];
+  for (const s of activeSeat("agent")) {
+    try {
+      const a = (await import(pathToFileURL(s.seats.agent).href)).default;
+      if (!a?.name || !a.description || !a.prompt) {
+        console.error(`skill ${s.id}: agent.mjs must default-export { name, description, prompt } — not seated`);
+        continue;
+      }
+      out.push({
+        name: String(a.name),
+        description: String(a.description),
+        systemPrompt: String(a.prompt),
+        tools: (a.tools ?? []).map((t) =>
+          tool(async (args) => String(await t.run(args ?? {}, { dir })), {
+            name: t.name,
+            description: t.description,
+            schema: t.schema ?? { type: "object", properties: {} },
+          })),
+      });
+    } catch (e) {
+      console.error(`skill ${s.id}: agent.mjs — ${e.message} — not seated`);
+    }
+  }
+  return out;
+}
+
+async function agentFor(dir) {
   const s = seat(dir, "scout"); // the researcher seat: biggest window, tool-happy
 
   // The system prompt bakes in the memory files, so an agent built before
   // setup finished would keep telling the user their files are empty. The
-  // cache key is what the prompt was built FROM; when that moves, rebuild.
-  const fp = createHash("sha1").update([dir, s.model, personaOf(dir), memoryContext(dir)].join("\x00")).digest("hex");
+  // cache key is what the prompt was built FROM — the seat, the persona, the
+  // memory, and which skills are active; when any of that moves, rebuild.
+  const fp = createHash("sha1").update([
+    dir, s.model, personaOf(dir), memoryContext(dir),
+    activeSkills().map((k) => `${k.id}@${k.path}`).join(","),
+  ].join("\x00")).digest("hex");
   if (agents.get(dir)?.fp === fp) return agents.get(dir).agent;
 
   const model = new ChatOpenAI({
@@ -202,6 +244,13 @@ function agentFor(dir) {
     maxTokens: s.maxTokens,
     timeout: s.timeoutMs,
   });
+
+  const subagents = await skillSubagents(dir);
+  // Only ACTIVE skills teach this agent — a skill that lost its slot to a
+  // competing implementation should not keep coaching from the bench. Both
+  // rings teach: the repo's skills through one backend, yours through another.
+  const repoSources = activeSkills().filter((k) => k.ring === "built-in").map((k) => `/skills/${k.id}/`);
+  const localSources = activeSkills().filter((k) => k.ring === "local").map((k) => `/skills/${k.id}/`);
 
   const agent = createDeepAgent({
     model,
@@ -214,11 +263,16 @@ function agentFor(dir) {
     middleware: [
       // The same SKILL.md files that teach the CLI's agents and any OpenClaw
       // agent teach this one: platform norms, measured facts, refusals.
-      createSkillsMiddleware({
+      ...(repoSources.length ? [createSkillsMiddleware({
         backend: new FilesystemBackend({ rootDir: ROOT, virtualMode: true }),
-        sources: ["/skills/"],
-      }),
+        sources: repoSources,
+      })] : []),
+      ...(localSources.length ? [createSkillsMiddleware({
+        backend: new FilesystemBackend({ rootDir: resolve(dir), virtualMode: true }),
+        sources: localSources,
+      })] : []),
     ],
+    ...(subagents.length ? { subagents } : {}),
     checkpointer: saver,
   });
 
@@ -232,7 +286,7 @@ function agentFor(dir) {
  */
 export async function strategist(dir, message, thread = "panel") {
   if (!String(message ?? "").trim()) return { reply: "Say something and I will answer." };
-  const agent = agentFor(dir);
+  const agent = await agentFor(dir);
   const result = await agent.invoke(
     { messages: [{ role: "user", content: String(message).slice(0, 8000) }] },
     { configurable: { thread_id: `mq:${thread}` }, recursionLimit: 40 },
