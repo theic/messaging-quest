@@ -28,6 +28,7 @@ import { standing, readiness, burst, mix } from "../lib/ready.mjs";
 import { nextCards, onboarded } from "../lib/cards.mjs";
 import { relayBroker } from "../lib/relay.mjs";
 import { readViaRelay } from "../skills/reddit/feed.mjs";
+import { allowed, memoryProgress, memoryContext, writeMemory, seedMissing } from "../lib/memory.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ES = join(here, "es.mjs");
@@ -705,6 +706,26 @@ srvC.kill();
   const dark = await readViaRelay(stubBase, "https://www.reddit.com/r/x/new.rss");
   check("a dark lane is a failed read with the relay named", /^relay:/.test(dark.error), true);
   stub.close();
+}
+
+/* ---------------------------------------------------------------- persona */
+
+// persona.md is memory the operator owns, like the other files — and UNLIKE
+// them it reaches only the strategist's seat. A persona in the judge's
+// context is a judge with a personality, which is a rubric drift nobody
+// asked for; these pin the boundary.
+
+{
+  seedMissing(DC); // an older .earshot grows the new file, same as boot does
+  check("persona.md is editable memory", allowed("persona.md"), true);
+  const prog = memoryProgress(DC);
+  check("the editor lists it", prog.files.some((f) => f.file === "persona.md"), true);
+  check("...but setup does not count it — unedited is a working persona", prog.total, 4);
+  writeMemory(DC, "persona.md", "# Your specialist\n\nYou are Vera. Blunt, kind, allergic to fluff.");
+  writeMemory(DC, "project.md", "# What you sell\n\nA thing people pay for.");
+  const ctx = memoryContext(DC);
+  check("the judge and writer hear about the project", /pay for/.test(ctx), true);
+  check("...and never about the persona, even once it is written", /Vera/.test(ctx), false);
 }
 
 // THE DOCTRINE, pinned: only the finding verbs may take the browser lane.

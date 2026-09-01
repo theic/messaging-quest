@@ -462,10 +462,14 @@ other ways:
 - **A colleague, via the strategist.** `npm run brain` installs `agent/` —
   the one dependency-carrying directory, built on Deep Agents — and the
   panel's ask-box comes alive: "who's waiting and what should I do first?"
-  gets an answer that reads your queue, does the pacing math, and offers the
-  next move. Its hands are the same CLI verbs as everything else, its
-  education is the same `skills/<id>/SKILL.md`, and it inherits every
-  refusal. It proposes; you press the buttons.
+  gets an answer that reads your queue *and your panel* (it has a `deck`
+  tool, so its advice and the card on screen cannot disagree), does the
+  pacing math, and offers the next move. Who it *is* lives in
+  `persona.md` — the fifth memory file, yours to rewrite on the memory
+  page; it reaches only the strategist, never the judge. Its hands are the
+  same CLI verbs as everything else, its education is the same
+  `skills/<id>/SKILL.md`, and it inherits every refusal. It proposes; you
+  press the buttons.
 
 What is deliberately not pluggable: nothing exposes `probe`/`tick`/`sync` to a
 chat surface. Reading costs a minute a request and belongs to the machine that

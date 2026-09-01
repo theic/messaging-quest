@@ -29,7 +29,6 @@
 
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createDeepAgent, createSkillsMiddleware, FilesystemBackend } from "deepagents";
@@ -109,25 +108,43 @@ const makeTools = (dir) => [
     return m ? m.body : `not a memory file: ${file}`;
   }, {
     name: "read_memory",
-    description: "Read one of the four memory files verbatim: rule.md, project.md, icp.md, me.md. You may not write them — propose text and tell the operator where it goes.",
-    schema: z.object({ file: z.enum(["rule.md", "project.md", "icp.md", "me.md"]) }),
+    description: "Read one of the memory files verbatim: rule.md, project.md, icp.md, me.md, persona.md. You may not write them — propose text and tell the operator where it goes.",
+    schema: z.object({ file: z.enum(["rule.md", "project.md", "icp.md", "me.md", "persona.md"]) }),
+  }),
+  tool(async () => {
+    // The same deck the panel renders — the strategist should never guess
+    // what the operator is being shown. EARSHOT_RELAY is the dashboard's own
+    // address (set at listen), and this process is the dashboard, so the
+    // fetch is a loopback to ourselves; absent (a bare test harness), the
+    // honest answer is that there is no deck to read.
+    const base = process.env.EARSHOT_RELAY;
+    if (!base) return "no deck here — the dashboard is not running";
+    try {
+      const res = await fetch(`${base}/api/cards`, { signal: AbortSignal.timeout(5000) });
+      const { cards, jobs } = await res.json();
+      return JSON.stringify({
+        showing: cards?.[0]?.id ?? null,
+        cards: (cards ?? []).map((c) => ({ id: c.id, question: c.question })),
+        running: (jobs ?? []).map((j) => j.label),
+      });
+    } catch (e) {
+      return `could not read the deck: ${e.message}`;
+    }
+  }, {
+    name: "deck",
+    description: "What the operator's panel is showing right now: the current card, the cards behind it, and any running jobs. Read this before advising a next action — the deck IS the next action, and advice that contradicts the card on screen is worse than silence.",
+    schema: z.object({}),
   }),
 ];
 
 /* ----------------------------------------------------------------- persona */
 
-const personaOf = (dir) => {
-  // A persona the operator writes wins over the default one, same precedence
-  // as everything else in the memory: what you say beats what shipped.
-  const p = join(dir, "persona.md");
-  if (existsSync(p)) return readFileSync(p, "utf8");
-  return `You are the operator's marketing specialist — a colleague, not a control panel.
-You know their project from its own files, you keep track of who is waiting for
-an answer, and you say what the next action is without being asked. Plain
-sentences, concrete numbers, no marketing fluff, no exclamation-mark
-enthusiasm. When you are unsure, say so. When something was refused, quote the
-sentence that refused it — the refusals are the product, not an apology.`;
-};
+/** persona.md is a real memory file now (lib/memory.mjs, optional: true) —
+ *  the operator edits who this is on the dashboard's memory page, and readOne
+ *  hands back the seed until they do. It reaches ONLY this seat: the judge
+ *  and writer never see it, because a judge told "you are a colleague named
+ *  X" starts judging like a colleague named X. */
+const personaOf = (dir) => readOne(dir, "persona.md")?.body ?? "";
 
 const doctrine = `
 House rules, non-negotiable:

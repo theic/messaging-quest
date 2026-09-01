@@ -225,10 +225,18 @@ may resell it as a managed service, which is exactly the twin's moat.
    anonymous read comes back 403/429/blocked. Same pace, same three-outcome
    parsing, `via: "browser"` in the ledger. Still to do from this item:
    measure Reddit's account-bound private feed token as a finding fallback.
-3. **The specialist grows up.** `persona.md` as a proper memory file; the
-   strategist behind cards (a proposal it makes arrives as a card, not as
-   chat); parallel research subagents on real tasks ("explore this thread's
-   neighbourhood"); the ask-strip answering from the deck's context.
+3. **The specialist grows up — persona and deck-sight landed 2026-09-01.**
+   `persona.md` is the fifth memory file (optional: usable unedited, listed
+   in the editor, out of the setup count, and reaching ONLY the strategist's
+   seat — a judge with a personality is rubric drift, and a test pins the
+   boundary). The strategist gained a `deck` tool: it reads the same cards
+   the panel shows before advising, so its advice and the card on screen
+   cannot disagree. Verified live: asked "what is on my panel?", it named
+   the actual card, explained why answering it unblocks drafting, and
+   flagged two fit-passing queue items it would skip on etiquette grounds.
+   Still open from this item: a proposal the strategist makes arriving AS a
+   card (needs an agent-proposed card kind + approval mapping), and named
+   parallel research tasks.
 4. **Publish.** Public repo, npm name claimed, CI badge on the tests, the
    Web Store listing (the predecessor's submission kit is written), and the
    open OpenClaw/ClawHub skill aimed at the occupied slot.
