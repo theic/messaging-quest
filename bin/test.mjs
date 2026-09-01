@@ -15,13 +15,21 @@ import { mkdtempSync, readFileSync, writeFileSync, appendFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseFeed, threadOf, waitFor, ANON_GAP_MS } from "../lib/reddit.mjs";
+import { parseFeed, threadOf, waitFor, ANON_GAP_MS } from "../skills/reddit/feed.mjs";
 import { classify, history } from "../lib/verdict.mjs";
 import { conversation, byUrgency } from "../lib/conversation.mjs";
-import { refuse, verdictOf, bansPromotion, scoped } from "../lib/sources.mjs";
-import { fromDescription, isParody, readRoomFile, roomFile } from "../lib/rules.mjs";
+import { refuse, scoped } from "../skills/reddit/shapes.mjs";
+import { verdictOf } from "../lib/probe.mjs";
+import { fromDescription, isParody, readRoomFile, roomFile, bansPromotion } from "../lib/rules.mjs";
+import { conforms } from "../lib/llm.mjs";
+import { loadPlatforms, platform, roomOf } from "../lib/platform.mjs";
 import { longestSharedRun, repeats, claims, inventedLinks, RUN_LIMIT } from "../lib/guards.mjs";
 import { standing, readiness, burst, mix } from "../lib/ready.mjs";
+import { nextCards, onboarded } from "../lib/cards.mjs";
+import { relayBroker } from "../lib/relay.mjs";
+import { readViaRelay } from "../skills/reddit/feed.mjs";
+import { allowed, memoryProgress, memoryContext, writeMemory, seedMissing } from "../lib/memory.mjs";
+import { proposable } from "../lib/cards.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ES = join(here, "es.mjs");
@@ -429,10 +437,20 @@ writeFileSync(join(DW, "found.jsonl"), JSON.stringify({
 writeFileSync(join(DW, "verdicts.jsonl"), JSON.stringify({ id: "t3_evil", fit: true, why: "stuck", rule: "abc12345", at: "2026-08-28T10:00:00Z" }) + "\n");
 writeFileSync(join(DW, "probes.jsonl"), JSON.stringify({ place: "smallbusiness", q: null, url: "u", read: 1, at: "2026-08-28T10:00:00Z" }) + "\n");
 
-const PORT = 8000 + (process.pid % 900);
-const srv = spawn(process.execPath, [SERVE, "--port", String(PORT)], { env: { ...process.env, EARSHOT_DIR: DW }, stdio: ["ignore", "pipe", "pipe"] });
-const base = `http://127.0.0.1:${PORT}`;
-const up = async () => { for (let i = 0; i < 80; i++) { try { await fetch(base + "/"); return true; } catch { await new Promise((r) => setTimeout(r, 50)); } } return false; };
+// Port 0 — the OS hands out a free one, and serve prints the port it actually
+// bound. A guessed port collided with a running hub once and every request in
+// this section quietly interrogated the wrong server.
+const srv = spawn(process.execPath, [SERVE, "--port", "0"], { env: { ...process.env, EARSHOT_DIR: DW }, stdio: ["ignore", "pipe", "pipe"] });
+const base = await new Promise((resolve) => {
+  let out = "";
+  const t = setTimeout(() => resolve(null), 8000);
+  srv.stdout.on("data", (d) => {
+    out += d;
+    const m = out.match(/http:\/\/127\.0\.0\.1:(\d+)/);
+    if (m) { clearTimeout(t); resolve(`http://127.0.0.1:${m[1]}`); }
+  });
+});
+const up = async () => { if (!base) return false; for (let i = 0; i < 80; i++) { try { await fetch(base + "/"); return true; } catch { await new Promise((r) => setTimeout(r, 50)); } } return false; };
 const GET = async (p) => { const r = await fetch(base + p); return { status: r.status, body: await r.text() }; };
 
 if (!(await up())) { console.log("FAIL  the dashboard did not start"); fail++; }
@@ -469,6 +487,319 @@ else {
     /does not allow it/.test(esFails2(["watch", "smallbusiness"], DW)), true);
 }
 srv.kill();
+
+/* ------------------------------------------------------ platforms as skills */
+
+// The loader is the one door between lib/ and skills/. If it silently loaded
+// nothing, every room would resolve to "?" and standing would be empty — a
+// quiet break, which is what this file is for.
+await loadPlatforms(null);
+check("the reddit skill loads", platform("reddit")?.name, "Reddit");
+check("roomOf resolves through whichever platform recognises the url",
+  roomOf("https://www.reddit.com/r/smallbusiness/comments/abc/def/"), "smallbusiness");
+check("roomOf says null, not a guess, for a url no platform knows", roomOf("https://example.com/post/1"), null);
+
+/* -------------------------------------------------- the JSON-schema check */
+
+// One malformed element must void the batch LOUDLY — the alternative is a
+// verdict written from a field that was not there.
+const V = {
+  type: "object", required: ["verdicts"],
+  properties: { verdicts: { type: "array", items: {
+    type: "object", required: ["n", "fit", "why"],
+    properties: { n: { type: "number" }, fit: { type: "boolean" }, why: { type: "string" } } } } },
+};
+check("a valid verdict conforms", conforms(V, { verdicts: [{ n: 1, fit: true, why: "x" }] }), null);
+check("a missing field is named, with its path", conforms(V, { verdicts: [{ n: 1, why: "x" }] }), "$.verdicts[0].fit is missing");
+check("a wrong type is named, with both types", conforms(V, { verdicts: [{ n: "1", fit: true, why: "x" }] }),
+  "$.verdicts[0].n should be a number, got string");
+check("prose where an array belongs is refused", conforms(V, { verdicts: "all fine" }), "$.verdicts should be an array, got string");
+
+/* ------------------------------------------------------------------ cards */
+
+// The deck decides what a person is asked to do next, so a wrong card is not a
+// rendering bug — it is the product giving bad advice. These pin the order.
+
+const snap = (over = {}) => ({
+  stash: {},
+  account: null,
+  hasKey: false,
+  memory: { done: 0, total: 4, files: [
+    { file: "rule.md", filled: false }, { file: "project.md", filled: false },
+    { file: "icp.md", filled: false }, { file: "me.md", filled: false }] },
+  voice: null,
+  scout: { status: "none", url: null, error: null, proposal: null },
+  probe: { running: false, last: null, fitRate: null },
+  sources: [],
+  rooms: [],
+  pendingCount: 0,
+  queue: [],
+  itemCount: 0,
+  contactedCount: 0,
+  syncRunning: false,
+  ...over,
+});
+const memDone = { done: 4, total: 4, files: [
+  { file: "rule.md", filled: true }, { file: "project.md", filled: true },
+  { file: "icp.md", filled: true }, { file: "me.md", filled: true }] };
+
+check("a fresh dir asks who you are first", nextCards(snap())[0].id, "onboard.account");
+check("skipping the account moves to the url, not back to the account",
+  nextCards(snap({ stash: { account_skipped: true } }))[0].id, "onboard.url");
+check("a url with no key on file asks for the key, with the site named",
+  nextCards(snap({ stash: { account_skipped: true, url: "https://acme.dev" } }))[0].id, "onboard.key");
+check("the voice habits run while the scout reads — the wait card comes after them",
+  nextCards(snap({ account: { name: "x" }, scout: { status: "running", url: "https://acme.dev" } }))[0].kind, "onboard.voice");
+const allVoice = { voice_done: ["casing", "length", "emoji", "exclamations", "dashes", "contractions", "hedging", "greeting", "roughness"] };
+check("...and once they are answered the wait is all that is left",
+  nextCards(snap({ account: { name: "x" }, stash: allVoice, scout: { status: "running", url: "https://acme.dev" } }))[0].id, "onboard.wait");
+const prop = { project_md: "# What you sell\n\nacme", icp_md: "# Who", rule_md: "# Rule", unknown: [] };
+const readyScout = { status: "ready", url: "https://acme.dev", error: null, proposal: prop };
+check("a landed scout deals the proof-read, seeded with what it wrote",
+  nextCards(snap({ account: { name: "x" }, stash: allVoice, scout: readyScout }))[0].field.value, prop.project_md);
+check("...one file at a time", nextCards(snap({ account: { name: "x" }, stash: allVoice, scout: readyScout }))
+  .filter((c) => c.kind === "onboard.file").length, 1);
+const probed = { account_skipped: false, ...allVoice, probe: { place: "saas", q: "clients", fired: true } };
+check("a probe above the floor leads with Watch",
+  nextCards(snap({ account: { name: "x" }, stash: probed, memory: memDone, probe: { running: false, last: { read: 9 }, fitRate: 0.42 } }))[0].primary.id, "watch");
+check("a probe below the floor leads with Try another — watching is the fallback",
+  nextCards(snap({ account: { name: "x" }, stash: probed, memory: memDone, probe: { running: false, last: { read: 9 }, fitRate: 0.05 } }))[0].primary.id, "another");
+const onb = { account: { name: "x" }, stash: { ...allVoice, welcomed: true }, memory: memDone, sources: [{ place: "saas" }], itemCount: 3 };
+check("onboarded is a fact, not a mood", onboarded(snap(onb)), true);
+check("an unanswered room's rules outrank everything",
+  nextCards(snap({ ...onb, rooms: [{ place: "saas", state: "unanswered" }], pendingCount: 4 }))[0].id, "room.rules.saas");
+const qItem = { id: "t3_q", place: "saas", author: "ana", title: "how do I get clients", body: "stuck", why: "asks directly", url: "https://reddit.com/r/saas/comments/q/x/", draft: { text: "try this", flags: null }, blockedWhy: null, readyState: "ready", readyWhy: null };
+check("a judged person with a draft is the card, with I-posted-it live",
+  nextCards(snap({ ...onb, rooms: [{ place: "saas", state: "yes" }], queue: [qItem] }))[0].actions[0].disabled, undefined);
+check("...and the governor's no arrives as a disabled button that says why",
+  nextCards(snap({ ...onb, rooms: [{ place: "saas", state: "yes" }], queue: [{ ...qItem, blockedWhy: "2 replies in r/saas in 24h" }] }))[0].actions[0].why, "2 replies in r/saas in 24h");
+check("a machine that is on and quiet says so honestly",
+  nextCards(snap({ ...onb, rooms: [{ place: "saas", state: "yes" }] }))[0].id, "work.quiet");
+
+// PEOPLE OUTRANK SETUP — the day-one bug, pinned. Probing from the dashboard
+// filled a queue of twenty judged people while the panel, gating work behind
+// "a source is watched", kept asking which room to look in first.
+const noSources = { account: { name: "x" }, stash: allVoice, memory: memDone, sources: [], itemCount: 3 };
+check("a judged person deals even when nothing is watched yet",
+  nextCards(snap({ ...noSources, queue: [qItem] }))[0].kind, "work.reply");
+check("...and pending verdicts deal before the room question, not instead of it",
+  nextCards(snap({ ...noSources, pendingCount: 40 })).map((c) => c.id).slice(0, 2), ["work.judge", "onboard.room"]);
+
+/* ------------------------------------------------------------ the deck API */
+
+// A second throwaway server: the acts write, so they get their own dir.
+const boxC = mkdtempSync(join(tmpdir(), "earshot-cards-"));
+const DC = join(boxC, ".earshot");
+execFileSync(process.execPath, [ES, "init"], { env: { ...process.env, EARSHOT_DIR: DC }, stdio: "ignore" });
+const srvC = spawn(process.execPath, [SERVE, "--port", "0"], { env: { ...process.env, EARSHOT_DIR: DC }, stdio: ["ignore", "pipe", "pipe"] });
+const baseC = await new Promise((resolve) => {
+  let out = "";
+  const t = setTimeout(() => resolve(null), 8000);
+  srvC.stdout.on("data", (d) => {
+    out += d;
+    const m = out.match(/http:\/\/127\.0\.0\.1:(\d+)/);
+    if (m) { clearTimeout(t); resolve(`http://127.0.0.1:${m[1]}`); }
+  });
+});
+
+if (!baseC) { console.log("FAIL  the cards server did not start"); fail++; }
+else {
+  const deck = async () => (await (await fetch(baseC + "/api/cards")).json()).cards;
+  const act = async (body, type = "application/json") =>
+    await fetch(baseC + "/api/cards/act", { method: "POST", headers: { "content-type": type }, body: JSON.stringify(body) });
+
+  check("the deck is JSON and opens with the account card", (await deck())[0].id, "onboard.account");
+
+  // The CSRF boundary: a cross-origin page can send a form; it cannot send
+  // application/json without a preflight, and nothing here answers preflights.
+  check("an act that is not declared JSON is refused",
+    (await act({ card: "onboard.account", action: "skip" }, "application/x-www-form-urlencoded")).status, 400);
+
+  const skipped = await act({ card: "onboard.account", action: "skip" });
+  check("skipping the account is accepted", skipped.status, 200);
+  check("...and the deck moves on", (await deck())[0].id, "onboard.url");
+
+  const voiced = await act({ card: "onboard.voice.casing", action: "next", choice: "lowercase-starts" });
+  check("a voice answer is accepted", voiced.status, 200);
+  check("...and lands in voice.json as the user's word, not a measurement",
+    JSON.parse(readFileSync(join(DC, "voice.json"), "utf8")).user.casing.value, "lowercase-starts");
+
+  // The send gate, server-side: a stale panel must not be able to record a
+  // send the governor already refused. Two sent replies in the room inside
+  // 24h is the measured limit.
+  const at = new Date().toISOString();
+  appendFileSync(join(DC, "found.jsonl"),
+    ["a", "b", "c"].map((n) => JSON.stringify({ id: `t3_${n}`, place: "saas", url: `https://reddit.com/r/saas/comments/${n}/x/`, author: `u${n}`, title: "t", body: "b", posted_at: at, seen_at: at, probe: "saas:new" })).join("\n") + "\n");
+  appendFileSync(join(DC, "marks.jsonl"),
+    ["a", "b"].map((n) => JSON.stringify({ id: `t3_${n}`, mark: "sent", at })).join("\n") + "\n");
+  const gated = await act({ card: "work.reply.t3_c", action: "posted" });
+  check("the burst governor refuses the third reply into one room", gated.status, 400);
+  check("...and the refusal says which room and why", /saas/.test((await gated.json()).error), true);
+
+  // The strategist seam, without a network: an empty message answers without a
+  // model, and a real one fails loudly for want of a key rather than hanging.
+  const agentEmpty = await fetch(baseC + "/api/agent", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message: "" }) });
+  const agentReal = await fetch(baseC + "/api/agent", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message: "hi" }) });
+  check("the agent route answers an empty message without a model", agentEmpty.status, 200);
+  check("...and a real one without a key is an error that names the fix",
+    /key|not installed/.test((await agentReal.json()).error ?? ""), true);
+
+  /* The read lane, end to end over HTTP: a read blocks, a "browser" claims
+     it, answers with a feed, and the blocked read resolves with the body. */
+  const reading = fetch(baseC + "/api/relay/read", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ url: "https://www.reddit.com/r/saas/new.rss" }),
+  });
+  await new Promise((r) => setTimeout(r, 150));
+  const claimed = (await (await fetch(baseC + "/api/relay/jobs")).json()).jobs;
+  check("a waiting read is claimable by a browser", claimed.length, 1);
+  check("...and the deck reports the lane as attached", (await (await fetch(baseC + "/api/cards")).json()).relay.attached, true);
+  await fetch(baseC + "/api/relay/answer", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: claimed[0].id, status: 200, body: feed, finalUrl: claimed[0].url }),
+  });
+  const relayed = await (await reading).json();
+  check("the answered body reaches the caller", relayed.status, 200);
+  check("...verbatim", /t1_aaa/.test(relayed.body), true);
+}
+srvC.kill();
+
+/* -------------------------------------------------------- the browser lane */
+
+// The broker: everything times out, nothing is fetched twice, and only a
+// platform's own rooms may ride the user's cookies.
+
+{
+  const b = relayBroker({ ttlMs: 60_000 });
+  check("the lane is https only", (await b.read("http://www.reddit.com/r/x/new.rss")).error, "relay reads https only");
+  check("the lane refuses a URL no platform recognises",
+    (await b.read("https://example.com/feed.rss")).error, "relay reads only a platform's own rooms");
+
+  const p = b.read("https://www.reddit.com/r/saas/new.rss");
+  const jobs = await b.claim();
+  check("a queued read is handed to exactly one claimer", jobs.length, 1);
+  check("...and never handed out twice", (await b.claim()).length, 0);
+  b.answer(jobs[0].id, { status: 200, body: "<feed></feed>", finalUrl: jobs[0].url });
+  check("the answer resolves the read", (await p).status, 200);
+  check("an answer for a job that is gone is late, not an error", b.answer("r999", { status: 200 }), false);
+
+  const fast = relayBroker({ ttlMs: 120 });
+  const dead = await fast.read("https://www.reddit.com/r/saas/new.rss");
+  check("a read nobody claims dies with its reason", /unanswered/.test(dead.error), true);
+
+  const tiny = relayBroker({ cap: 1 });
+  tiny.read("https://www.reddit.com/r/a/new.rss");
+  check("the queue has a ceiling", (await tiny.read("https://www.reddit.com/r/b/new.rss")).error, "relay queue is full");
+}
+
+// The relayed body goes through the SAME three-outcome logic as the anonymous
+// lane — a block page or a silent redirect is the same lie from either seat.
+{
+  const { createServer } = await import("node:http");
+  const answers = [
+    { status: 200, body: feed, finalUrl: "https://www.reddit.com/r/x/new.rss" },
+    { status: 200, body: "<html>blocked</html>", finalUrl: "https://www.reddit.com/r/x/new.rss" },
+    { error: "no browser attached" },
+  ];
+  const stub = createServer((req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(answers.shift()));
+  });
+  await new Promise((r) => stub.listen(0, "127.0.0.1", r));
+  const stubBase = `http://127.0.0.1:${stub.address().port}`;
+
+  const good = await readViaRelay(stubBase, "https://www.reddit.com/r/x/new.rss");
+  check("a relayed feed parses like an anonymous one", good.ok && good.entries.length, 1);
+  check("...and says which seat read it", good.via, "browser");
+  const blocked = await readViaRelay(stubBase, "https://www.reddit.com/r/x/new.rss");
+  check("a block page through the relay is still an error, never 'empty'", blocked.ok, false);
+  const dark = await readViaRelay(stubBase, "https://www.reddit.com/r/x/new.rss");
+  check("a dark lane is a failed read with the relay named", /^relay:/.test(dark.error), true);
+  stub.close();
+}
+
+/* -------------------------------------------------------- agent proposals */
+
+// The strategist may reach for buttons it can see but not press. The
+// allowlist is a security boundary: it lives in the zero-dep heart so this
+// suite guards it without the brain installed, and the server re-parses the
+// verb from its own stash at act time — the card can never do more than its
+// label says.
+
+check("the specialist may propose judging", proposable("judge")?.label, "Judge them");
+check("...a probe, phrase and all", proposable("probe saas how do I get clients")?.args, ["saas", "--q", "how do I get clients"]);
+check("...a specific draft", proposable("draft t3_abc12")?.args, ["t3_abc12"]);
+check("it may NOT propose marking something sent", proposable("mark t3_x sent"), null);
+check("...or watching a room the probe has not earned", proposable("watch saas"), null);
+check("...or anything with a flag smuggled in", proposable("tick --limit 99"), null);
+
+const proposalSnap = snap({
+  account: { name: "x" }, stash: { welcomed: true, agent_card: { question: "Judge the backlog?", why: "4 waiting", verb: "judge" } },
+  memory: memDone, sources: [{ place: "saas" }], rooms: [{ place: "saas", state: "yes" }], itemCount: 3,
+});
+check("a proposal lands on the deck with the verb's own label",
+  nextCards(proposalSnap).find((c) => c.kind === "agent.propose")?.primary.label, "Judge them");
+check("...riding second, behind the system's own top action",
+  nextCards(proposalSnap)[1]?.kind, "agent.propose");
+// The first live proposal was stashed mid-onboarding and never rendered,
+// which made the strategist's "it's on your deck now" a lie. Never again:
+check("a proposal is visible during onboarding too",
+  nextCards(snap({ stash: { agent_card: { question: "q", why: "w", verb: "tick" } } }))[1]?.kind, "agent.propose");
+check("a proposal with a verb outside the law never renders",
+  nextCards({ ...proposalSnap, stash: { ...proposalSnap.stash, agent_card: { question: "x", why: "y", verb: "rm -rf /" } } })
+    .some((c) => c.kind === "agent.propose"), false);
+
+/* ---------------------------------------------------------------- persona */
+
+// persona.md is memory the operator owns, like the other files — and UNLIKE
+// them it reaches only the strategist's seat. A persona in the judge's
+// context is a judge with a personality, which is a rubric drift nobody
+// asked for; these pin the boundary.
+
+{
+  seedMissing(DC); // an older .earshot grows the new file, same as boot does
+  check("persona.md is editable memory", allowed("persona.md"), true);
+  const prog = memoryProgress(DC);
+  check("the editor lists it", prog.files.some((f) => f.file === "persona.md"), true);
+  check("...but setup does not count it — unedited is a working persona", prog.total, 4);
+  writeMemory(DC, "persona.md", "# Your specialist\n\nYou are Vera. Blunt, kind, allergic to fluff.");
+  writeMemory(DC, "project.md", "# What you sell\n\nA thing people pay for.");
+  const ctx = memoryContext(DC);
+  check("the judge and writer hear about the project", /pay for/.test(ctx), true);
+  check("...and never about the persona, even once it is written", /Vera/.test(ctx), false);
+}
+
+// The MCP pipe obeys the same boundary end-to-end. The assistant on the other
+// side holds the judge tool, so resources/list handing it the persona would be
+// the leak the block above pins — through a different door.
+{
+  const MCP = join(here, "mcp.mjs");
+  const rpc = [
+    JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }),
+    JSON.stringify({ jsonrpc: "2.0", id: 2, method: "resources/list" }),
+  ].join("\n") + "\n";
+  const out = execFileSync(process.execPath, [MCP], {
+    input: rpc, encoding: "utf8",
+    env: { ...process.env, EARSHOT_DIR: DC }, stdio: ["pipe", "pipe", "pipe"],
+  });
+  const listed = out.split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((m) => m.id === 2)?.result?.resources ?? [];
+  check("MCP serves the four working files as resources", listed.length, 4);
+  check("...and the persona is not among them — that assistant is also the judge",
+    listed.some((r) => r.name === "persona.md"), false);
+}
+
+// THE DOCTRINE, pinned: only the finding verbs may take the browser lane.
+// sync/check/back measure what a logged-out stranger sees, and a logged-in
+// read would answer that question wrongly while looking right. If this count
+// moves, somebody changed who is allowed to ride the user's session — that
+// must be a decision, not a drive-by.
+{
+  const src = readFileSync(ES, "utf8");
+  check("exactly two call sites — tick and probe — may use the browser lane",
+    (src.match(/fetchAnon\([^)]*relay: true/g) ?? []).length, 2);
+  check("the visibility verbs pass no relay flag at all",
+    (src.match(/fetchAnon\((userFeed|threadFeed|commentFeed)[^)]*relay/g) ?? []).length, 0);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

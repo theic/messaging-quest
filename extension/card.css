@@ -1,0 +1,158 @@
+/* The panel and its card. One column, dark, nothing decorative: the card is
+   the whole interface, so everything on it is either the question, the answer,
+   or the button. */
+
+:root {
+  --bg: #16181d;
+  --card: #1e2128;
+  --line: #2c3038;
+  --ink: #e8e6e1;
+  --dim: #9a978f;
+  --accent: #d97706;
+  --accent-ink: #16181d;
+  --ok: #4d7c0f;
+  --no: #b91c1c;
+}
+
+* { box-sizing: border-box; margin: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.5 ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+main { flex: 1; padding: 14px 14px 8px; display: flex; flex-direction: column; gap: 10px; }
+
+/* ------------------------------------------------------------------ card */
+
+.es-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.es-eyebrow { color: var(--accent); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+.es-q { font-size: 17px; line-height: 1.35; font-weight: 650; }
+.es-help { color: var(--dim); font-size: 13px; }
+
+.es-choices { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.es-choice {
+  width: 100%;
+  text-align: left;
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font: inherit;
+}
+.es-choice[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.es-choice-label { font-weight: 600; }
+.es-choice-specimen { color: var(--dim); font-size: 12.5px; font-style: italic; }
+.es-choice-note { color: var(--dim); font-size: 12px; }
+
+/* The growing field: the wrapper's ::after holds the same text in the same
+   grid cell, so the cell is as tall as the text wraps and the box never hides
+   the end of its own value. Layout, not measurement. */
+.es-grow { display: grid; }
+.es-grow::after {
+  content: attr(data-value) " ";
+  visibility: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  grid-area: 1 / 1;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  font: 13.5px/1.5 ui-sans-serif, system-ui, sans-serif;
+}
+.es-field {
+  grid-area: 1 / 1;
+  resize: none;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font: 13.5px/1.5 ui-sans-serif, system-ui, sans-serif;
+}
+.es-field:focus { outline: none; border-color: var(--accent); }
+.es-secret { -webkit-text-security: disc; }
+
+.es-links { display: flex; flex-wrap: wrap; gap: 10px; }
+.es-link { color: var(--accent); font-size: 13px; text-decoration: none; }
+.es-link:hover { text-decoration: underline; }
+
+.es-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.es-actions button {
+  font: 600 13.5px/1 ui-sans-serif, system-ui, sans-serif;
+  border-radius: 8px;
+  padding: 10px 14px;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+}
+.es-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.es-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.es-blocked { color: var(--dim); font-size: 12.5px; }
+
+.es-progress { display: flex; gap: 4px; }
+.es-progress span { flex: 1; height: 3px; border-radius: 2px; background: var(--line); }
+.es-progress span.on { background: var(--accent); }
+
+/* ----------------------------------------------------------------- chrome */
+
+.es-jobs { color: var(--dim); font-size: 12px; min-height: 16px; }
+.es-error { color: #fca5a5; font-size: 12.5px; white-space: pre-wrap; }
+
+.es-said {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--dim);
+  white-space: pre-wrap;
+}
+.es-said b { color: var(--ink); }
+
+footer { padding: 10px 14px; border-top: 1px solid var(--line); display: flex; gap: 8px; }
+footer input {
+  flex: 1;
+  background: var(--card);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 11px;
+  font: 13.5px/1.4 ui-sans-serif, system-ui, sans-serif;
+}
+footer input:focus { outline: none; border-color: var(--accent); }
+footer button {
+  background: var(--card);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 12px;
+  font: 600 13px/1 ui-sans-serif, system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.es-server { color: var(--dim); font-size: 11.5px; padding: 4px 14px 10px; }
+.es-server a { color: var(--dim); }
+
+@keyframes es-pulse { 50% { opacity: 0.4; } }
+.es-waiting .es-primary { animation: es-pulse 1.6s ease-in-out infinite; pointer-events: none; }

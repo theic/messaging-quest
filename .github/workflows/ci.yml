@@ -1,0 +1,57 @@
+# Two jobs, mirroring the repo's own split.
+#
+# `engine` runs both suites with NO install step — that is deliberate, not an
+# optimisation. The heart claims zero runtime dependencies on a bare Node 18;
+# a CI job that cannot even run `npm install` (there is nothing to install) is
+# that claim, checked on every push. If somebody adds a dependency to the
+# heart, this job does not get slower — the tests that import the new package
+# crash, loudly, on a runner that never ran npm.
+#
+# `brain` is the one directory that carries dependencies (agent/, behind
+# `npm run brain`). It installs the lockfile and imports the strategist —
+# which proves the LangChain tree still resolves and parses, with no API key
+# and no .earshot/ anywhere. The seats are constructed lazily, so a bare
+# import is safe by design, and this job keeps it that way.
+
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  engine:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [18, 22]
+        exclude:
+          - os: windows-latest
+            node: 18
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+      - name: engine, cards, seams
+        run: node bin/test.mjs
+      - name: voice fingerprint
+        run: node --test bin/voice-test.mjs
+
+  brain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: install the one directory that has dependencies
+        run: npm run brain
+      - name: the strategist imports clean, keyless
+        run: node -e "import('./agent/strategist.mjs').then(() => console.log('brain imports clean'))"
