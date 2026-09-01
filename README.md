@@ -366,6 +366,7 @@ Everything is here. Not a window onto the CLI — the whole product.
 | **Waiting** · **Ready** · **Voice** | Who is owed an answer, where you stand, how you write. |
 | **Sources** · **Rooms** | What is watched, and whose rules have been read. |
 | **Memory** | The five markdown files, edited in the browser. |
+| **Skills** | Everything installed: what runs, what refused to load, and the choice when two skills serve one purpose. |
 | **Settings** | Your OpenRouter key, a model per role, and what each costs. |
 
 Every verb that reads Reddit is a button, and every one of them is long — a
@@ -418,7 +419,7 @@ default rather than by omission. Before the job runner there was no script at
 all — which was a stronger guarantee and also meant a minute-long job could not
 report progress without reloading the page under your cursor.
 
-## Platforms are skills
+## Everything optional is a skill
 
 Reddit is not wired through the tool — it is a folder. `skills/reddit/` holds
 a `SKILL.md` (what the platform is, its norms, its measured facts) and an
@@ -426,14 +427,28 @@ a `SKILL.md` (what the platform is, its norms, its measured facts) and an
 reading it refuses). The engine — store, pacing, judging, dashboard, hub —
 asks the adapter and knows nothing else.
 
-Connecting another platform is writing that same folder and dropping it into
-`.mq/skills/` — it loads without touching the repo, and on a name
-collision yours wins. `node bin/mq.mjs platforms` shows what is loaded. The
-contract is [skills/README.md](skills/README.md), it is deliberately small,
-and it grows by extraction from platforms that exist rather than speculation
-about ones that might. Reddit stays the only built-in until it is mastered;
-a tool that half-reads five platforms is worse than one that reads one
-properly.
+That folder shape is the whole extension story, and it goes past platforms.
+A skill's `SKILL.md` teaches every agent the same bytes, and the files
+beside it plug in through named doors: `adapter.mjs` is a platform,
+`page.mjs` is a screen on the dashboard (rendered inside the house chrome,
+under the same CSP), `agent.mjs` is a colleague the strategist can hand a
+task to — written in bare Node, seated as a Deep Agents subagent when the
+brain is installed. A folder with only a `SKILL.md` is knowledge.
+
+Two skills may serve one purpose — declare the same `provides:` slot, and
+*you* pick which one runs, on the dashboard's **Skills** screen or with
+`mq skills use <slot> <id>`. Until a stalemate is settled, nobody runs and
+the screen says exactly that: a guess there would be your dashboard quietly
+running code you did not pick.
+
+Your own skills load from `.mq/skills/` without touching the repo (on a name
+collision, yours wins); the version for everybody is a pull request adding
+one folder to `skills/`. The contract is [skills/README.md](skills/README.md),
+the checklist is [CONTRIBUTING.md](CONTRIBUTING.md), and the starting point
+is `skills/_template/`. The contract grows by extraction from skills that
+exist rather than speculation about ones that might; Reddit stays the only
+built-in platform until it is mastered, because a tool that half-reads five
+platforms is worse than one that reads one properly.
 
 ## Plug it into what you already use
 

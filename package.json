@@ -48,6 +48,7 @@
     "agent/strategist.mjs",
     "README.md",
     "PLAN.md",
+    "CONTRIBUTING.md",
     "LICENSE"
   ],
   "//": "Zero runtime dependencies, deliberately. The model layer is lib/llm.mjs — fetch, a JSON-schema check, and a tool loop — so `npm install` installs nothing, there is no supply chain to audit, and the whole tool runs on a bare Node 18. Before removing this property, read the header of lib/llm.mjs for what adding a framework back would actually buy."

@@ -1,22 +1,70 @@
-# Platforms are skills
+# Everything optional is a skill
 
-A platform is a folder:
+A skill is a folder. Its `SKILL.md` teaches — a person, the strategist, an
+MCP client, an OpenClaw agent all read the same file — and the files beside
+it, if any, plug into the engine through named doors:
 
 ```
 skills/<id>/
-  SKILL.md       what this platform is, its norms, its measured facts —
-                 readable by a person, and by an agent driving the CLI
-  adapter.mjs    the mechanics the engine calls
+  SKILL.md       required. What this is, its norms, its measured facts.
+  adapter.mjs    optional seat: a PLATFORM — how to read somewhere
+                 (door: lib/platform.mjs)
+  page.mjs       optional seat: a DASHBOARD SCREEN
+                 (door: bin/serve.mjs)
+  agent.mjs      optional seat: a SUBAGENT for the strategist
+                 (door: agent/strategist.mjs — the one place that owns
+                 the LangChain runtime; your module stays bare Node)
 ```
 
-Two places are searched. Built-in skills ship in `skills/`; yours go in
-`.mq/skills/` and load without touching the repo. On an id collision,
-yours wins — that is the override mechanism, there is no other.
+A folder with only a `SKILL.md` is **knowledge** — always active, never in
+anybody's way. Copy `skills/_template/` to start one of any shape.
 
-The engine — the store, the pacing loop, the probe economics, the judge, the
-dashboard, the hub — knows nothing about any platform. It asks the adapter.
+## The manifest
 
-## The contract (v0)
+Frontmatter is `key: value` scalars between `---` fences — no YAML library,
+no nesting, nothing to misread:
+
+```markdown
+---
+name: reddit
+description: One honest sentence. Every agent reads this to decide relevance.
+provides: platform:reddit
+---
+```
+
+`name` and `description` are required. `provides` is optional and names the
+**slot** this skill fills.
+
+## Two rings
+
+Built-in skills ship in `skills/`. Yours load from `<data-dir>/skills/`
+(`.mq/skills/` by default) without touching the repo. On an id collision,
+yours replaces the built-in entirely — that is the override mechanism, and
+there is no other.
+
+## Slots: same purpose, different implementation
+
+Two skills may serve one purpose — two Reddit readers, two queue boards. They
+declare the same `provides:` slot, and the instance decides which one runs:
+
+- **one candidate** — active, no ceremony.
+- **a sole local candidate** — active: dropping the folder into your own ring
+  was the choice.
+- **anything else** — *nobody* runs, and the stalemate is surfaced on the
+  dashboard's **Skills** screen and by `mq skills`, each with the fix beside
+  it. Settle it there, or with
+  `mq skills use <slot> <id>` — either way it is recorded in
+  `<data-dir>/skills.json`, and the change takes effect immediately: adapters
+  re-import, pages re-mount, the strategist rebuilds.
+
+A guess here would be somebody's dashboard quietly running code they did not
+pick, so there is no guess.
+
+Slot names are plain strings. The conventions in use: `platform:<id>`,
+`page:<name>`, `agent:<name>`. A new convention becomes real the way
+everything here does — by a working skill using it.
+
+## The adapter seat (a platform)
 
 `adapter.mjs` default-exports one object. Required:
 
@@ -51,21 +99,66 @@ Optional, and simply absent elsewhere:
   anonymous one — the day the two seats judge a body differently is the day
   one of them starts lying.
 
+## The page seat (a dashboard screen)
+
+`page.mjs` default-exports:
+
+```js
+export default {
+  path: "/board",          // one lowercase segment; core paths are refused
+  title: "Board",          // the nav label and the <title>
+  nav: true,               // default true; false keeps it off the nav
+  render: (ctx) => "...",  // the page body as HTML; ctx = { dir }
+};
+```
+
+The body renders inside the dashboard chrome — header, nav, job strip, the
+`default-src 'none'` CSP. Your render runs on the server and may import
+anything in `lib/` to read the store; a render that throws shows its failure
+on the page instead of taking the dashboard down. There is no client-side
+framework to learn because there is no client-side framework.
+
+## The agent seat (a colleague for the strategist)
+
+`agent.mjs` default-exports, in bare Node — skills carry no dependencies:
+
+```js
+export default {
+  name: "seo-auditor",
+  description: "When to hand this colleague a task. The strategist reads this.",
+  prompt: "You are ... (the subagent's system prompt)",
+  tools: [{                       // optional
+    name: "check_page",
+    description: "…",
+    schema: { type: "object", properties: { url: { type: "string" } } },
+    run: async ({ url }, { dir }) => "a string the model reads",
+  }],
+};
+```
+
+The strategist (installed with `npm run brain`) seats it as a Deep Agents
+subagent and can delegate to it mid-conversation. Everything it does inherits
+the house law: it drafts, it proposes, it never submits — there is no code in
+this repo that posts, so there is nothing for a tool to reach.
+
 ## What a SKILL.md is for
 
 The prose half is not decoration. The judge and the writer are told the norms
-of the place they are judging and writing for; an agent driving the CLI reads
-the same file to learn what the platform tolerates. Put in it: what the
-platform is, what its communities punish, the measured facts behind your
-`gapMs` and refusals, and what "being a good participant" means there. Dated
-measurements, like everything else in this repo — a number without a date is a
-guess wearing a suit.
+of the place they are judging and writing for; the strategist reads every
+ACTIVE skill's file natively; an agent driving the CLI learns what the
+platform tolerates from the same bytes. Put in it: what this is, what its
+communities punish, the measured facts behind your `gapMs` and refusals, and
+what "being a good participant" means there. Dated measurements, like
+everything else in this repo — a number without a date is a guess wearing a
+suit.
 
 ## The rules that keep this honest
 
-`lib/` never imports from `skills/` — `lib/platform.mjs` is the one door. A
-skill may import from `lib/`. If your platform needs a core change, that is a
-contract gap: open it as one, don't reach around the seam.
+`lib/` never executes skill code except through a named door — the adapter
+door (`lib/platform.mjs`), the page door (`bin/serve.mjs`), the agent door
+(`agent/strategist.mjs`). A skill may import from `lib/`. If your skill needs
+a core change, that is a contract gap: open it as one, don't reach around the
+seam.
 
 **A skill ships its refusals or it ships nothing.** The refusals are not a
 compliance garnish, they are the product's position: an SEO skill refuses
@@ -76,8 +169,8 @@ market now *advertises* "never auto-posts"; the difference this repo defends
 is refusals that are enforced in code and quotable back to the sentence that
 caused them.
 
-This contract is v0 and grows by **extraction** — when the second real
-platform lands, whatever it proves generic gets pulled up here, and nothing
-gets added because it might someday be needed. Reddit is deliberately the only
-one until it is mastered; a tool that half-reads five platforms is worse than
-one that reads one properly.
+This contract grows by **extraction** — when a real skill proves something
+generic, it gets pulled up here, and nothing gets added because it might
+someday be needed. Reddit is deliberately the only built-in platform until it
+is mastered; a tool that half-reads five platforms is worse than one that
+reads one properly.
