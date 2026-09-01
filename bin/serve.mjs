@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // The dashboard — every verb this product has, reachable from a browser.
 //
-// It used to be a reader: seven views over .earshot/ plus two writes. The CLI
+// It used to be a reader: seven views over .mq/ plus two writes. The CLI
 // did the work and the browser watched. That is a defensible shape for a tool
 // and a bad one for a product, because the first thing it asks a new person to
 // do is leave it and go and type something.
@@ -24,7 +24,7 @@ import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { store } from "../lib/store.mjs";
+import { store, dataDir } from "../lib/store.mjs";
 import { history, STATES } from "../lib/verdict.mjs";
 import { standing, readiness, burst, mix, PER_ROOM_24H, OVERALL_24H, CQS_NOTE } from "../lib/ready.mjs";
 import { sidebarUrl, roomFile } from "../lib/rules.mjs";
@@ -39,17 +39,17 @@ import { tokens, issueToken, revokeToken } from "../lib/feed.mjs";
 import { loadPlatforms } from "../lib/platform.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const ES = join(ROOT, "bin", "es.mjs");
-const DIR = process.env.EARSHOT_DIR || ".earshot";
+const ES = join(ROOT, "bin", "mq.mjs");
+const DIR = dataDir();
 // Platform skills — the store resolves rooms through the registry.
 await loadPlatforms(DIR);
 const argv = process.argv.slice(2);
 const PORT = argv.includes("--port") ? Number(argv[argv.indexOf("--port") + 1]) : 8787;
-if (!existsSync(DIR)) { console.error(`earshot: no ${DIR}/ here — run \`es init\` first`); process.exit(1); }
+if (!existsSync(DIR)) { console.error(`Messaging Quest: no ${DIR}/ here — run \`mq init\` first`); process.exit(1); }
 const S = store(DIR, (m) => { throw new Error(m); });
 const J = jobStore(DIR);
 
-// An .earshot/ made by an older build has no memory files. Grow them on boot
+// An .mq/ made by an older build has no memory files. Grow them on boot
 // rather than making the first page load a migration the user has to notice.
 seedMissing(DIR);
 
@@ -102,7 +102,7 @@ const pager = (base, at, pages) =>
  * Run the CLI and await it, inside a job that is already running.
  *
  * This is how the model-driven verbs reuse the CLI rather than reimplementing
- * it: the writer produces text, and then `es draft <id> --save` runs the two
+ * it: the writer produces text, and then `mq draft <id> --save` runs the two
  * refusals over it, exactly as it would for a human's own words. One
  * implementation of the guards, not two.
  */
@@ -110,7 +110,7 @@ const runEs = (verb, args = [], { stdin = null, ctl } = {}) =>
   new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [ES, verb, ...args], {
       cwd: process.cwd(),
-      env: { ...process.env, EARSHOT_DIR: DIR },
+      env: { ...process.env, MQ_DIR: DIR },
       stdio: ["pipe", "pipe", "pipe"],
     });
     let out = "";
@@ -125,7 +125,7 @@ const runEs = (verb, args = [], { stdin = null, ctl } = {}) =>
   });
 
 /** The same, but the output is the answer and is not echoed into the log —
- *  `es draft <id>` prints a whole prompt and the job log is not where it goes. */
+ *  `mq draft <id>` prints a whole prompt and the job log is not where it goes. */
 const capture = (verb, args = []) => runEs(verb, args, { ctl: null });
 
 /* ------------------------------------------------------------------- views */
@@ -138,10 +138,10 @@ views["/"] = () => {
   const items = S.items(), checks = S.checksById();
   if (!items.size)
     return render("/", "Standing", empty(
-      "Nothing stored yet — earshot has not read your profile.",
+      "Nothing stored yet — Messaging Quest has not read your profile.",
       acct()?.name
         ? runBtn("sync", "Read my profile", { primary: true })
-        : `<a class="btn primary" href="/setup">Set up earshot</a>`,
+        : `<a class="btn primary" href="/setup">Set up Messaging Quest</a>`,
     ));
 
   const tally = new Map();
@@ -273,7 +273,7 @@ ${ready.state === "not ready" ? `<div class="note"><b>${esc(ready.why)}</b></div
       ? `<p class="sub">Nothing written for this one yet.</p>
          <div class="actions">${runBtn("draft", "Write a draft", { args: [it.id], primary: true })}</div>`
       : `<p class="sub">Add an OpenRouter key on <a href="/settings">Settings</a> and this writes itself.
-         Without one: <code>es draft ${esc(it.id)}</code> prints the prompt for whatever model you already pay for.</p>`}
+         Without one: <code>mq draft ${esc(it.id)}</code> prints the prompt for whatever model you already pay for.</p>`}
 </div>
 <div class="actions">
   <a class="btn primary" data-open href="${esc(it.url)}" target="_blank" rel="noreferrer noopener">Open it on Reddit</a>
@@ -632,7 +632,7 @@ against their own <code>rule.md</code>, on their own machine, with their own key
   ${flash.token ? `<div class="note"><b>New token for &ldquo;${esc(flash.label ?? "client")}&rdquo;. Copy it now — it is not stored in the clear and cannot be shown again.</b>
     <div class="log" style="margin-top:10px">${esc(flash.token)}</div>
     <p class="sub" style="font-size:13px;margin:10px 0 0">On the client:
-      <code>node bin/es.mjs pull https://your-tunnel --token &lt;that&gt;</code></p></div>` : ""}
+      <code>node bin/mq.mjs pull https://your-tunnel --token &lt;that&gt;</code></p></div>` : ""}
   ${tokens(DIR).length ? `<table><thead><tr><th>Client</th><th>Issued</th><th></th></tr></thead><tbody>
   ${tokens(DIR).map((t) => `<tr><td><b>${esc(t.label)}</b></td><td class="muted">${esc(ago(t.added))}</td>
     <td class="right"><form method="POST" action="/settings/token/revoke">
@@ -647,7 +647,7 @@ against their own <code>rule.md</code>, on their own machine, with their own key
 </div>
 
 <h2>Account</h2>
-<p class="sub">Whose comments earshot reads back as a stranger. Only your own account is ever read,
+<p class="sub">Whose comments Messaging Quest reads back as a stranger. Only your own account is ever read,
 and nothing is ever posted.</p>
 <div class="card">
   <form method="POST" action="/api/run">
@@ -685,7 +685,7 @@ views["/setup"] = (url) => {
   if (!a?.name) return render("/setup", "Set up", `
 ${steps(SETUP_STEPS, 0)}
 <h1>Which account is yours?</h1>
-<p>earshot reads your own public profile the way a logged-out stranger reads it, so the first thing it needs
+<p>Messaging Quest reads your own public profile the way a logged-out stranger reads it, so the first thing it needs
 is the name to read. Nothing is posted, nothing is sent, and only your own account is read.</p>
 <div class="card"><form method="POST" action="/api/run">
   <input type="hidden" name="verb" value="me">
@@ -831,7 +831,7 @@ const startAgentic = (verb, args) => {
       const rule = readFileSync(S.F("rule.md"), "utf8");
       const verdicts = await judgeItems(DIR, items, rule, ctl);
       if (!verdicts.length) { ctl.log("no verdicts came back — nothing written"); return; }
-      // Hand them to the CLI rather than appending here: `es judge` is what
+      // Hand them to the CLI rather than appending here: `mq judge` is what
       // stamps the rubric hash, clears pending and settles the probe, and two
       // implementations of that is how a queue starts disagreeing with itself.
       ctl.log(`\nwriting ${verdicts.length} verdicts`);
@@ -844,7 +844,7 @@ const startAgentic = (verb, args) => {
     if (!id) return { error: "no item" };
     return J.run("draft", async (ctl) => {
       ctl.log(`assembling the prompt for ${id}`);
-      // `es draft <id>` already builds the whole thing — the post, the measured
+      // `mq draft <id>` already builds the whole thing — the post, the measured
       // voice, the community's risks, the three-moves instruction. It printed
       // it for a human to paste. This sends it.
       const prompt = await capture("draft", [id]);
@@ -1401,11 +1401,11 @@ export function serve(port = PORT) {
     server.listen(port, "127.0.0.1", () => {
       // The port the OS actually granted, not the one asked for — `--port 0`
       // means "any free one", and the log line is how a caller learns which.
-      console.log(`earshot  http://127.0.0.1:${server.address().port}`);
+      console.log(`Messaging Quest  http://127.0.0.1:${server.address().port}`);
       // Children inherit this, which is how a tick spawned by a button knows a
       // relay broker exists. A tick run from a bare terminal has no broker and
       // stays honestly anonymous — that asymmetry is the design, not a gap.
-      process.env.EARSHOT_RELAY = `http://127.0.0.1:${server.address().port}`;
+      process.env.MQ_RELAY = `http://127.0.0.1:${server.address().port}`;
       console.log(`reading ${DIR}/ — localhost only, nothing leaves this machine.`);
       console.log(hasKey(DIR) ? `OpenRouter key found — the scout, judge and writer are available.` : `no OpenRouter key — add one at /settings to turn on the scout, judge and writer.`);
       console.log(`ctrl-c to stop.`);

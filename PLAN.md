@@ -1,6 +1,6 @@
 # The plan
 
-earshot wants to be the open engine under SaaS marketing — the way OpenClaw
+Messaging Quest wants to be the open engine under SaaS marketing — the way OpenClaw
 became the standard for local assistants — and this file records what that
 means in decisions, so the next contributor argues with reasons rather than
 with archaeology. The market picture behind the newest decisions is measured,
@@ -40,7 +40,7 @@ heart       lib/ — the store, the pacing governor, the probe economics, the
             Knows no platform. Zero dependencies, non-arguable.
 skills      skills/<id>/ — a platform is a SKILL.md + adapter.mjs. Reddit is
             the first and deliberately the only one. Local skills load from
-            .earshot/skills/ without forking. Contract: skills/README.md.
+            .mq/skills/ without forking. Contract: skills/README.md.
 brain       agent/ — the strategist, on Deep Agents. The ONE directory that
             carries dependencies, behind one lazy import; everything else
             runs without it being installed (`npm run brain` turns it on).
@@ -68,12 +68,12 @@ install command between the two.
 ## Decisions of record
 
 **Not built on OpenClaw.** OpenClaw is an assistant *host*, not a library —
-the correct relationship is that an OpenClaw agent drives earshot, which
-`integrations/openclaw/SKILL.md` and the MCP server both provide. What earshot
+the correct relationship is that an OpenClaw agent drives Messaging Quest, which
+`integrations/openclaw/SKILL.md` and the MCP server both provide. What Messaging Quest
 takes from OpenClaw is the *pattern* that made it a standard: local-first, one
 job owned completely, markdown memory, skills as folders, nothing to install.
 
-**Not built on Hermes.** A model family plus a harness tuned for it. earshot
+**Not built on Hermes.** A model family plus a harness tuned for it. Messaging Quest
 is model-agnostic through OpenRouter on principle — any model can occupy a
 seat by id, including a Hermes model. The chassis must not belong to a vendor.
 
@@ -144,7 +144,7 @@ the moat — Reveddit does it free. "Never auto-posts" is now advertised by
 half a 30-tool category, so etiquette *stated* is worth nothing. Etiquette
 *enforced* — rules parsed, the forbidding sentence quoted back, limits that
 actually stop the click — is still shipped by nobody else, and it must be
-demonstrable: refusal receipts and `es ready` are product surface, built to
+demonstrable: refusal receipts and `mq ready` are product surface, built to
 be screenshotted. The moat is user-owned memory + enforced refusals + the
 open engine behind agent surfaces.
 
@@ -191,7 +191,7 @@ may resell it as a managed service, which is exactly the twin's moat.
 - 0.1–0.2: listener, waiting-for-you, find, drafts, the gate; dashboard;
   models on OpenRouter with measured defaults; hub + pull federation.
 - 0.3.0: zero-dep model layer; platforms-as-skills with local override dir;
-  `es platforms`; MCP server (7 tools, 4 memory resources); OpenClaw skill;
+  `mq platforms`; MCP server (7 tools, 4 memory resources); OpenClaw skill;
   LICENSE (canonical ELv2); loader + schema-check tests; `--port 0`.
 - 2026-08-31: market check researched and recorded
   (research/market-2026-08-31.md).

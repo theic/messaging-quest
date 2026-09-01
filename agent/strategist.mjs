@@ -1,4 +1,4 @@
-// The strategist — earshot's brain, on Deep Agents.
+// The strategist — Messaging Quest's brain, on Deep Agents.
 //
 // This is the one directory in the repo that carries dependencies, and the
 // decision is recorded in PLAN.md (2026-09-01): the re-adoption triggers
@@ -42,7 +42,7 @@ import { PER_ROOM_24H, OVERALL_24H } from "../lib/ready.mjs";
 import { proposable, patchStash } from "../lib/cards.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const ES = join(ROOT, "bin", "es.mjs");
+const ES = join(ROOT, "bin", "mq.mjs");
 
 /* ------------------------------------------------------------------ verbs */
 
@@ -52,7 +52,7 @@ const ES = join(ROOT, "bin", "es.mjs");
 const es = (dir, args, stdin = null) =>
   new Promise((resolvePromise) => {
     const child = execFile(process.execPath, [ES, ...args],
-      { env: { ...process.env, EARSHOT_DIR: dir }, timeout: 120_000, maxBuffer: 4 * 1024 * 1024 },
+      { env: { ...process.env, MQ_DIR: dir }, timeout: 120_000, maxBuffer: 4 * 1024 * 1024 },
       (err, stdout, stderr) => resolvePromise(`${stdout}${stderr ? `\n${stderr}` : ""}`.trim() || (err ? String(err.message) : "done")));
     if (stdin !== null) child.stdin.end(stdin);
   });
@@ -131,11 +131,11 @@ const makeTools = (dir) => [
   }),
   tool(async () => {
     // The same deck the panel renders — the strategist should never guess
-    // what the operator is being shown. EARSHOT_RELAY is the dashboard's own
+    // what the operator is being shown. MQ_RELAY is the dashboard's own
     // address (set at listen), and this process is the dashboard, so the
     // fetch is a loopback to ourselves; absent (a bare test harness), the
     // honest answer is that there is no deck to read.
-    const base = process.env.EARSHOT_RELAY;
+    const base = process.env.MQ_RELAY;
     if (!base) return "no deck here — the dashboard is not running";
     try {
       const res = await fetch(`${base}/api/cards`, { signal: AbortSignal.timeout(5000) });
@@ -235,7 +235,7 @@ export async function strategist(dir, message, thread = "panel") {
   const agent = agentFor(dir);
   const result = await agent.invoke(
     { messages: [{ role: "user", content: String(message).slice(0, 8000) }] },
-    { configurable: { thread_id: `earshot:${thread}` }, recursionLimit: 40 },
+    { configurable: { thread_id: `mq:${thread}` }, recursionLimit: 40 },
   );
   const last = result.messages?.[result.messages.length - 1];
   return { reply: contentText(last?.content) };

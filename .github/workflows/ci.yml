@@ -10,7 +10,7 @@
 # `brain` is the one directory that carries dependencies (agent/, behind
 # `npm run brain`). It installs the lockfile and imports the strategist —
 # which proves the LangChain tree still resolves and parses, with no API key
-# and no .earshot/ anywhere. The seats are constructed lazily, so a bare
+# and no .mq/ anywhere. The seats are constructed lazily, so a bare
 # import is safe by design, and this job keeps it that way.
 
 name: tests

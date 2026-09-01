@@ -1,14 +1,14 @@
 ---
-name: earshot
-description: Triage the operator's earshot queue — who is waiting for an answer on Reddit, judge new finds against their rule.md, draft replies in their measured voice. Local store, nothing posted, a human sends everything.
+name: messaging-quest
+description: Triage the operator's Messaging Quest queue — who is waiting for an answer on Reddit, judge new finds against their rule.md, draft replies in their measured voice. Local store, nothing posted, a human sends everything.
 ---
 
-# earshot
+# Messaging Quest
 
-earshot is a local tool that watches Reddit two ways: what happened to the
+Messaging Quest is a local tool that watches Reddit two ways: what happened to the
 things the operator already said (visibility, as a logged-out stranger sees
 it), and who is asking for the thing they sell. Everything lives in
-`.earshot/` in its project directory. **Nothing in it can post, vote, or
+`.mq/` in its project directory. **Nothing in it can post, vote, or
 message — and neither do you. You draft; the operator sends.**
 
 ## How to drive it
@@ -16,25 +16,25 @@ message — and neither do you. You draft; the operator sends.**
 Prefer MCP if this agent speaks it — same seven verbs, typed:
 
 ```
-node <earshot>/bin/mcp.mjs        # run with cwd = the project directory
+node <Messaging Quest>/bin/mcp.mjs        # run with cwd = the project directory
 ```
 
 Otherwise the CLI (always run from the project directory, or set
-`EARSHOT_DIR`):
+`MQ_DIR`):
 
 ```
-node bin/es.mjs status            what became of the operator's own comments
-node bin/es.mjs queue --json      people already judged worth answering
-node bin/es.mjs pending           items needing a verdict, numbered JSON
-node bin/es.mjs judge             stdin: [{n, fit, why}] — you are the judge
-node bin/es.mjs draft <id>        the material for answering one person
-node bin/es.mjs draft <id> --save stdin: your reply — saved, refusals run
-node bin/es.mjs mark <id> sent|skip
+node bin/mq.mjs status            what became of the operator's own comments
+node bin/mq.mjs queue --json      people already judged worth answering
+node bin/mq.mjs pending           items needing a verdict, numbered JSON
+node bin/mq.mjs judge             stdin: [{n, fit, why}] — you are the judge
+node bin/mq.mjs draft <id>        the material for answering one person
+node bin/mq.mjs draft <id> --save stdin: your reply — saved, refusals run
+node bin/mq.mjs mark <id> sent|skip
 ```
 
 ## The rules you inherit
 
-1. **Judge only against `.earshot/rule.md`.** Not your own taste. When the
+1. **Judge only against `.mq/rule.md`.** Not your own taste. When the
    rule cannot tell, it says to answer yes; unjudged is a state, not a no.
 2. **Draft only from the material `draft` gives you.** It carries the
    operator's measured voice rules and `me.md` — what they can honestly claim.

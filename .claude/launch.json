@@ -2,9 +2,9 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "earshot",
+      "name": "mq",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["bin/es.mjs", "serve"],
+      "runtimeArgs": ["bin/mq.mjs", "serve"],
       "port": 8787,
       "url": "http://127.0.0.1:8787"
     }

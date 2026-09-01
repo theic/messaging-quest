@@ -10,7 +10,7 @@ skills/<id>/
 ```
 
 Two places are searched. Built-in skills ship in `skills/`; yours go in
-`.earshot/skills/` and load without touching the repo. On an id collision,
+`.mq/skills/` and load without touching the repo. On an id collision,
 yours wins — that is the override mechanism, there is no other.
 
 The engine — the store, the pacing loop, the probe economics, the judge, the

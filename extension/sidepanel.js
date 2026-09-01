@@ -65,8 +65,8 @@ function showDown() {
   current = null;
   renderCard(cardHost, {
     id: "panel.down", kind: "panel.down",
-    question: "The earshot server is not running.",
-    help: `In the folder that holds .earshot/:\n\n  npm run serve\n\nThe panel talks only to ${base} — your own machine, nothing else.`,
+    question: "The Messaging Quest server is not running.",
+    help: `In the folder that holds .mq/:\n\n  npm run serve\n\nThe panel talks only to ${base} — your own machine, nothing else.`,
     primary: { id: "retry", label: "Try again" },
   }, () => load());
 }
@@ -257,7 +257,7 @@ savedBase.then(({ base: saved }) => {
   a.textContent = "change";
   a.addEventListener("click", async (e) => {
     e.preventDefault();
-    const next = prompt("earshot server address", base);
+    const next = prompt("Messaging Quest server address", base);
     if (!next) return;
     base = next.replace(/\/$/, "");
     if (ext) await ext.storage.local.set({ base });

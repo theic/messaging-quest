@@ -26,13 +26,13 @@
 
 import { existsSync } from "node:fs";
 import { createServer } from "node:http";
-import { store } from "../lib/store.mjs";
+import { store, dataDir } from "../lib/store.mjs";
 import { feedSince, validToken } from "../lib/feed.mjs";
 
-const DIR = process.env.EARSHOT_DIR || ".earshot";
+const DIR = dataDir();
 const argv = process.argv.slice(2);
 const PORT = argv.includes("--port") ? Number(argv[argv.indexOf("--port") + 1]) : 8788;
-if (!existsSync(DIR)) { console.error(`earshot hub: no ${DIR}/ here — run \`es init\` first`); process.exit(1); }
+if (!existsSync(DIR)) { console.error(`mq hub: no ${DIR}/ here — run \`mq init\` first`); process.exit(1); }
 const S = store(DIR, (m) => { throw new Error(m); });
 
 const json = (res, body, status = 200) =>
@@ -40,7 +40,7 @@ const json = (res, body, status = 200) =>
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
     // Nothing here is meant to be read by a page in a browser, so no CORS
-    // header is sent and none should be added: a client is `es pull`, which is
+    // header is sent and none should be added: a client is `mq pull`, which is
     // not subject to the same-origin policy and does not need permission.
     "x-content-type-options": "nosniff",
   }).end(JSON.stringify(body));
@@ -75,7 +75,7 @@ const server = createServer((req, res) => {
 });
 
 server.listen(PORT, "127.0.0.1", () => {
-  console.log(`earshot hub  http://127.0.0.1:${PORT}/feed`);
+  console.log(`mq hub  http://127.0.0.1:${PORT}/feed`);
   console.log(`serving found.jsonl only — public posts, nothing about you or your clients.`);
   console.log(`point a tunnel at this port. Never tunnel to the dashboard on 8787.`);
   console.log(`ctrl-c to stop.`);
