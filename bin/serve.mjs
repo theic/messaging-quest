@@ -19,7 +19,7 @@
 //
 //   node bin/serve.mjs [--port 8787]
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { join, dirname } from "node:path";
@@ -28,7 +28,8 @@ import { store } from "../lib/store.mjs";
 import { history, STATES } from "../lib/verdict.mjs";
 import { standing, readiness, burst, mix, PER_ROOM_24H, OVERALL_24H, CQS_NOTE } from "../lib/ready.mjs";
 import { sidebarUrl, roomFile } from "../lib/rules.mjs";
-import { mergeVoice, voiceRules, voiceSummary } from "../lib/voice.mjs";
+import { mergeVoice, voiceRules, voiceSummary, applyVoiceAnswers, VOICE_UNSURE } from "../lib/voice.mjs";
+import { nextCards, readStash, patchStash } from "../lib/cards.mjs";
 import { jobStore } from "../lib/jobs.mjs";
 import { MEMORY, readMemory, readOne, writeMemory, seedMissing, memoryProgress } from "../lib/memory.mjs";
 import { MODELS, ROLES, chosen, choose, readKey, writeKey, hasKey, keySource, judgeEstimate, money } from "../lib/models.mjs";
@@ -956,6 +957,231 @@ const writes = {
   "/api/cancel": (form) => { J.cancel(String(form.get("id") ?? "")); return null; },
 };
 
+/* --------------------------------------------------------- cards + agent */
+
+// The deck: the same state the dashboard's views render, folded into "the one
+// next action" (lib/cards.mjs). The extension's side panel lives on these two
+// endpoints; the dashboard and a future relay read the same JSON. JSON-only
+// POSTs on purpose: a cross-origin page cannot send application/json without a
+// CORS preflight, and nothing here answers preflights — so the browser's own
+// rules keep a stranger's tab from pressing these buttons, the same way
+// same-origin forms protect the HTML writes above.
+
+const startScout = (siteUrl) => {
+  const started = J.run("scout", async (ctl) => {
+    const { scoutSite } = await import("../lib/agents.mjs");
+    return await scoutSite(DIR, siteUrl, ctl);
+  }, { label: "Reading your site" });
+  if (!started.error) patchStash(DIR, { url: siteUrl, scoutJob: started.id });
+  return started;
+};
+
+function cardSnapshot() {
+  const stash = readStash(DIR);
+  const scoutJob = stash.scoutJob ? J.get(stash.scoutJob) : null;
+  const scout = scoutJob
+    ? {
+        status: scoutJob.status === "running" ? "running" : scoutJob.status === "error" ? "error" : "ready",
+        url: stash.url ?? null,
+        error: scoutJob.error ?? null,
+        proposal: scoutJob.status === "ok" ? J.result(stash.scoutJob) : null,
+      }
+    : { status: "none", url: stash.url ?? null, error: null, proposal: null };
+  // A scout that "finished" with nothing to show is a failure wearing ok's
+  // clothes — the retry card is the honest one to deal.
+  if (scout.status === "ready" && !scout.proposal) scout.status = "error";
+
+  const sources = S.sources();
+  const rooms = sources.map((s) => ({ place: s.place, state: S.roomState(s.place).state }));
+
+  // Probe economics for the room being walked through onboarding.
+  let probe = { running: J.busy("probe"), last: null, fitRate: null };
+  if (stash.probe?.place) {
+    const rows = S.readJsonl("probes.jsonl").filter((r) => r.place === stash.probe.place);
+    probe.last = rows[rows.length - 1] ?? null;
+    const tag = `${stash.probe.place}:${stash.probe.q ?? "new"}`;
+    const verdicts = S.verdicts();
+    const judged = [...S.found().values()].filter((f) => f.probe === tag && verdicts.has(f.id));
+    if (judged.length) probe.fitRate = judged.filter((f) => verdicts.get(f.id).fit).length / judged.length;
+  }
+
+  // The queue with everything the reply card needs to be a control panel.
+  const drafts = S.drafts();
+  const stand = standing([...S.items().values()], S.checksById());
+  const sent = S.sentLog();
+  const queue = queueRows().map((it) => {
+    const draft = drafts.filter((d) => d.id === it.id).pop() ?? null;
+    const blocked = burst(sent, it.place);
+    const ready = readiness(stand.get(it.place) ?? { place: it.place, comments: 0, visible: 0 }, S.roomState(it.place));
+    return { ...it, draft, blockedWhy: blocked?.why ?? null, readyState: ready.state, readyWhy: ready.why ?? null };
+  });
+
+  const rawVoice = existsSync(S.F("voice.json")) ? JSON.parse(readFileSync(S.F("voice.json"), "utf8")) : null;
+
+  return {
+    stash,
+    account: acct(),
+    hasKey: hasKey(DIR),
+    memory: memoryProgress(DIR),
+    voice: mergeVoice(rawVoice?.measured ?? null, rawVoice?.user ?? null),
+    scout,
+    probe,
+    sources,
+    rooms,
+    pendingCount: S.pending().length,
+    queue,
+    itemCount: S.items().size,
+    contactedCount: S.contacted().size,
+    syncRunning: J.busy("sync"),
+  };
+}
+
+/**
+ * One act = one card answered. `action` is the pressed BUTTON'S ID — "save",
+ * "skip", "posted" — never its slot. The watch card is why: whether "Watch it"
+ * is the primary or the fallback depends on the probe's numbers, and a handler
+ * that dispatched on "primary" would have to re-derive the numbers to know what
+ * was pressed. The ids already say it.
+ *
+ * Returns {ok} or {error}; the client re-fetches the deck either way, because
+ * the deck is the truth about what comes next.
+ */
+function actCard({ card, action, choice, text }) {
+  const id = String(card ?? "");
+  const act = String(action ?? "");
+  const t = String(text ?? "").trim();
+  const picked = String(choice ?? "");
+  const spawn = (verb, args = []) => { J.spawn(verb, args, { label: SPAWNABLE[verb] }); return { ok: true }; };
+
+  if (id === "onboard.account") {
+    if (act === "skip") { patchStash(DIR, { account_skipped: true }); return { ok: true }; }
+    if (!t) return { error: "no username" };
+    return spawn("me", [t.replace(/^u\//, "")]);
+  }
+
+  if (id === "onboard.url") {
+    if (act === "manual") { patchStash(DIR, { manual: true }); return { ok: true }; }
+    if (!/^https?:\/\//i.test(t)) return { error: "paste a full address, https://…" };
+    if (hasKey(DIR)) return startScout(t).error ? { error: "the scout is already running" } : { ok: true };
+    patchStash(DIR, { url: t });
+    return { ok: true };
+  }
+
+  if (id === "onboard.key") {
+    if (act === "manual") { patchStash(DIR, { manual: true, url: null }); return { ok: true }; }
+    try { writeKey(DIR, t); } catch (e) { return { error: e.message }; }
+    const site = readStash(DIR).url;
+    return site && startScout(site).error ? { error: "the scout is already running" } : { ok: true };
+  }
+
+  if (id === "onboard.scout_failed") {
+    if (act === "manual") { patchStash(DIR, { manual: true, scoutJob: null }); return { ok: true }; }
+    const site = readStash(DIR).url;
+    if (!site) { patchStash(DIR, { scoutJob: null }); return { ok: true }; }
+    return startScout(site).error ? { error: "the scout is already running" } : { ok: true };
+  }
+
+  if (id.startsWith("onboard.voice.")) {
+    const key = id.slice("onboard.voice.".length);
+    if (!picked) return { error: "pick one — \"not sure\" is a real answer" };
+    const value = picked === "unsure" ? VOICE_UNSURE : picked;
+    const p = S.F("voice.json");
+    const raw = existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : {};
+    const user = applyVoiceAnswers(raw.user ?? {}, { [key]: value });
+    writeFileSync(p, JSON.stringify({ ...raw, user }, null, 2));
+    const done = new Set(readStash(DIR).voice_done ?? []); done.add(key);
+    patchStash(DIR, { voice_done: [...done] });
+    return { ok: true };
+  }
+
+  if (id.startsWith("onboard.file.")) {
+    const file = id.slice("onboard.file.".length);
+    if (!["project.md", "icp.md", "rule.md"].includes(file)) return { error: "not a setup file" };
+    if (!t) return { error: "an empty file is not an answer here" };
+    writeMemory(DIR, file, t);
+    return { ok: true };
+  }
+
+  if (id === "onboard.manual") {
+    if (act === "scout") { patchStash(DIR, { manual: null }); return { ok: true }; }
+    return { ok: true }; // "I filled them" — the deck re-checks, which is the answer
+  }
+
+  if (id === "onboard.room") {
+    const place = t.replace(/^r\//i, "").replace(/[^\w-]/g, "");
+    if (!place) return { error: "name a subreddit" };
+    patchStash(DIR, { probe: { place } });
+    return { ok: true };
+  }
+
+  if (id === "onboard.phrase") {
+    const place = readStash(DIR).probe?.place;
+    if (!place) return { error: "no room picked" };
+    const q = act === "new" ? null : t || null;
+    patchStash(DIR, { probe: { place, q, fired: true } });
+    return spawn("probe", q ? [place, "--q", q] : [place]);
+  }
+
+  if (id === "onboard.watch") {
+    const place = readStash(DIR).probe?.place;
+    patchStash(DIR, { probe: null });
+    if (act === "watch" && place) return spawn("watch", [place]);
+    return { ok: true }; // "another" — back to the room card
+  }
+
+  if (id === "onboard.empty_probe") { patchStash(DIR, { probe: null }); return { ok: true }; }
+
+  if (id === "onboard.welcome") {
+    patchStash(DIR, { welcomed: true });
+    return act === "tick" ? spawn("tick") : { ok: true };
+  }
+
+  if (id.startsWith("room.rules.")) {
+    const place = id.slice("room.rules.".length).replace(/[^\w-]/g, "");
+    if (!["yes", "no"].includes(picked)) return { error: "pick one" };
+    const existing = existsSync(S.roomPath(place)) ? readFileSync(S.roomPath(place), "utf8") : roomFile(place, null);
+    S.writeRoom(place, existing.replace(/^promotion_allowed:.*$/mi, `promotion_allowed: ${picked}`));
+    return { ok: true };
+  }
+
+  if (id === "work.judge") {
+    if (act === "judge") startAgentic("judge", []);
+    return { ok: true };
+  }
+
+  if (id.startsWith("work.reply.") || id.startsWith("work.draft.")) {
+    const itemId = id.replace(/^work\.(reply|draft)\./, "");
+    const it = S.found().get(itemId);
+    if (!it) return { error: "that person is no longer in the queue" };
+    if (act === "posted") {
+      // The gate is checked HERE, not only on the card: a stale panel must not
+      // be able to record a send the governor already said no to.
+      const blocked = burst(S.sentLog(), it.place);
+      if (blocked) return { error: blocked.why };
+      S.append("marks.jsonl", { id: itemId, mark: "sent", at: new Date().toISOString(), via: "panel" });
+      if (it.author) S.append("contacted.jsonl", { author: it.author, id: itemId, at: new Date().toISOString() });
+      return { ok: true };
+    }
+    if (act === "skip") {
+      S.append("marks.jsonl", { id: itemId, mark: "skip", at: new Date().toISOString(), via: "panel" });
+      return { ok: true };
+    }
+    if (act === "draft") { startAgentic("draft", [itemId]); return { ok: true }; }
+    return { ok: true }; // "insert" is client-side; nothing to record until "posted"
+  }
+
+  if (id === "work.sync") {
+    if (act === "later") { patchStash(DIR, { sync_later: true }); return { ok: true }; }
+    return spawn("sync");
+  }
+
+  if (id === "work.me") { patchStash(DIR, { me_later: true }); return { ok: true }; }
+
+  if (id === "work.quiet") { return act === "tick" ? spawn("tick") : { ok: true }; }
+
+  return { ok: true }; // wait cards and anything shown-only: acting is a no-op
+}
+
 /* ------------------------------------------------------------------ server */
 
 // same-origin, not no-referrer: the action buttons need to know which page they
@@ -976,8 +1202,67 @@ const backTo = (form, req) => {
   return "/";
 };
 
+const JSON_HEAD = { "content-type": "application/json", "cache-control": "no-store" };
+
+/** Read a JSON body, refusing anything that is not declared as one. The
+ *  declaration is the CSRF boundary: a cross-origin page cannot send
+ *  application/json without a preflight, and nothing here answers preflights. */
+const jsonBody = (req) =>
+  new Promise((resolve, reject) => {
+    if (!/^application\/json/i.test(req.headers["content-type"] ?? "")) return reject(new Error("json only"));
+    let body = "";
+    req.on("data", (c) => { body += c; if (body.length > 2e6) req.destroy(); });
+    req.on("end", () => { try { resolve(JSON.parse(body || "{}")); } catch { reject(new Error("bad json")); } });
+  });
+
 const server = createServer((req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
+
+  /* The deck — what the extension's side panel lives on. */
+  if (url.pathname === "/api/cards" && req.method === "GET") {
+    try {
+      const cards = nextCards(cardSnapshot());
+      return res.writeHead(200, JSON_HEAD).end(JSON.stringify({ cards, jobs: J.running().map((j) => ({ label: j.label, note: j.note })) }));
+    } catch (e) {
+      console.error(e);
+      return res.writeHead(500, JSON_HEAD).end(JSON.stringify({ error: e.message }));
+    }
+  }
+
+  if (url.pathname === "/api/cards/act" && req.method === "POST") {
+    return jsonBody(req)
+      .then((body) => {
+        const out = actCard(body ?? {});
+        res.writeHead(out.error ? 400 : 200, JSON_HEAD).end(JSON.stringify(out));
+      })
+      .catch((e) => res.writeHead(400, JSON_HEAD).end(JSON.stringify({ error: e.message })));
+  }
+
+  /* The strategist — present only when agent/ has been installed. The engine
+   *  never depends on it; this route is the one seam. */
+  if (url.pathname === "/api/agent" && req.method === "POST") {
+    return jsonBody(req)
+      .then(async (body) => {
+        let strategist;
+        try {
+          ({ strategist } = await import("../agent/strategist.mjs"));
+        } catch (e) {
+          return res.writeHead(503, JSON_HEAD).end(JSON.stringify({
+            error: "the strategist is not installed",
+            how: "npm run brain   (installs agent/ — Deep Agents and the LangChain runtime; everything else works without it)",
+            detail: String(e.message ?? e).split("\n")[0],
+          }));
+        }
+        try {
+          const out = await strategist(DIR, String(body.message ?? ""), String(body.thread ?? "panel"));
+          res.writeHead(200, JSON_HEAD).end(JSON.stringify(out));
+        } catch (e) {
+          console.error(e);
+          res.writeHead(500, JSON_HEAD).end(JSON.stringify({ error: String(e.message ?? e).split("\n")[0] }));
+        }
+      })
+      .catch((e) => res.writeHead(400, JSON_HEAD).end(JSON.stringify({ error: e.message })));
+  }
 
   if (req.method === "POST" && writes[url.pathname]) {
     let body = "";
@@ -999,6 +1284,36 @@ const server = createServer((req, res) => {
       "cache-control": "no-cache",
       "content-security-policy": CSP,
     }).end(APP_JS);
+
+  /* The deck as a page: the extension's own panel files, served same-origin.
+   * One implementation of the card surface — the extension is where it earns
+   * its keep (it can type into Reddit's composer), and this is the same thing
+   * for a browser without the extension, and for looking at it on this
+   * machine. Static, from the repo's extension/ directory, nothing else. */
+  if (url.pathname === "/panel") return res.writeHead(302, { location: "/panel/" }).end();
+  if (url.pathname.startsWith("/panel/")) {
+    const PANEL = {
+      "": ["sidepanel.html", "text/html; charset=utf-8"],
+      "card.css": ["card.css", "text/css; charset=utf-8"],
+      "card.js": ["card.js", "text/javascript; charset=utf-8"],
+      "sidepanel.js": ["sidepanel.js", "text/javascript; charset=utf-8"],
+      "insert.js": ["insert.js", "text/javascript; charset=utf-8"],
+    };
+    const hit = PANEL[url.pathname.slice("/panel/".length)];
+    if (!hit) return res.writeHead(404, JSON_HEAD).end(JSON.stringify({ error: "not part of the panel" }));
+    try {
+      const body = readFileSync(join(ROOT, "extension", hit[0]));
+      return res.writeHead(200, {
+        "content-type": hit[1],
+        "cache-control": "no-cache",
+        // Its own CSP, not the dashboard's: the panel is scripted by design,
+        // but only by its own files, and it talks only to this origin.
+        "content-security-policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'",
+      }).end(body);
+    } catch {
+      return res.writeHead(404, JSON_HEAD).end(JSON.stringify({ error: "panel files missing" }));
+    }
+  }
 
   if (url.pathname === "/api/jobs.json")
     return res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" })

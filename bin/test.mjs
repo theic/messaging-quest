@@ -25,6 +25,7 @@ import { conforms } from "../lib/llm.mjs";
 import { loadPlatforms, platform, roomOf } from "../lib/platform.mjs";
 import { longestSharedRun, repeats, claims, inventedLinks, RUN_LIMIT } from "../lib/guards.mjs";
 import { standing, readiness, burst, mix } from "../lib/ready.mjs";
+import { nextCards, onboarded } from "../lib/cards.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ES = join(here, "es.mjs");
@@ -509,6 +510,128 @@ check("a missing field is named, with its path", conforms(V, { verdicts: [{ n: 1
 check("a wrong type is named, with both types", conforms(V, { verdicts: [{ n: "1", fit: true, why: "x" }] }),
   "$.verdicts[0].n should be a number, got string");
 check("prose where an array belongs is refused", conforms(V, { verdicts: "all fine" }), "$.verdicts should be an array, got string");
+
+/* ------------------------------------------------------------------ cards */
+
+// The deck decides what a person is asked to do next, so a wrong card is not a
+// rendering bug — it is the product giving bad advice. These pin the order.
+
+const snap = (over = {}) => ({
+  stash: {},
+  account: null,
+  hasKey: false,
+  memory: { done: 0, total: 4, files: [
+    { file: "rule.md", filled: false }, { file: "project.md", filled: false },
+    { file: "icp.md", filled: false }, { file: "me.md", filled: false }] },
+  voice: null,
+  scout: { status: "none", url: null, error: null, proposal: null },
+  probe: { running: false, last: null, fitRate: null },
+  sources: [],
+  rooms: [],
+  pendingCount: 0,
+  queue: [],
+  itemCount: 0,
+  contactedCount: 0,
+  syncRunning: false,
+  ...over,
+});
+const memDone = { done: 4, total: 4, files: [
+  { file: "rule.md", filled: true }, { file: "project.md", filled: true },
+  { file: "icp.md", filled: true }, { file: "me.md", filled: true }] };
+
+check("a fresh dir asks who you are first", nextCards(snap())[0].id, "onboard.account");
+check("skipping the account moves to the url, not back to the account",
+  nextCards(snap({ stash: { account_skipped: true } }))[0].id, "onboard.url");
+check("a url with no key on file asks for the key, with the site named",
+  nextCards(snap({ stash: { account_skipped: true, url: "https://acme.dev" } }))[0].id, "onboard.key");
+check("the voice habits run while the scout reads — the wait card comes after them",
+  nextCards(snap({ account: { name: "x" }, scout: { status: "running", url: "https://acme.dev" } }))[0].kind, "onboard.voice");
+const allVoice = { voice_done: ["casing", "length", "emoji", "exclamations", "dashes", "contractions", "hedging", "greeting", "roughness"] };
+check("...and once they are answered the wait is all that is left",
+  nextCards(snap({ account: { name: "x" }, stash: allVoice, scout: { status: "running", url: "https://acme.dev" } }))[0].id, "onboard.wait");
+const prop = { project_md: "# What you sell\n\nacme", icp_md: "# Who", rule_md: "# Rule", unknown: [] };
+const readyScout = { status: "ready", url: "https://acme.dev", error: null, proposal: prop };
+check("a landed scout deals the proof-read, seeded with what it wrote",
+  nextCards(snap({ account: { name: "x" }, stash: allVoice, scout: readyScout }))[0].field.value, prop.project_md);
+check("...one file at a time", nextCards(snap({ account: { name: "x" }, stash: allVoice, scout: readyScout }))
+  .filter((c) => c.kind === "onboard.file").length, 1);
+const probed = { account_skipped: false, ...allVoice, probe: { place: "saas", q: "clients", fired: true } };
+check("a probe above the floor leads with Watch",
+  nextCards(snap({ account: { name: "x" }, stash: probed, memory: memDone, probe: { running: false, last: { read: 9 }, fitRate: 0.42 } }))[0].primary.id, "watch");
+check("a probe below the floor leads with Try another — watching is the fallback",
+  nextCards(snap({ account: { name: "x" }, stash: probed, memory: memDone, probe: { running: false, last: { read: 9 }, fitRate: 0.05 } }))[0].primary.id, "another");
+const onb = { account: { name: "x" }, stash: { ...allVoice, welcomed: true }, memory: memDone, sources: [{ place: "saas" }], itemCount: 3 };
+check("onboarded is a fact, not a mood", onboarded(snap(onb)), true);
+check("an unanswered room's rules outrank everything",
+  nextCards(snap({ ...onb, rooms: [{ place: "saas", state: "unanswered" }], pendingCount: 4 }))[0].id, "room.rules.saas");
+const qItem = { id: "t3_q", place: "saas", author: "ana", title: "how do I get clients", body: "stuck", why: "asks directly", url: "https://reddit.com/r/saas/comments/q/x/", draft: { text: "try this", flags: null }, blockedWhy: null, readyState: "ready", readyWhy: null };
+check("a judged person with a draft is the card, with I-posted-it live",
+  nextCards(snap({ ...onb, rooms: [{ place: "saas", state: "yes" }], queue: [qItem] }))[0].actions[0].disabled, undefined);
+check("...and the governor's no arrives as a disabled button that says why",
+  nextCards(snap({ ...onb, rooms: [{ place: "saas", state: "yes" }], queue: [{ ...qItem, blockedWhy: "2 replies in r/saas in 24h" }] }))[0].actions[0].why, "2 replies in r/saas in 24h");
+check("a machine that is on and quiet says so honestly",
+  nextCards(snap({ ...onb, rooms: [{ place: "saas", state: "yes" }] }))[0].id, "work.quiet");
+
+/* ------------------------------------------------------------ the deck API */
+
+// A second throwaway server: the acts write, so they get their own dir.
+const boxC = mkdtempSync(join(tmpdir(), "earshot-cards-"));
+const DC = join(boxC, ".earshot");
+execFileSync(process.execPath, [ES, "init"], { env: { ...process.env, EARSHOT_DIR: DC }, stdio: "ignore" });
+const srvC = spawn(process.execPath, [SERVE, "--port", "0"], { env: { ...process.env, EARSHOT_DIR: DC }, stdio: ["ignore", "pipe", "pipe"] });
+const baseC = await new Promise((resolve) => {
+  let out = "";
+  const t = setTimeout(() => resolve(null), 8000);
+  srvC.stdout.on("data", (d) => {
+    out += d;
+    const m = out.match(/http:\/\/127\.0\.0\.1:(\d+)/);
+    if (m) { clearTimeout(t); resolve(`http://127.0.0.1:${m[1]}`); }
+  });
+});
+
+if (!baseC) { console.log("FAIL  the cards server did not start"); fail++; }
+else {
+  const deck = async () => (await (await fetch(baseC + "/api/cards")).json()).cards;
+  const act = async (body, type = "application/json") =>
+    await fetch(baseC + "/api/cards/act", { method: "POST", headers: { "content-type": type }, body: JSON.stringify(body) });
+
+  check("the deck is JSON and opens with the account card", (await deck())[0].id, "onboard.account");
+
+  // The CSRF boundary: a cross-origin page can send a form; it cannot send
+  // application/json without a preflight, and nothing here answers preflights.
+  check("an act that is not declared JSON is refused",
+    (await act({ card: "onboard.account", action: "skip" }, "application/x-www-form-urlencoded")).status, 400);
+
+  const skipped = await act({ card: "onboard.account", action: "skip" });
+  check("skipping the account is accepted", skipped.status, 200);
+  check("...and the deck moves on", (await deck())[0].id, "onboard.url");
+
+  const voiced = await act({ card: "onboard.voice.casing", action: "next", choice: "lowercase-starts" });
+  check("a voice answer is accepted", voiced.status, 200);
+  check("...and lands in voice.json as the user's word, not a measurement",
+    JSON.parse(readFileSync(join(DC, "voice.json"), "utf8")).user.casing.value, "lowercase-starts");
+
+  // The send gate, server-side: a stale panel must not be able to record a
+  // send the governor already refused. Two sent replies in the room inside
+  // 24h is the measured limit.
+  const at = new Date().toISOString();
+  appendFileSync(join(DC, "found.jsonl"),
+    ["a", "b", "c"].map((n) => JSON.stringify({ id: `t3_${n}`, place: "saas", url: `https://reddit.com/r/saas/comments/${n}/x/`, author: `u${n}`, title: "t", body: "b", posted_at: at, seen_at: at, probe: "saas:new" })).join("\n") + "\n");
+  appendFileSync(join(DC, "marks.jsonl"),
+    ["a", "b"].map((n) => JSON.stringify({ id: `t3_${n}`, mark: "sent", at })).join("\n") + "\n");
+  const gated = await act({ card: "work.reply.t3_c", action: "posted" });
+  check("the burst governor refuses the third reply into one room", gated.status, 400);
+  check("...and the refusal says which room and why", /saas/.test((await gated.json()).error), true);
+
+  // The strategist seam, without a network: an empty message answers without a
+  // model, and a real one fails loudly for want of a key rather than hanging.
+  const agentEmpty = await fetch(baseC + "/api/agent", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message: "" }) });
+  const agentReal = await fetch(baseC + "/api/agent", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message: "hi" }) });
+  check("the agent route answers an empty message without a model", agentEmpty.status, 200);
+  check("...and a real one without a key is an error that names the fix",
+    /key|not installed/.test((await agentReal.json()).error ?? ""), true);
+}
+srvC.kill();
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

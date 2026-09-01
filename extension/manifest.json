@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "earshot",
+  "version": "0.4.0",
+  "description": "Your marketing specialist, one card at a time: who to answer, what to say, in your voice. You press Post. It never does.",
+  "permissions": ["sidePanel", "storage", "alarms", "scripting", "clipboardWrite"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "optional_host_permissions": ["https://www.reddit.com/*", "https://old.reddit.com/*"],
+  "action": {
+    "default_title": "earshot"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "background": {
+    "service_worker": "sw.js",
+    "type": "module"
+  }
+}

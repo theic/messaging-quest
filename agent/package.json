@@ -1,0 +1,18 @@
+{
+  "name": "earshot-agent",
+  "private": true,
+  "version": "0.1.0",
+  "description": "The strategist — earshot's brain, on Deep Agents. Optional: the engine, the dashboard, the cards and the extension all run without this directory being installed.",
+  "type": "module",
+  "dependencies": {
+    "deepagents": "^1.13.2",
+    "@langchain/openai": "^1.0.0",
+    "@langchain/core": "^1.2.9",
+    "@langchain/langgraph": "^1.4.10",
+    "langchain": "^1.5.10"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "//": "This package.json is deliberately NOT the root one. The heart (lib/, skills/, bin/) stays zero-dependency; the strategist carries the LangChain ecosystem, and lives behind one lazy import in bin/serve.mjs that degrades to a clear message when this directory has not been installed. `npm run brain` from the root installs it."
+}

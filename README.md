@@ -36,13 +36,17 @@ It stores everything in `.earshot/` in the directory you run it from, as
 append-only JSONL you can read with `cat`, and four markdown files you can open
 in any editor.
 
-**It has zero dependencies. All of it.** `npm install` installs nothing —
-every verb, every screen, and all three model seats run on a bare Node 18. The
-model layer is [lib/llm.mjs](lib/llm.mjs): fetch, a JSON-schema check, and a
-tool loop, ~250 lines you can read in one sitting. A tool that holds your
-prospect list and your API key should not come with a supply chain, so this
-one doesn't. The models themselves stay optional — each screen that wants one
-says so and offers the manual path instead.
+**The engine has zero dependencies. All of it.** `npm install` installs
+nothing — every verb, every screen, the card deck, the extension and all
+three model seats run on a bare Node 18. The model layer is
+[lib/llm.mjs](lib/llm.mjs): fetch, a JSON-schema check, and a tool loop,
+~250 lines you can read in one sitting. A tool that holds your prospect list
+and your API key should not come with a supply chain, so this one doesn't.
+The models themselves stay optional — each screen that wants one says so and
+offers the manual path instead. (The one exception is opt-in and fenced off:
+the conversational strategist lives in `agent/` on Deep Agents, installs with
+`npm run brain`, and everything else runs without it. See
+[PLAN.md](PLAN.md) for the boundary and why.)
 
 ## Install
 
@@ -67,6 +71,31 @@ nothing to install.)
 
 For the scout, judge and writer, add an OpenRouter key on **Settings**. That
 is the whole step — there are no libraries to install.
+
+### The specialist in your browser
+
+The primary way to *live* with earshot is the Chrome extension — one card at
+a time in a side panel: who to answer, the drafted reply, and the reason when
+the answer is "not yet".
+
+1. `chrome://extensions` → Developer mode → **Load unpacked** → pick this
+   repo's `extension/` folder.
+2. Keep `node bin/es.mjs serve` running; pin the icon and click it.
+
+The panel deals the next action: setup runs as cards (your account, your URL
+— the scout reads your site while you answer nine one-tap questions about how
+you write — then a proof-read of what it found, then the first room). After
+that it deals work: a person worth answering with the reply already written,
+**Open the thread & type it in** puts the draft into Reddit's real composer —
+and *you* press Reddit's own Comment button. Nothing here can submit: the
+code that finds the composer is screened against every label that could, and
+"I posted it" is recorded through the same limits the CLI enforces (2 replies
+per room, 5 overall, per 24 hours — with the refusing sentence shown on the
+card).
+
+No Chrome? The same deck is served at `http://127.0.0.1:8787/panel/` —
+everything works there except typing into the composer (you get the draft on
+your clipboard instead).
 
 ### Or drive it from the terminal
 
@@ -420,10 +449,19 @@ other ways:
   verdicts, marks or people. Everything that makes a queue *yours* happens on
   your machine. See the sharing section below.
 
+- **A colleague, via the strategist.** `npm run brain` installs `agent/` —
+  the one dependency-carrying directory, built on Deep Agents — and the
+  panel's ask-box comes alive: "who's waiting and what should I do first?"
+  gets an answer that reads your queue, does the pacing math, and offers the
+  next move. Its hands are the same CLI verbs as everything else, its
+  education is the same `skills/<id>/SKILL.md`, and it inherits every
+  refusal. It proposes; you press the buttons.
+
 What is deliberately not pluggable: nothing exposes `probe`/`tick`/`sync` to a
 chat surface. Reading costs a minute a request and belongs to the machine that
 watches, not to a conversation that times out — and no surface, anywhere, can
-post.
+submit. The extension may type a draft into the composer; the click that posts
+is yours, on Reddit's own button, forever.
 
 ## What the words mean
 

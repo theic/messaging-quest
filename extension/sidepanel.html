@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>earshot</title>
+  <link rel="stylesheet" href="card.css">
+</head>
+<body>
+  <main>
+    <div id="jobs" class="es-jobs"></div>
+    <div id="card"></div>
+    <div id="error" class="es-error" hidden></div>
+    <div id="answer" class="es-said" hidden></div>
+  </main>
+  <footer>
+    <input id="ask" placeholder="Ask your specialist…" autocomplete="off">
+    <button id="send" type="button">Ask</button>
+  </footer>
+  <div class="es-server" id="server-line"></div>
+  <!-- Classic script FIRST: ESInsert must be a global before the module loads,
+       or chrome.scripting cannot serialize it into the page. -->
+  <script src="insert.js"></script>
+  <script type="module" src="sidepanel.js"></script>
+</body>
+</html>
