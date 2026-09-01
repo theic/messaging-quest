@@ -514,6 +514,68 @@ check("roomOf resolves through whichever platform recognises the url",
   roomOf("https://www.reddit.com/r/smallbusiness/comments/abc/def/"), "smallbusiness");
 check("roomOf says null, not a guess, for a url no platform knows", roomOf("https://example.com/post/1"), null);
 
+/* The registry beneath the door: rings, slots, and the choice that resolves
+   them. Two skills may serve one purpose; which one runs is the instance's
+   call, never a guess — and every refusal names its fix. */
+const { frontmatter, discoverSkills, resolveSkills, readChoices, writeChoice } = await import("../lib/skills.mjs");
+const { mkdirSync: mkd } = await import("node:fs");
+
+const fmParsed = frontmatter("---\nname: x\ndescription: d\nprovides: page:board\n---\nbody");
+check("frontmatter reads the scalars", [fmParsed.name, fmParsed.provides], ["x", "page:board"]);
+check("prose without fences is not a manifest", frontmatter("# just prose"), {});
+
+const ringbox = mkdtempSync(join(tmpdir(), "mq-skills-"));
+const RING1 = join(ringbox, "shipped"), RING2 = join(ringbox, "yours");
+const putSkill = (root, id, fmText, files = {}) => {
+  mkd(join(root, id), { recursive: true });
+  writeFileSync(join(root, id, "SKILL.md"), fmText);
+  for (const [n, body] of Object.entries(files)) writeFileSync(join(root, id, n), body);
+};
+putSkill(RING1, "alpha", "---\nname: alpha\ndescription: knows things\n---\n");
+putSkill(RING1, "board", "---\nname: board\ndescription: a board\nprovides: page:board\n---\n", { "page.mjs": "export default {}" });
+putSkill(RING1, "board2", "---\nname: board2\ndescription: another board\nprovides: page:board\n---\n", { "page.mjs": "export default {}" });
+putSkill(RING1, "_template", "---\nname: t\ndescription: t\n---\n");
+putSkill(RING1, "broken", "no frontmatter at all");
+putSkill(RING2, "alpha", "---\nname: alpha-local\ndescription: yours\n---\n");
+const RINGS = [{ root: RING1, ring: "built-in" }, { root: RING2, ring: "local" }];
+const disc = discoverSkills(null, RINGS);
+check("a folder whose manifest carries no name is refused with its reason",
+  disc.refused.find((r) => r.id === "broken")?.why.includes("name and description"), true);
+check("_template is not a skill", disc.found.some((s) => s.id === "_template"), false);
+check("your ring replaces the built-in on the same id", disc.found.find((s) => s.id === "alpha")?.name, "alpha-local");
+check("a seat is a file, detected and nothing more", disc.found.find((s) => s.id === "board")?.seats.page !== undefined, true);
+
+const res0 = resolveSkills(disc.found, {});
+check("knowledge is always active", res0.active.some((s) => s.id === "alpha"), true);
+check("two skills on one slot with no choice: neither is active", res0.active.some((s) => s.provides === "page:board"), false);
+check("...and the conflict names the slot and the fix", /page:board/.test(res0.conflicts[0]?.why), true);
+check("the choice file resolves it", resolveSkills(disc.found, { "page:board": "board2" }).active.find((s) => s.provides === "page:board")?.id, "board2");
+check("a stale choice is a conflict that names the ghost",
+  /"gone"/.test(resolveSkills(disc.found, { "page:board": "gone" }).conflicts[0]?.why), true);
+
+putSkill(RING2, "board3", "---\nname: board3\ndescription: your board\nprovides: page:board\n---\n", { "page.mjs": "export default {}" });
+check("a sole local candidate wins its slot — dropping the folder in was the choice",
+  resolveSkills(discoverSkills(null, RINGS).found, {}).active.find((s) => s.provides === "page:board")?.id, "board3");
+
+const choiceBox = mkdtempSync(join(tmpdir(), "mq-choice-"));
+writeChoice(choiceBox, "page:board", "board2");
+check("a choice round-trips through skills.json", readChoices(choiceBox)["page:board"], "board2");
+writeChoice(choiceBox, "page:board", null);
+check("...and a null choice clears it", readChoices(choiceBox)["page:board"] ?? null, null);
+
+/* End to end through the platform door: a local platform skill in a scratch
+   data dir loads beside the built-in, answers roomOf, and vanishes cleanly. */
+const platBox = mkdtempSync(join(tmpdir(), "mq-plat-"));
+putSkill(join(platBox, "skills"), "fakenet",
+  "---\nname: fakenet\ndescription: a test platform\nprovides: platform:fakenet\n---\n",
+  { "adapter.mjs": `export default { id: "fakenet", name: "FakeNet", gapMs: 1, read: () => ({ ok: false, error: "x" }), sourceUrl: () => "https://f.example/x", refuse: () => null, roomOf: (u) => /fakenet\\.example\\/g\\/(\\w+)/.exec(String(u))?.[1] ?? null, roomLabel: (p) => "g/" + p };` });
+await loadPlatforms(platBox);
+check("a local platform skill loads through the door", platform("fakenet")?.name, "FakeNet");
+check("...beside the built-in, not instead of it", platform("reddit")?.name, "Reddit");
+check("roomOf consults it", roomOf("https://fakenet.example/g/hall"), "hall");
+await loadPlatforms(null); // back to built-ins for the rest of the suite
+check("reloading from scratch drops what is gone", platform("fakenet"), null);
+
 /* -------------------------------------------------- the JSON-schema check */
 
 // One malformed element must void the batch LOUDLY — the alternative is a
