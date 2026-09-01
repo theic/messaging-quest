@@ -23,7 +23,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { store, dataDir } from "../lib/store.mjs";
 import { history, STATES } from "../lib/verdict.mjs";
 import { standing, readiness, burst, mix, PER_ROOM_24H, OVERALL_24H, CQS_NOTE } from "../lib/ready.mjs";
@@ -37,12 +37,38 @@ import { MODELS, ROLES, chosen, choose, readKey, writeKey, hasKey, keySource, ju
 import { page, esc, empty, runBtn, tag, steps, setupBanner, APP_JS, CSP } from "../lib/ui.mjs";
 import { tokens, issueToken, revokeToken } from "../lib/feed.mjs";
 import { loadPlatforms } from "../lib/platform.mjs";
+import { skillState, readChoices, writeChoice } from "../lib/skills.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const ES = join(ROOT, "bin", "mq.mjs");
 const DIR = dataDir();
 // Platform skills — the store resolves rooms through the registry.
 await loadPlatforms(DIR);
+
+/* The page door. Skills whose registry entry is ACTIVE and whose folder holds
+ * a page.mjs get a dashboard screen: default export { path, title, render },
+ * render(ctx) returning the page body as HTML. Mounted after the core views
+ * exist and refused — with the reason printed — when a path is taken or
+ * misshapen, so a skill can never shadow a core screen by luck. The body is
+ * trusted the way an adapter is trusted: installing a skill is installing
+ * code, and the place to be suspicious is before it lands in the ring, not
+ * after. */
+const SKILL_PAGES = new Map(); // path → { skill, path, title, nav, render }
+const skillNav = () => [...SKILL_PAGES.values()].filter((p) => p.nav).map((p) => [p.path, p.title]);
+
+async function mountSkillPages() {
+  SKILL_PAGES.clear();
+  for (const s of skillState().active.filter((x) => x.seats.page)) {
+    const refuse = (why) => console.error(`skill ${s.id}: page.mjs ${why} — not mounted`);
+    try {
+      const p = (await import(pathToFileURL(s.seats.page).href)).default;
+      if (!p?.path || !p.title || typeof p.render !== "function") { refuse("must default-export { path, title, render }"); continue; }
+      if (!/^\/[a-z0-9][a-z0-9-]*$/.test(p.path)) { refuse(`path ${p.path} — one lowercase segment`); continue; }
+      if (views[p.path] || writes[p.path] || SKILL_PAGES.has(p.path) || /^\/(api|panel|skills)\b/.test(p.path) || p.path === "/app.js") { refuse(`path ${p.path} is taken`); continue; }
+      SKILL_PAGES.set(p.path, { skill: s.id, path: p.path, title: String(p.title), nav: p.nav !== false, render: p.render });
+    } catch (e) { refuse(`— ${e.message}`); }
+  }
+}
 const argv = process.argv.slice(2);
 const PORT = argv.includes("--port") ? Number(argv[argv.indexOf("--port") + 1]) : 8787;
 if (!existsSync(DIR)) { console.error(`Messaging Quest: no ${DIR}/ here — run \`mq init\` first`); process.exit(1); }
@@ -61,7 +87,7 @@ const who = () => (acct()?.name ? "u/" + acct().name : "no account yet");
 /** Every view goes through here so the setup banner and the account line are
  *  not something a new screen can forget to render. */
 const render = (path, title, body, opts = {}) =>
-  page({ path, title, body, who: who(), banner: setupBanner(memoryProgress(DIR)), ...opts });
+  page({ path, title, body, who: who(), banner: setupBanner(memoryProgress(DIR)), extra: skillNav(), ...opts });
 
 const fmt = (s) => esc(String(s ?? "").slice(0, 16).replace("T", " "));
 const ago = (iso) => {
@@ -863,6 +889,48 @@ const startAgentic = (verb, args) => {
   return { error: `${verb} is not a thing this can run` };
 };
 
+/* --- Skills -------------------------------------------------------------- */
+
+// What is installed, what is running, and what is stuck — with the fix on the
+// same screen. Two skills may serve one purpose; which one runs is chosen
+// here (or in <dir>/skills.json, same file), never guessed.
+views["/skills"] = () => {
+  const st = skillState();
+  const choices = readChoices(DIR);
+  const seatsOf = (s) => Object.keys(s.seats).join(", ") || "knowledge";
+  const ringTag = (r) => tag(r === "local" ? "yours" : "built-in");
+  const conflictCard = (c) => `<div class="card">
+    <b>${esc(c.slot)}</b> — nothing is running this
+    <p class="sub">${esc(c.why)}</p>
+    ${c.candidates.map((id) => `<form method="POST" action="/skills/choose" style="display:inline-block;margin-right:8px">
+      <input type="hidden" name="slot" value="${esc(c.slot)}">
+      <input type="hidden" name="id" value="${esc(id)}">
+      <button class="btn">Use ${esc(id)}</button>
+    </form>`).join("")}
+  </div>`;
+  const chosenRows = Object.entries(choices).map(([slot, id]) => `<tr><td>${esc(slot)}</td><td>${esc(id)}</td>
+    <td><form method="POST" action="/skills/choose"><input type="hidden" name="slot" value="${esc(slot)}">
+    <button class="small" type="submit">Clear</button></form></td></tr>`).join("");
+  return render("/skills", "Skills", `
+<h1>Skills</h1>
+<p class="sub">Everything optional is a folder: a platform to read, a page on this dashboard, a hand for the
+strategist — or plain knowledge. Built-ins ship in <code>skills/</code>; yours load from <code>${esc(DIR)}/skills/</code>
+and win on a name collision. When two skills serve one purpose, you pick which one runs — here.</p>
+${st.conflicts.length ? `<h2>Needs a decision</h2>${st.conflicts.map(conflictCard).join("")}` : ""}
+<h2>Running</h2>
+<table><tr><th>skill</th><th>ring</th><th>fills</th><th>carries</th></tr>
+${st.active.map((s) => `<tr><td><b>${esc(s.name)}</b> <span class="sub">${esc(s.id)}</span></td>
+  <td>${ringTag(s.ring)}</td><td>${esc(s.provides ?? "—")}</td><td>${esc(seatsOf(s))}</td></tr>`).join("")}
+</table>
+${chosenRows ? `<h2>Choices on file</h2><table><tr><th>slot</th><th>uses</th><th></th></tr>${chosenRows}</table>` : ""}
+${st.refused.length ? `<h2>Refused to load</h2>${st.refused.map((r) =>
+  `<p class="sub"><b>${esc(r.id)}</b> (${esc(r.ring)}) — ${esc(r.why)}</p>`).join("")}` : ""}
+<h2>Writing one</h2>
+<p class="sub">A skill is a folder with a SKILL.md; the contract, the seats and a template live in the repo —
+see <code>skills/README.md</code> and <code>CONTRIBUTING.md</code>. Drop your folder into
+<code>${esc(DIR)}/skills/</code> and reload; ship it to everybody with a pull request.</p>`);
+};
+
 const writes = {
   "/mark": (form) => {
     const id = form.get("id"), mark = form.get("mark");
@@ -1321,6 +1389,23 @@ const server = createServer((req, res) => {
       .catch((e) => res.writeHead(400, JSON_HEAD).end(JSON.stringify({ error: e.message })));
   }
 
+  if (url.pathname === "/skills/choose" && req.method === "POST") {
+    let body = "";
+    req.on("data", (c) => { body += c; if (body.length > 1e5) req.destroy(); });
+    req.on("end", async () => {
+      const form = new URLSearchParams(body);
+      const slot = String(form.get("slot") ?? "");
+      const id = form.get("id") ? String(form.get("id")) : null;
+      if (slot) writeChoice(DIR, slot, id);
+      // The choice takes effect now, not at the next restart: re-resolve the
+      // registry, re-import the adapters, re-mount the pages.
+      await loadPlatforms(DIR);
+      await mountSkillPages();
+      res.writeHead(303, { location: "/skills" }).end();
+    });
+    return;
+  }
+
   if (req.method === "POST" && writes[url.pathname]) {
     let body = "";
     req.on("data", (c) => { body += c; if (body.length > 2e6) req.destroy(); });
@@ -1377,6 +1462,21 @@ const server = createServer((req, res) => {
     return res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" })
       .end(JSON.stringify({ jobs: J.list().slice(0, 12) }));
 
+  // The page door: skills the registry resolved, mounted beside the core
+  // views. A page that throws renders its failure — a broken skill must not
+  // take the dashboard down with it.
+  const sp = SKILL_PAGES.get(url.pathname);
+  if (sp) {
+    return Promise.resolve()
+      .then(() => sp.render({ dir: DIR }))
+      .then((body) => res.writeHead(200, HTML).end(render(sp.path, sp.title, String(body ?? ""))))
+      .catch((e) => {
+        console.error(e);
+        res.writeHead(500, HTML).end(render(sp.path, sp.title,
+          `<h1>${esc(sp.title)}</h1><p>The <b>${esc(sp.skill)}</b> skill's page failed: ${esc(e.message)}</p>`));
+      });
+  }
+
   const view = views[url.pathname];
   if (!view)
     return res.writeHead(404, HTML).end(render("/", "Not found", `<h1>Not found</h1><p><a href="/">Standing</a></p>`));
@@ -1389,6 +1489,10 @@ const server = createServer((req, res) => {
       res.writeHead(500, HTML).end(render("/", "Error", `<h1>Something broke</h1><pre class="log">${esc(e.stack ?? e.message)}</pre>`));
     });
 });
+
+// Mounted here, once every core view above exists — that ordering is what
+// makes the collision check honest.
+await mountSkillPages();
 
 /**
  * 127.0.0.1, never 0.0.0.0, and never the default of omitting the host —

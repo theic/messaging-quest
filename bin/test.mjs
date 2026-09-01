@@ -865,6 +865,49 @@ check("a proposal with a verb outside the law never renders",
     listed.some((r) => r.name === "persona.md"), false);
 }
 
+/* ------------------------------------------------- the page door, end to end */
+
+// A third throwaway server, whose scratch ring carries a page skill and a
+// deliberate slot stalemate: the door must mount the one and refuse to guess
+// the other, and the Skills screen must offer the fix it then accepts.
+{
+  const boxS = mkdtempSync(join(tmpdir(), "mq-door-"));
+  const DS = join(boxS, ".mq");
+  execFileSync(process.execPath, [ES, "init"], { env: { ...process.env, MQ_DIR: DS }, stdio: "ignore" });
+  putSkill(join(DS, "skills"), "board",
+    "---\nname: board\ndescription: a contributed page\nprovides: page:board\n---\n",
+    { "page.mjs": `export default { path: "/board", title: "Board", render: () => "<h2>hello from a skill</h2>" };` });
+  putSkill(join(DS, "skills"), "coin", "---\nname: coin\ndescription: heads\nprovides: probe:coin\n---\n");
+  putSkill(join(DS, "skills"), "coin2", "---\nname: coin2\ndescription: tails\nprovides: probe:coin\n---\n");
+  const srvS = spawn(process.execPath, [SERVE, "--port", "0"], { env: { ...process.env, MQ_DIR: DS }, stdio: ["ignore", "pipe", "pipe"] });
+  const baseS = await new Promise((resolve) => {
+    let out = "";
+    const t = setTimeout(() => resolve(null), 8000);
+    srvS.stdout.on("data", (d) => {
+      out += d;
+      const m = out.match(/http:\/\/127\.0\.0\.1:(\d+)/);
+      if (m) { clearTimeout(t); resolve(`http://127.0.0.1:${m[1]}`); }
+    });
+  });
+  if (!baseS) { console.log("FAIL  the page-door server did not start"); fail++; }
+  else {
+    const G = async (p) => { const r = await fetch(baseS + p); return { status: r.status, body: await r.text() }; };
+    check("a skill's page mounts beside the core views", (await G("/board")).status, 200);
+    check("...rendering its body inside the dashboard chrome", /hello from a skill/.test((await G("/board")).body), true);
+    check("...and the nav carries it", /href="\/board"/.test((await G("/")).body), true);
+    check("the Skills screen names the stalemate and its candidates", /probe:coin/.test((await G("/skills")).body), true);
+    const posted = await fetch(baseS + "/skills/choose", {
+      method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ slot: "probe:coin", id: "coin2" }), redirect: "manual",
+    });
+    check("a choice posts and returns to the Skills screen", posted.status, 303);
+    const after = (await G("/skills")).body;
+    check("...and the chosen skill is running, the stalemate gone",
+      /coin2/.test(after) && !/Needs a decision/.test(after), true);
+  }
+  srvS.kill();
+}
+
 // THE DOCTRINE, pinned: only the finding verbs may take the browser lane.
 // sync/check/back measure what a logged-out stranger sees, and a logged-in
 // read would answer that question wrongly while looking right. If this count

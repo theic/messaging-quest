@@ -24,6 +24,7 @@ import { createHash } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import reddit from "../skills/reddit/adapter.mjs";
 import { loadPlatforms, platforms } from "../lib/platform.mjs";
+import { skillState, writeChoice } from "../lib/skills.mjs";
 import { classify, history, STATES } from "../lib/verdict.mjs";
 import { conversation, byUrgency } from "../lib/conversation.mjs";
 import { scoped, submissions, refuse } from "../skills/reddit/shapes.mjs";
@@ -645,6 +646,29 @@ cmds.platforms = () => {
   console.log(`The contract is skills/README.md.`);
 };
 
+/** The whole registry, not just the platforms: what runs, what is stuck on a
+ *  choice, what refused to load — with the fix printed beside each. */
+cmds.skills = async (args) => {
+  if (args[0] === "use") {
+    const [, slot, id] = args;
+    if (!slot || !id) die("usage: mq skills use <slot> <id>   (or: mq skills use <slot> --clear)");
+    writeChoice(DIR, slot, id === "--clear" ? null : id);
+    await loadPlatforms(DIR); // re-resolve now, so the line below tells the truth
+    const active = skillState().active.find((s) => s.provides === slot);
+    console.log(active ? `${slot} → ${active.id}` : `${slot} → nobody (no active skill provides it)`);
+    return;
+  }
+  const st = skillState();
+  for (const s of st.active)
+    console.log(`${s.id.padEnd(14)} ${(s.ring === "local" ? "yours" : "built-in").padEnd(9)} ${(s.provides ?? "knowledge").padEnd(22)} ${Object.keys(s.seats).join(", ") || "—"}`);
+  for (const c of st.conflicts)
+    console.log(`\n! ${c.slot} — ${c.why}\n  fix: mq skills use ${c.slot} <${c.candidates.join("|")}>`);
+  for (const r of st.refused)
+    console.log(`\nx ${r.id} (${r.ring}) — ${r.why}`);
+  if (!st.conflicts.length && !st.refused.length)
+    console.log(`\nEverything discovered is running. New skills: skills/README.md, CONTRIBUTING.md.`);
+};
+
 /** Read every source whose cadence is up. Plain code — there is no model in
  *  this loop, and that is the point of §07: the agent takes the rare supervised
  *  jobs, never the one that runs all day. */
@@ -1007,6 +1031,9 @@ find — other people, and the rooms it refuses to look in
   sweep                   drop stored bodies past 48h
   platforms               the platforms this install can read — each one is a
                           skill folder; drop your own into .mq/skills/
+  skills                  the whole registry: running, stuck, refused
+  skills use <slot> <id>  when two skills serve one purpose, pick the one
+                          that runs (recorded in .mq/skills.json)
 
 sharing one machine's reading with several
 
