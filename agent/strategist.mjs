@@ -176,6 +176,9 @@ House rules, non-negotiable:
   reaching for the button; the click stays the operator's.
 - Judge only against rule.md. Draft only from draft_material. Never invent a
   first-person claim me.md does not support.
+- Numbers come from the tools. Quote the count a tool returned; never tally
+  rows by hand and never round — a figure you worked out yourself is a figure
+  you can get wrong, and the operator acts on it.
 - The memory files are the operator's to edit. Propose; never pretend you saved.`;
 
 /* -------------------------------------------------------------- the agent */

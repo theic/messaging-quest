@@ -26,6 +26,7 @@ import {
   voiceSummary, VOICE_UNSURE,
 } from "../lib/voice.mjs";
 import { AI_TELLS, signalWritingRules } from "../lib/writing.mjs";
+import { tells } from "../lib/guards.mjs";
 import { buildSignalDraftPrompt } from "../lib/draft-prompt.mjs";
 
 /**
@@ -386,4 +387,34 @@ test("an unmeasured fingerprint still previews something", () => {
     const blank = voicePreview({});
     assert.ok(blank.length > 40);
     assert.equal(blank, voicePreview(null), "and null is the same as empty here");
+});
+
+/* --------------------------------------------------------- the register */
+
+/**
+ * How a comment sounds is channel mechanics and rides in UNIVERSAL_RULES;
+ * how THIS person types is measured and outranks it. These pin both halves:
+ * the register is there, and it never dictates the things the fingerprint
+ * owns.
+ */
+test("the register is in every prompt, and the fingerprint still outranks it", () => {
+    const rules = signalWritingRules({ intent: "leads", pitch: "x", problem: null, style: null, styleNotes: null, voice: null, stage: "opener" });
+    assert.match(rules, /third comment under a real post/);
+    assert.match(rules, /never their username, never 'OP'/);
+    assert.match(rules, /Hope this helps/, "the tells list names the closer");
+    assert.match(rules, /HOW THIS PERSON WRITES[\s\S]*outranks every style instruction below/);
+    // Nothing in the register dictates what the fingerprint measures.
+    assert.doesNotMatch(rules, /short sentences/i);
+    assert.doesNotMatch(rules, /use contractions|no contractions/i);
+});
+
+test("the tells list is phrases people recognise, not a vocabulary ban", () => {
+    assert.ok(AI_TELLS.some((t) => /Great question/.test(t)));
+    assert.ok(AI_TELLS.some((t) => /game-changer/.test(t)));
+    assert.ok(!AI_TELLS.some((t) => /^that said$/i.test(t)), "'that said' is what real people write");
+});
+
+test("the guard catches the closer the prompt forbids, and lets a real reply through", () => {
+    assert.deepEqual(tells("Hope this helps! Good luck."), ["hope this helps", "good luck"]);
+    assert.deepEqual(tells("Skip the BDR until you've closed five yourself. What's your close rate on the calls you did make?"), []);
 });

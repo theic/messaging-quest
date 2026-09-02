@@ -35,7 +35,8 @@ every marketing capability arrives as a skill. The day `lib/` grows an
 
 ```
 heart       lib/ — the store, the pacing governor, the probe economics, the
-            burst limits, the memory files, the model seats, and the DECK
+            burst limits, the memory files, the model seats (paid, free or
+            local — one file, lib/models.mjs, nothing above it knows), the DECK
             (lib/cards.mjs: state → the one next action, deterministically).
             Knows no platform. Zero dependencies, non-arguable.
 skills      skills/<id>/ — a platform is a SKILL.md + adapter.mjs. Reddit is
@@ -213,6 +214,50 @@ earshot retired everywhere a person or a machine reads — package
 domain (play.messaging.quest) predates the rename; the repo home is
 theic/messaging-quest.
 
+**Three plans for the seats (2026-09-01).** The model seats had one address
+— OpenRouter, a key, a bill — and a tool whose pitch is "runs on your
+machine" should run for free on it. So `lib/models.mjs` grew a plan: paid
+(the measured defaults, unchanged), free (OpenRouter's `:free` variants —
+every one that takes a tool call was measured on the judge's own two-item
+verdict, and the two best on the scout's loop and the writer's material; the
+defaults are the measurements, the menu keeps the ones that were full and
+says so), and local (Ollama's OpenAI endpoint by default, any address by
+choice, no key, nothing leaves the machine). Each plan keeps its own picks.
+`lib/llm.mjs` learned two things and nothing else: OpenRouter's routing
+fields go only to OpenRouter, and a conforming JSON object inside a prose
+answer is the answer — a local server that ignores `tool_choice` should not
+cost a retry. The local defaults are the one unmeasured thing in the file,
+and the Settings page says so in those words rather than dressing a size as
+a number; the first local measurement replaces the note.
+
+**The register (2026-09-01).** The writer's rules gained how a comment
+sounds, as channel mechanics rather than taste: one person who has done the
+thing, typing to one other person; the answer in the first sentence; their
+words, not marketing words; an opinion, not padding; and none of the phrases
+nobody types to a stranger. The fingerprint still outranks it on everything
+it measures. The mechanical half is a third flag on `--save`
+(`lib/guards.mjs` `tells`): phrases, never vocabulary, and the em dash only
+against a voice not seen typing one. Measured before the change, the phrase
+check fired on none of the six drafts on disk — the paid writer was already
+clean at that level — so what the register buys is shape, which no regex
+scores and a reader notices at once. One more line, from one measurement:
+told to answer through the tool, Kimi K3 wrote a draft in 34s; handed the
+material bare it wrote prose first and took 128s and two calls.
+
+**The look (2026-09-01).** The dashboard and the panel wear the brand's own
+tokens, read off play.messaging.quest's computed styles: warm paper with a
+dot grid, near-black ink, lime for the one action, coral for the bad number,
+square corners, a hard offset shadow, pixel-style uppercase labels. The
+typefaces are the site's when installed and the system's when not — the CSP
+still forbids fetching a font, and a wordmark is not a reason to bend it.
+
+**The 404 that vanished (2026-09-01).** A profile that 404s to a stranger
+stores nothing, so every "nothing stored yet" screen — Standing, Ready,
+`mq status` — reported the tool's loudest finding as a blank slate the moment
+`sync`'s output scrolled away. The read ledger remembers; now every one of
+those surfaces asks it first, and a test pins that a 404'd profile is never
+again reported as "not read".
+
 ## Done
 
 - 0.1–0.2: listener, waiting-for-you, find, drafts, the gate; dashboard;
@@ -247,6 +292,15 @@ theic/messaging-quest.
   Skills screen + `mq skills`, live re-resolution on choice,
   CONTRIBUTING.md + skills/_template/ + the rewritten skills/README.md.
   224 engine tests + 31 voice, green.
+- 2026-09-01, free and local, and the voice: three plans for the seats with
+  the free menu measured (judge on every free model that takes a tool call;
+  scout and writer on the best two) and the local lane wired against a stub
+  and honestly unmeasured; the Settings screen and `mq models`; the
+  register in the writer's rules and the template-phrase flag on `--save`;
+  the 404 finding surfaced from the read ledger on every empty screen; the
+  queue's backlog said out loud; the strategist told to quote counts, never
+  tally; the dashboard and panel in the brand's own tokens. 259 engine tests
+  + 34 voice, green.
 
 ## Next, in order
 

@@ -25,6 +25,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import reddit from "../skills/reddit/adapter.mjs";
 import { loadPlatforms, platforms } from "../lib/platform.mjs";
 import { skillState, writeChoice } from "../lib/skills.mjs";
+import { PLANS, ROLES, plan, setPlan, chosen, choose, localConfig, setLocal, probeLocal, hasKey, keySource } from "../lib/models.mjs";
 import { classify, history, STATES } from "../lib/verdict.mjs";
 import { conversation, byUrgency } from "../lib/conversation.mjs";
 import { scoped, submissions, refuse } from "../skills/reddit/shapes.mjs";
@@ -34,7 +35,7 @@ import { store, FILES, dataDir } from "../lib/store.mjs";
 import { seedMissing } from "../lib/memory.mjs";
 import { measureVoice, mergeVoice, voiceRules, voiceSummary, lengthCeiling, MIN_SAMPLE_CHARS } from "../lib/voice.mjs";
 import { signalWritingRules, communityRisks } from "../lib/writing.mjs";
-import { repeats, claims, inventedLinks, RUN_LIMIT } from "../lib/guards.mjs";
+import { repeats, claims, inventedLinks, tells, RUN_LIMIT } from "../lib/guards.mjs";
 import { standing, readiness, burst, mix, CQS_NOTE, PER_ROOM_24H, OVERALL_24H } from "../lib/ready.mjs";
 
 const DIR = dataDir();
@@ -160,13 +161,7 @@ cmds.sync = async () => {
   const r = await fetchAnon(userFeed(acct.name));
 
   if (!r.ok) {
-    if (r.error === "http_404") {
-      console.log(`  404 — logged out, that profile does not render at all.`);
-      console.log(`\n  That is the site-wide signal. A suspended or shadowbanned account 404s to`);
-      console.log(`  strangers while looking normal to you. Check reddit.com/user/${acct.name} in a`);
-      console.log(`  private window to confirm with your own eyes, then appeal at reddit.com/appeals.`);
-      return;
-    }
+    if (r.error === "http_404") return console.log(notFound(acct.name));
     return console.log(`  could not read it: ${r.error}\n  That is a failed read, not a finding about your account. Try again.`);
   }
   if (r.redirected) return console.log(`  the profile URL redirected — check the spelling of '${acct.name}'.`);
@@ -349,9 +344,56 @@ const line = (it) => {
   return (body || it.title || it.url || it.id).slice(0, 68);
 };
 
+/**
+ * Where the models run, and which model has each seat. Three plans — paid,
+ * free, local — and the picks are kept per plan, so trying the free one for
+ * a week does not lose the paid writer you chose.
+ */
+cmds.models = async (args) => {
+  const [sub, a, b] = args;
+  if (sub === "use") setPlan(DIR, a || die("usage: mq models use <paid|free|local>"));
+  else if (sub === "set") { if (!a || !b) die("usage: mq models set <judge|scout|writer> <model-id>"); choose(DIR, a, b); }
+  else if (sub === "url") setLocal(DIR, { baseUrl: a || die("usage: mq models url <http://host:port/v1>") });
+  else if (sub) die("usage: mq models [use <paid|free|local> | set <role> <model> | url <base-url>]");
+  const p = plan(DIR), pick = chosen(DIR);
+  console.log(`${PLANS[p].title} plan — ${PLANS[p].what}\n`);
+  for (const r of Object.values(ROLES)) console.log(`  ${r.key.padEnd(7)} ${pick[r.key]}`);
+  if (p === "local") {
+    const { baseUrl } = localConfig(DIR);
+    const pr = await probeLocal(baseUrl);
+    console.log(`\n  ${baseUrl} — ${pr.ok
+      ? `reachable, ${pr.models.length} model${pr.models.length === 1 ? "" : "s"} installed${pr.models.length ? `: ${pr.models.slice(0, 12).join(", ")}` : ""}`
+      : pr.error}`);
+    const missing = [...new Set(Object.values(pick))].filter((m) => pr.ok && !pr.models.includes(m));
+    if (missing.length) console.log(`  not pulled yet: ${missing.map((m) => `ollama pull ${m}`).join("  ·  ")}`);
+  } else {
+    console.log(`\n  ${hasKey(DIR) ? `OpenRouter key: set (${keySource(DIR)})` : `no OpenRouter key — ${DIR}/openrouter.key or OPENROUTER_API_KEY; the free plan needs one too`}`);
+    if (p === "free") console.log(`  free variants: 20 requests a minute, 50 a day (1,000 once $10 of credit was ever bought) — OpenRouter's limits, read 2026-09-01`);
+  }
+  console.log(`\nchange it:  mq models use <paid|free|local>  ·  mq models set <role> <model>  ·  mq models url <base-url>`);
+};
+
+/** The 404 finding, worded once. `sync` prints it the moment it happens and
+ *  `status` prints it again off the read ledger — because an empty store is
+ *  what a 404 leaves behind, and "nothing stored yet" would be the tool
+ *  forgetting its own loudest finding the moment the terminal scrolled. */
+const notFound = (name, at = null) => [
+  `  404 — logged out, that profile does not render at all${at ? ` (read ${at.slice(0, 16).replace("T", " ")} UTC)` : ""}.`,
+  ``,
+  `  That is the site-wide signal. A suspended or shadowbanned account 404s to`,
+  `  strangers while looking normal to you. Check reddit.com/user/${name} in a`,
+  `  private window to confirm with your own eyes, then appeal at reddit.com/appeals.`,
+].join("\n");
+
 cmds.status = () => {
   const store = items(), checks = checksById(), acct = account();
-  if (!store.size) return console.log("nothing stored yet — run `mq sync`.");
+  const pend = pending().length;
+  const backlog = pend ? `\n  ${pend} found post${pend === 1 ? "" : "s"} waiting for a verdict — mq judge` : "";
+  if (!store.size) {
+    const r = acct?.name ? S.lastReadOf(userFeed(acct.name)) : null;
+    if (r && !r.ok && r.err === "http_404") return console.log(notFound(acct.name, r.at) + backlog);
+    return console.log("nothing stored yet — run `mq sync`." + backlog);
+  }
   const tally = new Map();
   const unchecked = [];
   for (const it of store.values()) {
@@ -390,6 +432,7 @@ cmds.status = () => {
   }
   const never = [...store.values()].filter((it) => history(checks.get(it.id) ?? []).never_visible);
   if (never.length) console.log(`\n${never.length} never rendered to a stranger on any look we took.`);
+  if (backlog) console.log(backlog);
 };
 
 cmds.log = (args) => {
@@ -904,7 +947,8 @@ const saveDraft = (it, text, fp) => {
   const rep = repeats(body, priors);
   const said = claims(body);
   const links = inventedLinks(body, `${it.body} ${it.url}`);
-  append("drafts.jsonl", { id: it.id, url: it.url, text: body, at: now(), flags: { repeat: rep?.length ?? 0, claims: said.length, links: links.length } });
+  const tell = tells(body, fp);
+  append("drafts.jsonl", { id: it.id, url: it.url, text: body, at: now(), flags: { repeat: rep?.length ?? 0, claims: said.length, links: links.length, tells: tell.length } });
   console.log(`draft saved for ${it.id}\n`);
 
   if (rep) {
@@ -924,7 +968,11 @@ const saveDraft = (it, text, fp) => {
     console.log(`   Check each against ${DIR}/me.md. A competitor posted "at my last job i used <product>"`);
     console.log(`   into a clinical thread under a real name. Nobody had ever had that job.\n`);
   }
-  if (!rep && !links.length && !said.length) console.log(`No repeated phrasing, no invented links, no claims about your history.`);
+  if (tell.length) {
+    console.log(`?? READS LIKE A TEMPLATE — ${tell.length} phrase${tell.length === 1 ? "" : "s"} nobody types to one person: ${tell.map((t) => `"${t}"`).join(", ")}`);
+    console.log(`   Rewrite those sentences in your own words. They are what makes a comment read as generated.\n`);
+  }
+  if (!rep && !links.length && !said.length && !tell.length) console.log(`No repeated phrasing, no invented links, no claims about your history, no template phrases.`);
   console.log(`You send it yourself, from your own account. Nothing here posts.`);
 };
 
@@ -1028,6 +1076,10 @@ find — other people, and the rooms it refuses to look in
   draft <id> --save       save a reply and run the refusals over it
 
   serve [--port N]        the dashboard, on localhost, in your browser
+  models                  where the models run — paid, free or local — and which has each seat
+  models use <plan>       paid | free | local
+  models set <role> <id>  judge | scout | writer, from that plan's menu (any tag, locally)
+  models url <base-url>   the local server, default http://127.0.0.1:11434/v1 (Ollama)
   sweep                   drop stored bodies past 48h
   platforms               the platforms this install can read — each one is a
                           skill folder; drop your own into .mq/skills/
