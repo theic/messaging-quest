@@ -13,9 +13,11 @@ colleague, not a control panel. It holds the brand's memory, listens where
 the buyers talk, drafts in the founder's own voice, checks what search and AI
 engines say about them, and *tells you the next action* instead of waiting to
 be operated: one card on screen, prepared options, you almost never type. All
-local, all refusable, and a human sends everything. Milestone 1 is still,
-deliberately, a Reddit reply tool done properly: onboarding, reading, and
-posting without shadowbans.
+local, all refusable, and a human sends everything. Milestone 1 (2026-09-03)
+is the colleague itself: a CMO on Deep Agents that drives your own browser
+through leased tabs, proposes the next action as a card, and runs the Reddit
+search as its first background task — onboarding, reading and posting without
+shadowbans, done *by* it rather than around it.
 
 **The suite is emergent, never built.** Core stays the primitives below;
 every marketing capability arrives as a skill. The day `lib/` grows an
@@ -46,8 +48,12 @@ brain       agent/ — the strategist, on Deep Agents. The ONE directory that
             carries dependencies, behind one lazy import; everything else
             runs without it being installed (`npm run brain` turns it on).
             Its tools are the CLI's verbs; its skills are skills/<id>/SKILL.md.
+            Milestone 1 grows it into the CMO and its runtime: workers on
+            their own threads, the inbox, the tab leases.
 surfaces    the Chrome extension (primary: the deck in a side panel, and the
-            only surface that can type a draft into Reddit's real composer)
+            only surface that can type a draft into Reddit's real composer;
+            from milestone 1 also the control lane — a browser toolkit like
+            Claude in Chrome's, on tabs a task leased)
             the dashboard (the back office: stats, prospects, memory, models —
             and /panel/, the same deck served as a page)
             the CLI (scripts, cron, OpenClaw — one implementation of every verb)
@@ -258,6 +264,92 @@ stores nothing, so every "nothing stored yet" screen — Standing, Ready,
 those surfaces asks it first, and a test pins that a 404'd profile is never
 again reported as "not read".
 
+**The CMO is milestone 1 (2026-09-03).** The strategist of 0.4.0 talks and
+proposes; a colleague also *does* — in the background, in your browser — and
+comes back with something. So the agent gets a runtime around it: the CMO on
+one long-lived thread; each background task a second Deep Agent on its own
+thread, in a tab it leased inside the user's own Chrome window; an inbox
+between them that the CMO reads when idle and is allowed to ignore. This
+replaces the old milestone 1 ("a Reddit reply tool done properly") by
+containing it — onboarding, the Reddit search and the reply are the first
+things the CMO does. Every earlier decision stands; the ones below are what
+the CMO adds. The brief for building it is "Milestone 1, for the next agent"
+below.
+
+**Background work is a thread, not a tool call (2026-09-03).** Deep Agents'
+`task` tool runs a subagent inside the caller's turn: the CMO would wait for
+the slowest scout, and one worker's pause would freeze the chat. A scout is
+therefore its own run on its own LangGraph thread, started by the runtime,
+reporting by events. `task` stays for research inside a reply. This is the
+shape Claude Code uses for its own background agents, and it is what lets
+the CMO decide whether to react.
+
+**Approvals are cards; interrupts live only in workers (2026-09-03).**
+LangGraph drops a pending interrupt when a thread is invoked with fresh input
+instead of a resume — so the CMO's thread is never left waiting on one. When
+it wants something started it deals a proposal card (the 0.4.x mechanism:
+re-parsed by the server at act time, so a card can never do more than its
+label says); the click starts the work and the CMO hears of it as an event.
+A worker that needs a person — a captcha, a permission, a choice — calls
+`interrupt()` on its own thread, which is persisted, queued on the deck
+oldest-first, and survives a restart. Several blocked workers are several
+paused threads; nothing is lost, one card shows at a time. A blocked worker
+the CMO has not surfaced within a minute is surfaced by the runtime itself:
+discretion for signal, none for a person waiting.
+
+**The control lane, beside the read lane (2026-09-03).** `lib/relay.mjs`
+stays GET-only by construction and unchanged. The extension gains a second
+protocol: a browser toolkit with the same reach as Claude in Chrome, on tabs
+a task leased. That reach includes click and type, so the posting doctrine
+moves from construction to grant plus a screen: no agent may click or type
+unless its definition says so, none does in milestone 1, and the extension
+refuses a click on any control whose label the insert screen already refuses
+(post, comment, reply, send, submit) — by construction again, one layer down.
+Reads on this lane pace themselves per site inside the lease, because the
+CLI's governor cannot see them. Visibility checks (sync/check/back) never
+take this lane: logged-out is the measurement.
+
+**A colleague is a markdown file (2026-09-03).** `skills/<id>/agent.md` —
+frontmatter `name`, `description`, `tools`, `model`; body the prompt — is
+the agent seat in markdown, beside the SKILL.md that teaches it. Both rings,
+same registry, same slot rules. `agent.mjs` remains for a colleague that
+needs tools written in code. No separate `agents/` folder: the knowledge and
+the one who uses it live in one folder.
+
+**One input primitive: a question list, dealt as cards (2026-09-03).**
+Onboarding is a quiz — nine habits, a proof-read, a first room — and the quiz
+is not special. Any agent that needs something from the person hands the deck
+a list of questions; the deck deals them one card at a time and returns the
+answers together. A worker's captcha, a room's missing rules line, a choice
+among three drafts, the CMO's "which of these first?" are the same primitive
+with one or many questions. The card kinds already exist in `lib/cards.mjs`;
+what is new is the tool that hands a list over, and it is the same tool in
+the CMO and in every worker. Build the tool once, and onboarding becomes its
+first caller rather than its own machinery.
+
+**AGENTS.md is the sixth memory file, and the only one the model writes
+(2026-09-03).** The five stay the operator's: propose, never save. AGENTS.md
+is the CMO's own notebook — standing instructions, what it learned about this
+brand and this operator — in the Deep Agents convention, loaded into its
+prompt and mounted read-write.
+
+**The hosted app is the shell; the engine is the package (2026-09-03,
+revising "the hosted twin").** Auth, extension pairing, profiles, projects
+and Stripe already exist in messaging.quest (Projects/messaging-quest, the
+Next.js + Supabase repo). The engine is consumed there as the
+`messaging-quest` package — the way `agent/` already consumes it — with the
+store over Postgres and the seat's base URL on the metered proxy. The merge
+is the last milestone, after the local CMO is the thing people recommend to
+each other. The website's first job is tracing: the inbox mirrored as events,
+one table. Checkpoints, page bodies, screenshots and drafts never leave the
+machine.
+
+**Platform two arrives as a scout, not an adapter (2026-09-03, refining
+"platforms grow by extraction").** The adapter contract is for feeds. A scout
+reads a platform in the user's own session with the toolkit, and its contract
+is the agent.md shape. LinkedIn is a stub definition until it is measured;
+Reddit stays the only scout built.
+
 ## Done
 
 - 0.1–0.2: listener, waiting-for-you, find, drafts, the gate; dashboard;
@@ -302,55 +394,132 @@ again reported as "not read".
   tally; the dashboard and panel in the brand's own tokens. 259 engine tests
   + 34 voice, green.
 
+- 2026-09-03, designed: the CMO — a runtime around the strategist, workers
+  on their own threads in leased tabs, approvals as cards, interrupts only
+  in workers, the control lane beside the read lane, colleagues as
+  `skills/<id>/agent.md`, one question-list primitive for every human
+  input. Recorded as decisions above and as milestone 1 below.
+
 ## Next, in order
 
-1. **Live with it, through the panel.** Load the unpacked extension, run the
-   card onboarding end to end on a real project, a week of ticks, three
-   replies that landed via insert → Reddit's button → "I posted it".
+1. **The CMO, v1 — milestone 1.** The brief is the next section. Done when
+   a fresh `.mq/` is onboarded from the panel by the CMO, its first
+   proposal is the Reddit search, the search runs in a tab you can watch,
+   and the result comes back as one card with a draft in your voice.
+2. **Live with it.** A week on a real project through the panel: the
+   onboarding the CMO ran, the searches it proposed, three replies through
+   insert and Reddit's own button, "I posted it" recorded through the gate.
    Everything below gates on this testimony.
-2. **The browser read lane — BUILT 2026-09-01, one measurement left.** The
-   relay landed as engine plumbing rather than an adapter declaration (a
-   simpler shape than the "transport: browser" flag this item first
-   imagined): `lib/relay.mjs` brokers GET-only jobs in the dashboard server,
-   the extension claims and answers them in the user's session (panel
-   long-polls, service-worker alarm catches up), and `fetchAnon` falls back
-   to the lane — for tick and probe only, a count a test pins — when the
-   anonymous read comes back 403/429/blocked. Same pace, same three-outcome
-   parsing, `via: "browser"` in the ledger. Still to do from this item:
-   measure Reddit's account-bound private feed token as a finding fallback.
-3. **The specialist grows up — persona and deck-sight landed 2026-09-01.**
-   `persona.md` is the fifth memory file (optional: usable unedited, listed
-   in the editor, out of the setup count, and reaching ONLY the strategist's
-   seat — a judge with a personality is rubric drift, and a test pins the
-   boundary). The strategist gained a `deck` tool: it reads the same cards
-   the panel shows before advising, so its advice and the card on screen
-   cannot disagree. Verified live: asked "what is on my panel?", it named
-   the actual card, explained why answering it unblocks drafting, and
-   flagged two fit-passing queue items it would skip on etiquette grounds.
-   Proposals-as-cards landed the same day: a `propose` tool whose verbs come
-   from an allowlist parsed in the zero-dep heart (`proposable()` — judge,
-   tick, sync, draft <id>, probe <room> [phrase]; mark and watch are
-   deliberately NOT on it), rendered as a card that rides second on the deck
-   — behind the system's own top action, visible during onboarding too — and
-   re-parsed by the server from its own stash at act time, so the card can
-   never do more than its label says. This also resolves the "no reading
-   verbs from chat" tension cleanly: the agent cannot run a probe, but it
-   can deal a card offering one; the click stays the operator's and the
-   server runs it on its own clock. Verified live: asked for a suggestion,
-   it proposed drafting the freshest fit, and the card appeared at deck
-   position 1 in its own words. Still open: named parallel research tasks.
-4. **Publish.** Public repo, npm name claimed, CI badge on the tests, the
-   Web Store listing (the predecessor's submission kit is written), and the
-   open OpenClaw/ClawHub skill aimed at the occupied slot.
-5. **Telegram relay.** The same cards over a bot: HITL from a phone, deep
-   links back into the dashboard. The card JSON was shaped for this.
+3. **Publish.** The repo is public and CI is green; left: the npm name, the
+   Web Store listing (the predecessor's submission kit is written), the open
+   OpenClaw skill aimed at the occupied slot.
+4. **Events out.** `inbox.jsonl` mirrored to one Supabase table under a
+   device token, read by the website as a trace per task. The first hosted
+   feature, and only a mirror.
+5. **Telegram relay.** The same cards over a bot. With the question-list
+   primitive this is a transport, nothing more.
 6. **Receipts + usability.** Refusal receipts designed to share; an
    `add <permalink>` card; hub per-token scoping when multi-client is real.
-7. **Platform #2** — feed-friendly (HN via hnrss), so the contract extraction
-   is about the contract.
-8. **GEO skill** — the checks ledger described above.
-9. **Hosted twin** — last, priced $19–49, after the local tool is the thing
-   people recommend to each other.
+7. **Platform two, as a scout.** LinkedIn or HN — measured first, then
+   `agent.md` + `SKILL.md`, nothing in the engine.
+8. **GEO skill.** The checks ledger: cited / not cited / could not ask,
+   dated, no score.
+9. **Merge into messaging-quest — the final milestone.** The engine as the
+   package the app imports; the store over Postgres; the seat's base URL on
+   the metered proxy; the extension pairs with the website and points at
+   either backend; the local dashboard narrows to runtime plus panel. Done
+   when a signed-in user pairs a local runtime, runs the CMO, and reads the
+   trace on messaging.quest. Not before 2 has happened.
+
+## Milestone 1, for the next agent
+
+You are building a colleague, not a control panel. Read README.md, this
+file, skills/README.md, then `agent/strategist.mjs`, `lib/cards.mjs`,
+`lib/relay.mjs` and `extension/insert.js` — those four files are what you
+extend. The predecessor's browser bridge (Projects/messaging-quest-monitoring,
+`extension/sw.js` and `src/bridge.ts`) is prior art for keeping a service
+worker alive and for who may open the socket; read it before writing the
+extension side.
+
+**What done looks like.** Open the panel on a fresh `.mq/`. The CMO runs
+onboarding as a quiz and reads your site in a tab. It then deals one card:
+"Search Reddit for people asking about this?" You approve. A tab opens
+under a "Messaging Quest" group; you go do something else. Later the panel
+says "3 threads worth answering", then the reply card with the draft. You
+press insert, then Reddit's button. If the scout hits a wall, the panel shows
+the screenshot and the tab, you deal with it, and the scout continues.
+
+**Build in this order. Each step is testable before the next exists.**
+
+1. *The control lane.* The extension learns the toolkit below, on tabs it
+   opened in a tab group; the server gets one new lane next to the relay,
+   on the same long-poll transport (no WebSocket server: the heart stays
+   zero-dependency). Test with a script, no agent: lease a tab, open a
+   Reddit search, print what was read, try to click "Comment" — the tab
+   opens in your own window and the click is refused by the extension.
+2. *Workers.* In `agent/`: the task manager — threads on a SQLite
+   checkpointer, the inbox file, leases, the question-list tool backed by
+   `interrupt()`, a deadline, cancel. The registry learns `agent.md` beside
+   `agent.mjs`. Ship a template agent that asks before its second page so
+   the pause can be tested on purpose. Test from the dashboard: start a
+   task, watch its tab and its log, answer its card, kill the server
+   mid-task, start it again, and see the task continue.
+3. *The CMO.* The strategist gains `propose_tasks`, the question-list
+   tool, `answer_task`, `cancel_task`, `notify`, inbox delivery when idle,
+   AGENTS.md, and the read-only browser tools. Onboarding becomes the CMO
+   calling the question-list tool with the cards that already exist. Test
+   the whole thing as described under "what done looks like".
+4. *The scout.* `skills/reddit/agent.md`: search in the user's own session,
+   posts before comments (the lab measured 3.9×), findings judged by the
+   engine's judge verb, drafts from the writer, never a click. Then step
+   into milestone 2 and live with it.
+
+**The browser toolkit, like Claude's.** Same names, same conventions, so
+the model's habits transfer: `tabs_context`, `tabs_create`, `tabs_close`,
+`navigate` (url, back, forward), `computer` with actions screenshot,
+left_click, right_click, double_click, type, key, scroll, scroll_to, hover,
+zoom, wait, `read_page` returning an accessibility tree whose interactive
+nodes carry `ref_N`, `find` returning refs for a query, `form_input` by ref,
+`get_page_text`, `read_console_messages`, `read_network_requests`, and a
+`batch` that runs a list of these in one round trip. Clicks take a ref or a
+coordinate from the most recent screenshot. Use the primitives Chrome already
+has: `chrome.scripting` for the tree, find, text, forms and scrolling;
+`chrome.debugger` for screenshots, mouse and keys, attached only while a task
+needs them (Chrome shows a yellow bar while attached — the Reddit scout never
+needs it); `tabs` and `tabGroups` for leases. No JavaScript-eval tool in this
+milestone. The runtime injects the tab id from the lease; a worker never
+chooses a tab. Every action is checked against the agent's `tools:` line in
+the runtime and, for clicks, against the label screen in the extension.
+
+**Reuse, do not rebuild.** The deck and its stash (`lib/cards.mjs`) are the
+whole HITL surface — add card kinds only if a question genuinely has no
+shape there. The relay's long-poll is the transport. The insert screen is
+the click screen. The job runner (`lib/jobs.mjs`) already reports progress to
+the panel; the task manager is its sibling for threads. The seats
+(`lib/models.mjs`) give every agent its model; do not add a second way. Deep
+Agents' own middleware — todos, filesystem, skills, summarization — is the
+context management; do not write another. The strategist's `propose` is the
+ancestor of `propose_tasks`; extend it.
+
+**The UX bar — better than a general assistant, concretely.** One card at a
+time, always. A proposal is a worked answer with the reason on it, never a
+question that makes you invent vocabulary. You can watch the tab it opened,
+and closing the task closes the tab. Silence means it is working; the log is
+one click away. When it needs you, the card carries the screenshot and names
+the tab. When it is done you get the count and one next action, not a
+report. Every no says why, in the words of the rule that said it. The flow
+never dead-ends: no key, no site, a failed read — every state has a card
+with a door in it. The CMO reads the deck before advising, so its words and
+the card on screen never disagree.
+
+**Do not.** Add a dependency to `lib/`, `bin/` or `skills/`. Add a second
+agent framework. Create an `agents/` folder. Grant click or type to any
+agent. Put a number on a person or a room. Run a read inside a chat turn.
+Interrupt the CMO's thread. Rebuild onboarding — wrap what exists. Write a
+memory file other than AGENTS.md from a model.
+
+**Ask the operator when** a decision above would have to bend to make
+something work — and say which one.
 
 ## What is deliberately not built
 
@@ -360,6 +529,8 @@ the click that submits is a human's, on the platform's own button, forever
 (the July 2026 crackdown wiped the competitors built the other way, and it
 is also simply the position). No invented scores, 0–100 or otherwise. No dependence on the official Reddit Data API. No engagement
 metrics, no telemetry, no CORS on the hub, no key requirement for anything
-that only reads, and no per-seat pricing of the local tool. Each of these is
-a decision with a paragraph behind it somewhere in the source; the source
-wins.
+that only reads, and no per-seat pricing of the local tool. No click or type granted to any agent
+by default, no worker that a card did not start, no interrupt on the CMO's
+thread, and no memory file written by a model other than AGENTS.md. Each of
+these is a decision with a paragraph behind it somewhere in the source; the
+source wins.
