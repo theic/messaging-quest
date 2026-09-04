@@ -44,12 +44,16 @@ heart       lib/ — the store, the pacing governor, the probe economics, the
 skills      skills/<id>/ — a platform is a SKILL.md + adapter.mjs. Reddit is
             the first and deliberately the only one. Local skills load from
             .mq/skills/ without forking. Contract: skills/README.md.
-brain       agent/ — the strategist, on Deep Agents. The ONE directory that
-            carries dependencies, behind one lazy import; everything else
-            runs without it being installed (`npm run brain` turns it on).
-            Its tools are the CLI's verbs; its skills are skills/<id>/SKILL.md.
-            Milestone 1 grows it into the CMO and its runtime: workers on
-            their own threads, the inbox, the tab leases.
+brain       agent/ — the CMO (strategist.mjs) and its runtime (tasks.mjs:
+            workers on their own threads, the inbox, the tab leases;
+            threads.mjs: the SQLite checkpointer; verbs.mjs: the CLI's verbs
+            as tools), on Deep Agents. The ONE directory that carries
+            dependencies, behind one lazy import; everything else runs
+            without it being installed (`npm run brain` turns it on). Its
+            tools are the CLI's verbs; its skills are skills/<id>/SKILL.md;
+            its colleagues are skills/<id>/agent.md. The control lane's
+            broker (lib/control.mjs) is heart, not brain: zero-dep, screened
+            by grant, paced per site.
 surfaces    the Chrome extension (primary: the deck in a side panel, and the
             only surface that can type a draft into Reddit's real composer;
             from milestone 1 also the control lane — a browser toolkit like
@@ -309,6 +313,41 @@ Reads on this lane pace themselves per site inside the lease, because the
 CLI's governor cannot see them. Visibility checks (sync/check/back) never
 take this lane: logged-out is the measurement.
 
+**The browser behaves like a person (2026-09-04).** The agent's browsing is
+a real tab, and nothing else: no fetch of a page from the extension's page
+code, ever. The tabs sit under the "Messaging Quest" group in a window of
+their own, opened unfocused so the operator's window keeps the keyboard, and
+the tab being worked is the active one there — found live: Chrome processes
+input events only for a tab it is drawing, so a hidden tab in the operator's
+window stalled every click, and a tab brought forward there would steal
+their view. Claude in Chrome works in its own window for the same reason.
+Before any input the extension asks the page whether Chrome is drawing it
+(`document.visibilityState`, a read) and raises its window when not — the
+machine's window comes up when the machine acts — falling back to a fresh
+unfocused window, and answering with a clear error, Chrome's windows listed,
+when it is still hidden; nothing is clicked into the void. A container is
+not a control: a custom element on Reddit is screened only when it carries
+an aria-label or a label of forty characters or less, so a title link is
+clicked for its own words and not refused for the "1 vote" beside it. Reading is `chrome.scripting` in
+the isolated world and writes nothing into the page — no attribute, no
+element, no synthetic event, no script scroll. Doing is Chrome's own input
+pipeline through `chrome.debugger`: the mouse travels to a control along a
+curve and rests before it presses, off-centre; a scroll is wheel ticks of
+uneven size; typing is one key at a time at an uneven rate; every job waits
+an uneven moment first and a fresh page gets looked at for a few seconds.
+Every event the page sees is `isTrusted`. The console reader enables the
+Log domain only — `Runtime.enable` is the one CDP call sites test for and
+nothing makes it. The panel's Insert button goes through the same hands (a
+real click on "Add a comment", a real click into the box, the draft pasted
+as one piece), and the platform's own button stays the human's. A test
+reads the extension's page code and fails on the first synthetic event,
+script scroll, value assignment or `Runtime.enable` that creeps back. The
+tempo's ranges are guesses at a person's (2026-09-04); the first measurement
+of what a site treats as human replaces them. The relay's background fetch
+(`extension/relay.js`, a GET in the user's session with no tab) is NOT the
+agent's path and is the one remaining read that is not a tab — a decision
+for the operator now that the scout reads searches in a real tab.
+
 **A colleague is a markdown file (2026-09-03).** `skills/<id>/agent.md` —
 frontmatter `name`, `description`, `tools`, `model`; body the prompt — is
 the agent seat in markdown, beside the SKILL.md that teaches it. Both rings,
@@ -399,13 +438,97 @@ Reddit stays the only scout built.
   in workers, the control lane beside the read lane, colleagues as
   `skills/<id>/agent.md`, one question-list primitive for every human
   input. Recorded as decisions above and as milestone 1 below.
+- 0.5.0 (2026-09-03), built — milestone 1 in the four ordered steps. **The
+  control lane**: `lib/control.mjs` (leases, the toolkit screened by grant,
+  navigations paced per site, `adopt` after a restart) + `/api/control/*` on
+  the relay's long-poll + `extension/control.js` (the toolkit on
+  `chrome.scripting`, `chrome.debugger` for the hands, tab groups) +
+  `extension/screen.js` (the click screen, a superset of the insert screen,
+  pinned by a test) + `bin/control-smoke.mjs`. Verified on the fixture and on
+  a live Reddit search page (106 shadow roots walked; "Add a comment",
+  "Reply", "Upvote" and a form's submit refused in-page; a label read through
+  nested shadow roots — the first version missed Reddit's icon buttons).
+  **Workers**: `agent/tasks.mjs` on the SQLite checkpointer
+  (`agent/threads.mjs`, shared with the CMO's thread), `inbox.jsonl`, the
+  question list backed by `interrupt()`, a running-time deadline, cancel,
+  `agent.md` in the registry, the template colleague, the Tasks page and the
+  `task.ask` / `task.done` / `task.failed` cards. Verified live from the
+  dashboard on the paid scout seat: started, read through the lane, paused on
+  its question, the panel dealt it with the screenshot, answered, resumed,
+  reported; killed mid-run and resumed from its checkpoint on restart. **The
+  CMO**: `propose_tasks`, `ask_person` (dealt, never an interrupt), `tasks`,
+  `answer_task`, `cancel_task`, `inbox`, `notify`, the notebook
+  (`read_notebook` / `write_notebook` on `.mq/AGENTS.md`, the sixth memory
+  file on the Memory page), read-only browser tools on a per-turn lease,
+  inbox delivery when idle, one turn at a time per directory. Answered a live
+  question about its colleagues and tasks correctly without starting
+  anything. **The scout**: `skills/reddit/agent.md` + `mq found` +
+  `record_findings` / `judge_pending` / `write_draft` (the judge and writer
+  SEATS do the judging and writing; the CLI records). 337 engine tests + 37
+  runtime + 34 voice, green. Two things learned while building: Deep Agents'
+  skills middleware lists SKILL.md paths the agent's file tools cannot reach
+  (two wasted calls on the first live run), so SKILL.md is now INLINED into
+  every agent's prompt; and the 6s per-site pace on the control lane is a
+  human-browsing guess, written as one — the first measurement replaces it.
+  Reloaded from this tree by the operator on 2026-09-04: lease, tab group,
+  broker refusal, debugger screenshot and release passed live; reads waited
+  on the reddit.com grant. The grant ask now outlives the lease that hit
+  the wall (it vanished with the smoke test's tab before).
+- 0.5.2 (2026-09-04), built — milestone 1's "done when" run, live: a fresh
+  `.mq/` onboarded from the panel (account, the site read off
+  play.messaging.quest, nine voice cards, three proof-read files, room,
+  phrase, probe, judge, rules, watch, welcome); the CMO dealt "Search
+  r/sideproject for 'where do I find clients'?"; Start it ran the reddit
+  scout in a tab of the machine's window — reads only, no click, no refusal —
+  7 posts on the page, 4 new, 3 judged fit, 3 drafts in the voice, tab
+  closed; the deck led with the reply card and Insert. Two things had to be
+  built for it to close: the welcome card now says `setup.done` into the
+  inbox and the CMO's inbox delivery asks for the first proposal in so many
+  words (before that it read the files and answered "noted"); and the deck's
+  watch step looped — `mq watch` refuses a room whose rules nobody recorded,
+  the job said ok, the deck went back to the room card — so the probed room
+  is on the rooms list and its rules card is dealt first, the watch handler
+  refuses with a message for an unanswered or forbidden room, and the watch
+  carries the probed phrase. Read on the way: r/SaaS's rule 11 bans outreach
+  and lead-detection tools outright (recorded no); r/SideProject exists for
+  sharing your own project (recorded yes). Left standing, of record: the
+  deck's probe and tick still read Reddit through the engine's own read path
+  (a fetch from Node, or the relay's background GET), not the human browser —
+  the decision on retiring that is the operator's; the scout read the search
+  page only, so the judge saw titles without bodies; the proposal rides
+  second behind a judged draft card, so the side panel shows the person
+  first; the strategist sits in the scout seat and once emitted a broken
+  tool call instead of proposing.
+- 0.5.1 (2026-09-04), built — the browser behaves like a person (the
+  decision above, in full). `extension/control.js` rewritten around trusted
+  input: one debugger session per worked tab (idle a minute, dropped on
+  release), a mouse that travels and rests, wheel-tick scrolling and
+  scroll_to by the wheel, typing key by key, a think-pause before every job,
+  Enter/Space through the click screen and ctrl+Enter refused outright,
+  `form_input` by click-select-type, the console reader on the Log domain,
+  `front()` asking the page whether it is drawn before any input and raising
+  the machine's window when not, `find` naming a control from its inner
+  text with read_page's roles; the smoke's Reddit pass opens a result with
+  a real click on its title and has the thread's own "Comment" button
+  refused in the page (both passes green, 2026-09-04).
+  `extension/insert.js` reads only (finds the composer or its opener);
+  `insertDraft` in control.js does the human's insert through the service
+  worker, the one debugger owner. `bin/control-smoke.mjs` gained a fixture
+  pass: a page served from the script itself that tallies every event and
+  whether it was trusted, so the tally is the proof — plus the Reddit pass.
+  `/api/control/reload` asks the extension to reload itself after a pull.
+  The broker's per-site pace is uneven (paceMs plus up to 80%). Left: the
+  live fixture and Reddit passes with the reloaded extension, then the
+  "done when" run.
 
 ## Next, in order
 
-1. **The CMO, v1 — milestone 1.** The brief is the next section. Done when
-   a fresh `.mq/` is onboarded from the panel by the CMO, its first
-   proposal is the Reddit search, the search runs in a tab you can watch,
-   and the result comes back as one card with a draft in your voice.
+1. **The CMO, v1 — milestone 1.** The brief is the next section. Built
+   2026-09-03 and its "done when" run passed 2026-09-04 (see Done, 0.5.2): a
+   fresh `.mq/` onboarded from the panel, the CMO's first proposal the Reddit
+   search, the search in a tab of the machine's window, the result as a reply
+   card with a draft in the voice. Insert and Reddit's button were left to the
+   human, which is the point. What the run left standing is recorded there.
 2. **Live with it.** A week on a real project through the panel: the
    onboarding the CMO ran, the searches it proposed, three replies through
    insert and Reddit's own button, "I posted it" recorded through the gate.

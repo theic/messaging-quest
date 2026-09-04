@@ -6,8 +6,9 @@
 //
 // Everything is the server's decision. This file renders the deck, sends the
 // pressed button's id back, and handles the two things only a browser can do:
-// typing a draft into Reddit's real composer (insert.js — the human still
-// presses Reddit's own button), and talking to the strategist.
+// putting a draft into Reddit's real composer (the service worker does it
+// through Chrome's own input pipeline; the human still presses Reddit's own
+// button), and talking to the strategist.
 
 import { renderCard } from "./card.js";
 import { relayPass, RELAY_ORIGINS } from "./relay.js";
@@ -36,10 +37,12 @@ async function load() {
   try {
     const res = await fetch(`${base}/api/cards`, { signal: AbortSignal.timeout(6000) });
     if (!res.ok) throw new Error(`server said ${res.status}`);
-    const { cards, jobs, relay } = await res.json();
-    showJobs(jobs, relay);
+    const { cards, jobs, relay, control, tasks } = await res.json();
+    // The card first: show() clears the notice line, and the hints that
+    // follow are allowed to fill it again.
     show(cards?.[0] ?? null);
-    schedule(cards?.[0], jobs);
+    showJobs(jobs, relay, control, tasks);
+    schedule(cards?.[0], jobs, tasks);
   } catch {
     showDown();
   }
@@ -56,6 +59,8 @@ function show(card) {
     cardHost.append(p);
     return;
   }
+  // A screenshot rides as a server path; the panel knows which server.
+  if (card.image && !/^(https?:|data:)/i.test(card.image)) card = { ...card, image: absolute(card.image) };
   renderCard(cardHost, card, act);
   cardHost.firstChild?.classList.toggle("es-waiting", /wait|probing/.test(card.kind ?? ""));
 }
@@ -71,11 +76,44 @@ function showDown() {
   }, () => load());
 }
 
-function showJobs(jobs, relay) {
+function showJobs(jobs, relay, control, tasks) {
   const parts = (jobs ?? []).map((j) => `${j.label}${j.note ? ` — ${j.note}` : ""}`);
   if (relay?.pending > 0) parts.push(`${relay.pending} read${relay.pending === 1 ? "" : "s"} waiting on this browser`);
+  // Colleagues at work: silence means working; a question is a card. The
+  // tab each holds is one click away in the "Messaging Quest" group.
+  for (const t of tasks ?? []) parts.push(`${t.title} — ${t.status === "blocked" ? "needs you" : "working"}${t.tabId ? " in its tab" : ""}`);
+  if (!(tasks ?? []).length) for (const l of control?.leases ?? []) parts.push(`${l.task || "a task"} holds ${l.tabs.length === 1 ? "a tab" : `${l.tabs.length} tabs`}`);
   jobsLine.textContent = parts.join(" · ");
   updateRelayHint(relay);
+  updateGrantHint(control);
+}
+
+/**
+ * A task's tab is on a site this extension may not read yet. Chrome only
+ * grants inside a click, so the ask is a button here — never a dialog from a
+ * worker nobody is looking at.
+ */
+function updateGrantHint(control) {
+  const origins = control?.grants ?? [];
+  if (!ext || !origins.length || current?.kind === "grant.ask") return;   // the card on screen IS the ask
+  errorLine.hidden = false;
+  errorLine.replaceChildren();
+  errorLine.append(`A task opened ${origins.map((o) => o.replace(/^https?:\/\//, "")).join(", ")} and this browser has not allowed the extension there yet. `);
+  for (const origin of origins) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = `Allow ${origin.replace(/^https?:\/\//, "")}`;
+    b.addEventListener("click", async () => {
+      const ok = await ext.permissions.request({ origins: [`${origin}/*`] }).catch(() => false);
+      if (!ok) return;
+      await fetch(`${base}/api/control/granted`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ origin }),
+      }).catch(() => {});
+      errorLine.hidden = true;
+      load();
+    });
+    errorLine.append(b);
+  }
 }
 
 /**
@@ -111,10 +149,12 @@ async function relayLoop() {
   }
 }
 
-/** Waits poll themselves; everything else refreshes on act or on the alarm. */
-function schedule(card, jobs) {
+/** Waits poll themselves; everything else refreshes on act or on the alarm.
+ *  A colleague at work is a wait too — its question or its result is the
+ *  next card, and it arrives on the runtime's clock, not on a click. */
+function schedule(card, jobs, tasks) {
   clearTimeout(pollTimer);
-  const waiting = /wait|probing/.test(card?.kind ?? "") || (jobs ?? []).length > 0;
+  const waiting = /wait|probing/.test(card?.kind ?? "") || (jobs ?? []).length > 0 || (tasks ?? []).some((t) => t.status === "running");
   if (waiting) pollTimer = setTimeout(load, 4000);
 }
 
@@ -123,10 +163,37 @@ function schedule(card, jobs) {
 async function act({ action, choice, choices, text }) {
   if (!current) return;
 
-  // The two client-side actions; the server hears about them at "posted".
+  // The client-side actions; the server hears about them at "posted".
   if (action === "insert" && current.data?.url) return insertFlow(current, text);
+  // A site the extension may not read yet: Chrome grants only inside the
+  // click that asked, so the card's own button is where the asking happens.
+  if (action === "allow" && current.data?.origin) {
+    if (!ext) { errorLine.textContent = "Open the Messaging Quest side panel in Chrome and press Allow there — Chrome asks for a site permission only from the extension itself."; errorLine.hidden = false; return; }
+    const origin = current.data.origin;
+    const ok = await ext.permissions.request({ origins: [`${origin}/*`] }).catch(() => false);
+    if (!ok) { errorLine.textContent = `Chrome did not grant ${origin.replace(/^https?:\/\//, "")} — the task stays paused until it is allowed.`; errorLine.hidden = false; return; }
+    await fetch(`${base}/api/control/granted`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ origin }),
+    }).catch(() => {});
+    load();
+    return;
+  }
   if (action === "open" && current.links?.[0]) {
     openTab(absolute(current.links[0].href));
+    return;
+  }
+  // A paused worker's tab, brought to the front — only a browser can do it,
+  // and only this one holds the tab. Served as a page, the note is honest.
+  if (action === "show" && current.data?.tabId) {
+    if (!ext) { errorLine.textContent = "The tab is in the Chrome window where the extension runs — look for the Messaging Quest tab group."; errorLine.hidden = false; return; }
+    try {
+      const t = await ext.tabs.get(current.data.tabId);
+      await ext.windows.update(t.windowId, { focused: true });
+      await ext.tabs.update(t.id, { active: true });
+    } catch {
+      errorLine.textContent = "That tab is gone — the task will open another when it needs one.";
+      errorLine.hidden = false;
+    }
     return;
   }
 
@@ -153,7 +220,8 @@ const openTab = (url) => (ext ? ext.tabs.create({ url }) : window.open(url, "_bl
  * The posting flow, with the click order that matters: copy first (opening the
  * tab takes the panel's focus, and if Chrome refuses the injection the text is
  * already on the clipboard), then the visible per-site permission, then the
- * tab, then ESInsert. The human reads the draft in Reddit's own composer and
+ * tab, then asks the service worker to put the draft in (insertDraft). The
+ * human reads the draft in Reddit's own composer and
  * presses Reddit's own button — nothing here can submit, by construction.
  */
 async function insertFlow(card, editedText) {
@@ -181,19 +249,18 @@ async function insertFlow(card, editedText) {
 
   await loaded(tab.id);
   await new Promise((r) => setTimeout(r, 800)); // the SPA settles after "load"
-  let ok = false;
-  try {
-    const [res] = await ext.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: ESInsert,             // the global from insert.js, serialized into the page
-      args: [draft],
-    });
-    ok = Boolean(res?.result?.ok);
-  } catch { ok = false; }
+  // The service worker holds the one debugger session and does it the way a
+  // person does: a real click on "Add a comment" if the box is closed, a real
+  // click into the box, the draft pasted as one piece (control.js insertDraft).
+  let res = null;
+  try { res = await ext.runtime.sendMessage({ type: "insert", tabId: tab.id, text: draft }); } catch { res = null; }
+  const ok = Boolean(res?.ok);
 
   note(ok
-    ? "Typed into the composer. Read it there, press Reddit's own button — then tell me:"
-    : "Could not find the composer — the draft is on your clipboard, paste it in. Then tell me:", card);
+    ? "Pasted into the composer. Read it there, press Reddit's own button — then tell me:"
+    : res?.reason === "not_granted"
+      ? "Copied to your clipboard — paste it into the reply box. (Putting it there needs the reddit.com permission.) Then tell me:"
+      : "Could not find the composer — the draft is on your clipboard, paste it in. Then tell me:", card);
 }
 
 /** After the thread opens, the card becomes the confirm: posted, or not. */

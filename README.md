@@ -109,6 +109,47 @@ No Chrome? The same deck is served at `http://127.0.0.1:8787/panel/` —
 everything works there except typing into the composer (you get the draft on
 your clipboard instead).
 
+### Colleagues: the specialist at work in your browser
+
+From 0.5.0 the specialist is a CMO: it does not only talk, it puts
+**colleagues** to work — each a background task on its own thread, in a tab
+it leased in your own Chrome window under a "Messaging Quest" tab group. It
+proposes one as a card ("Search r/saas for people asking this?"); your click
+starts it; you go and do something else. Later the panel says what it found,
+or asks you something when it hits a wall — a login, a captcha, a choice —
+with a screenshot of its tab on the card and a button to show you the tab.
+Closing a task closes its tab. The **Tasks** page has the log, the colleagues
+installed, and a Stop button.
+
+A colleague is a markdown file, `skills/<id>/agent.md`, beside the SKILL.md
+that teaches it ([skills/README.md](skills/README.md)). The first is the
+Reddit scout: it reads a subreddit search in your signed-in session, records
+the posts, has the judge seat judge them and the writer seat draft the
+replies — and never clicks. **No colleague may click or type**: every browser
+call is checked against the colleague's `tools:` line before the extension
+hears of it, and the extension refuses a click on any control labelled post,
+comment, reply, send or submit even if one were granted. The colleague
+runtime lives in `agent/` with the strategist (`npm run brain`); without it
+the deck, the extension and everything else run exactly as before.
+
+Upgrading the extension: reload it on `chrome://extensions` after pulling —
+it asks for three more permissions (tabs, tab groups, and the debugger, which
+is what screenshots, the mouse, the wheel and the keys need; Chrome shows its
+bar while a task is working a tab and drops it after a minute idle).
+
+The browser stays a person's. A task's tab is a real tab, under the
+"Messaging Quest" group in a window of its own (Chrome
+only processes input for a tab it is drawing, so the extension asks the page
+whether it is on screen before every step and raises that window when it is
+not); nothing fetches a page in the background. Reading writes nothing into the
+page. Every scroll, click and key goes through Chrome's own input pipeline,
+with a mouse that travels and rests, wheel ticks of uneven size, typing one
+key at a time, and an uneven pause before every step — the page sees only
+trusted events, and a test fails the build on the first synthetic one. The
+Insert button works the same way: a real click on "Add a comment", a real
+click into the box, the draft pasted as one piece. Reddit's own button is
+yours.
+
 The extension is also the **second reading lane**. Anonymous Reddit sits at a
 measured ceiling — one request a minute, and RSS itself is under review — so
 when a *finding* read (a probe, a tick) is refused anonymously, the engine
@@ -416,7 +457,8 @@ Everything is here. Not a window onto the CLI — the whole product.
 | **Standing** | What became of the things you said. |
 | **Waiting** · **Ready** · **Voice** | Who is owed an answer, where you stand, how you write. |
 | **Sources** · **Rooms** | What is watched, and whose rules have been read. |
-| **Memory** | The five markdown files, edited in the browser. |
+| **Tasks** | Colleagues at work in your browser: each one's log, its tab, a Stop button, and the ones installed. |
+| **Memory** | The five markdown files, edited in the browser — and the sixth, AGENTS.md, the specialist's own notebook, the one file the model writes. |
 | **Skills** | Everything installed: what runs, what refused to load, and the choice when two skills serve one purpose. |
 | **Settings** | Where the models run — paid, free or local — a model per seat, and what each costs. |
 
@@ -615,8 +657,10 @@ to open.
 ## Tests
 
 ```bash
-node bin/test.mjs                # the engine, the cards, the seams
+node bin/test.mjs                # the engine, the cards, the seams, the control lane
 node --test bin/voice-test.mjs   # the voice fingerprint
+node agent/test.mjs              # the runtime (needs npm run brain): workers on a scripted model
+node bin/control-smoke.mjs       # the control lane by hand, against your own Chrome
 ```
 
 They cover only the things that would break quietly — a body that gets

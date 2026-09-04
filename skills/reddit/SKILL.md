@@ -47,6 +47,27 @@ contract the engine calls).
 | site-wide search | 10.0% | 10.0 | the floor, exactly |
 | comments firehose | 4.2% | 23.5 | **refused** |
 
+## The scout (milestone 1, 2026-09-03)
+
+`agent.md` beside this file is the Reddit scout: a background colleague the
+CMO proposes and the operator starts with one click, run on its own thread
+in a tab of the operator's own signed-in Chrome. It reads a **subreddit
+search page**, the workhorse shape above, at the address the browser uses:
+
+```
+https://www.reddit.com/r/<sub>/search/?q=<phrase>&type=posts&sort=new&t=week&restrict_sr=1
+```
+
+`type=posts` keeps it to submissions (posts before comments — a post was
+measured 3.9× likelier to be somebody with the problem), `restrict_sr=1`
+keeps it in the room, `t=week` keeps it recent. It records what it read
+through `mq found` (same table and refusals as `probe`), has the judge seat
+judge it and the writer seat draft, and stops to ask when it meets a wall.
+It holds the `browser.read` grant and nothing else: no click, no type, and
+the extension refuses a click on any control labelled post, comment, reply,
+send or submit even if one were granted. Visibility checks never take this
+lane — logged-out is the measurement.
+
 ## Being tolerable here
 
 Reddit names "the same or similar comments across communities" as reportable

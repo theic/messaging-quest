@@ -31,6 +31,7 @@ import { sidebarUrl, roomFile } from "../lib/rules.mjs";
 import { mergeVoice, voiceRules, voiceSummary, applyVoiceAnswers, VOICE_UNSURE } from "../lib/voice.mjs";
 import { nextCards, readStash, patchStash, proposable } from "../lib/cards.mjs";
 import { relayBroker } from "../lib/relay.mjs";
+import { controlBroker } from "../lib/control.mjs";
 import { jobStore } from "../lib/jobs.mjs";
 import { MEMORY, readMemory, readOne, writeMemory, seedMissing, memoryProgress } from "../lib/memory.mjs";
 import { PLANS, ROLES, LOCAL_URL, plan, setPlan, chosen, choose, localConfig, setLocal, probeLocal, modelInfo, alternatesFor,
@@ -79,6 +80,39 @@ const PORT = argv.includes("--port") ? Number(argv[argv.indexOf("--port") + 1]) 
 if (!existsSync(DIR)) { console.error(`Messaging Quest: no ${DIR}/ here — run \`mq init\` first`); process.exit(1); }
 const S = store(DIR, (m) => { throw new Error(m); });
 const J = jobStore(DIR);
+
+/** The control lane's broker (lib/control.mjs holds the law): tabs a task
+ *  leased in the operator's own Chrome, the toolkit screened by grant,
+ *  navigations paced per site. Idle leases are swept so a crashed task never
+ *  keeps a tab. Its events go to the inbox once the runtime is up. */
+let INBOX = null;
+const CONTROL = controlBroker({ onEvent: (e) => INBOX?.(e) });
+setInterval(() => CONTROL.sweep(), 60_000).unref();
+
+/* The runtime — workers on their own threads (agent/tasks.mjs). It lives in
+ * agent/, the one directory with dependencies, behind this one lazy import:
+ * absent, the deck has no task cards, /tasks says how to install it, and
+ * everything else runs exactly as before. Loaded AFTER the port is bound —
+ * the LangChain tree takes seconds to import, and a dashboard that answers
+ * late because a colleague might be needed later is the wrong trade. */
+let T = null;
+let TASKS_WHY = "the runtime is still loading";
+async function loadRuntime() {
+  try {
+    const { taskManager } = await import("../agent/tasks.mjs");
+    T = taskManager(DIR, { control: CONTROL });
+    INBOX = (e) => T.note(e.type, e);
+    TASKS_WHY = "";
+    // The CMO learns of the runtime — its tools for proposing, answering and
+    // stopping tasks, and its read-only browser — and its inbox starts being
+    // delivered when it is idle. Same directory, same seam.
+    const { attachRuntime, startInboxLoop } = await import("../agent/strategist.mjs");
+    attachRuntime({ tasks: T, control: CONTROL });
+    startInboxLoop(DIR);
+  } catch (e) {
+    TASKS_WHY = String(e?.message ?? e).split("\n")[0];
+  }
+}
 
 // An .mq/ made by an older build has no memory files. Grow them on boot
 // rather than making the first page load a migration the user has to notice.
@@ -912,6 +946,66 @@ ${past.map((j) => `<tr><td>${esc(j.label ?? j.verb)}</td>
 <td class="muted">${esc(ago(j.startedAt))}</td></tr>`).join("")}</tbody></table>` : ""}`);
 };
 
+/* --- Tasks ---------------------------------------------------------------- */
+
+// Colleagues at work, and the ones installed. The deck is where a task's
+// QUESTION is answered (one card at a time); this is where its log is read,
+// where one is started by hand, and where it is stopped.
+views["/tasks"] = () => {
+  const fl = takeFlash();
+  if (!T) return render("/tasks", "Tasks", `
+<h1>Tasks</h1>
+<p class="sub">Colleagues at work in your own browser — each on its own thread, in a tab it leased.</p>
+<div class="note"><b>The runtime is not installed.</b> Colleagues run on the brain: <code>npm run brain</code> installs
+<code>agent/</code> (Deep Agents, LangGraph and the SQLite checkpointer) and everything else keeps working without it.
+${TASKS_WHY ? `<br><span class="muted">${esc(TASKS_WHY)}</span>` : ""}</div>`);
+  const tasks = T.list();
+  const cols = T.colleagues();
+  const live = tasks.filter((t) => /^(running|blocked)$/.test(t.status));
+  const rest = tasks.filter((t) => !live.includes(t)).slice(0, 20);
+  const tone = (s) => (s === "done" ? "ok" : /failed|cancelled/.test(s) ? "no" : s === "blocked" ? "sig" : "dim");
+  const row = (t) => `<div class="card">
+<div class="row" style="border:0;padding:0"><b>${esc(t.title)}</b> ${tag(t.status, tone(t.status))}</div>
+<p class="muted" style="margin:8px 0">${esc(t.agent)} · started ${esc(ago(t.startedAt))}${t.lease ? ` · tab ${esc(String(t.lease.tabId))} at ${esc(t.lease.url ?? "")}` : ""}${t.finishedAt ? ` · finished ${esc(ago(t.finishedAt))}` : ""}</p>
+${t.status === "blocked" ? `<div class="note"><b>Waiting on you:</b> ${esc((t.questions ?? []).map((q) => q.question).join(" · "))} — <a href="/panel/">answer it on the panel</a></div>` : ""}
+${t.result ? `<div class="said">${esc(t.result)}</div>` : ""}
+${t.error ? `<p class="no" style="margin-top:10px">${esc(t.error)}</p>` : ""}
+${t.shot ? `<img src="/api/tasks/${esc(t.id)}/screenshot" alt="what the task saw" style="max-width:100%;border:1.5px solid var(--ink);margin:10px 0;display:block">` : ""}
+${t.log?.length ? `<div class="log" style="margin-top:10px">${esc(t.log.slice(-30).join("\n"))}</div>` : ""}
+<div class="actions">
+  ${/^(running|blocked)$/.test(t.status) ? `<form method="POST" action="/tasks/cancel"><input type="hidden" name="id" value="${esc(t.id)}"><button class="small" data-confirm="Stop ${esc(t.title)}? Its tab closes.">Stop</button></form>` : ""}
+  ${/^(done|failed)$/.test(t.status) && !t.acked ? `<form method="POST" action="/tasks/ack"><input type="hidden" name="id" value="${esc(t.id)}"><button class="small">Dismiss</button></form>` : ""}
+</div></div>`;
+  const startForm = cols.length ? `<div class="card">
+<h2 style="margin-top:0">Start a colleague</h2>
+${fl.taskError ? `<div class="note"><b>Not started:</b> ${esc(fl.taskError)}</div>` : ""}
+<form method="POST" action="/tasks/start">
+  <div class="field"><label for="t-agent">Colleague</label>
+    <select id="t-agent" name="agent">${cols.map((c) => `<option value="${esc(c.id)}">${esc(c.name)} — ${esc(c.description)}</option>`).join("")}</select></div>
+  <div class="field"><label for="t-url">Page to open — a browser colleague starts there, in a tab of your own Chrome</label>
+    <input id="t-url" type="url" name="url" placeholder="https://…"></div>
+  <div class="field"><label for="t-brief">Brief — what to do, in a sentence</label>
+    <input id="t-brief" type="text" name="brief" placeholder="Read this page and tell me what it sells"></div>
+  <button class="primary" type="submit" ${hasModel(DIR) ? "" : `disabled title="no model — pick one on Settings"`}>Start</button>
+  ${hasModel(DIR) ? "" : `<span class="muted">Needs a model: <a href="/settings">Settings</a>.</span>`}
+</form></div>` : `<div class="note">No colleagues installed. A colleague is <code>skills/&lt;id&gt;/agent.md</code> beside its SKILL.md — copy
+<code>skills/_template/</code> into <code>${esc(DIR)}/skills/&lt;id&gt;/</code> to try the template one, which reads a page and asks before reading a second.</div>`;
+  return render("/tasks", "Tasks", `
+<h1>Tasks</h1>
+<p class="sub">Colleagues at work in your own browser — each on its own thread, in a tab it leased under the
+&ldquo;Messaging Quest&rdquo; tab group. Silence means it is working; a question lands on the panel as a card; closing a task closes its tab.</p>
+${startForm}
+${live.length ? `<h2>Now</h2>${live.map(row).join("")}` : ""}
+${rest.length ? `<h2>Earlier</h2>${rest.map(row).join("")}` : ""}
+<h2>Colleagues installed</h2>
+${cols.length ? `<table><thead><tr><th>colleague</th><th>tools</th><th>seat</th><th>ring</th></tr></thead><tbody>
+${cols.map((c) => `<tr><td><b>${esc(c.name)}</b><br><span class="muted">${esc(c.description)}</span></td>
+  <td class="muted">${esc(c.tools.join(", "))}${c.grants.some((g) => g !== "read") ? ` <b class="no">— may ${esc(c.grants.filter((g) => g !== "read").join(" and "))}</b>` : ""}</td>
+  <td>${esc(c.model)}</td><td>${tag(c.ring === "local" ? "yours" : "built-in")}</td></tr>`).join("")}</tbody></table>` : `<p class="sub">None yet.</p>`}
+<p class="sub" style="font-size:13px">No colleague is granted click or type in this milestone: every browser call is screened against its <code>tools:</code> line here,
+and every click against the label screen in the extension. A refusal says which rule refused it.</p>`, { refresh: live.length ? 5 : 0 });
+};
+
 /* ------------------------------------------------------------------ writes */
 
 /** Verbs the browser may start, and what to call them while they run. Anything
@@ -1133,6 +1227,22 @@ const writes = {
   },
 
   "/api/cancel": (form) => { J.cancel(String(form.get("id") ?? "")); return null; },
+
+  /* Colleagues, from the dashboard: start one on a page with a brief, stop
+   * one, dismiss a finished one. The same runtime the deck's cards drive. */
+  "/tasks/start": (form) => {
+    if (!T) return "/tasks";
+    const agent = String(form.get("agent") ?? "").trim();
+    const url = String(form.get("url") ?? "").trim();
+    const brief = String(form.get("brief") ?? "").trim().slice(0, 600);
+    const title = String(form.get("title") ?? "").trim().slice(0, 80) || (brief ? brief.slice(0, 60) : null);
+    T.start(agent, { ...(url ? { url } : {}), ...(brief ? { brief } : {}) }, { title })
+      .then((r) => { if (r.error) flash = { taskError: r.error }; })
+      .catch((e) => { flash = { taskError: String(e?.message ?? e) }; });
+    return "/tasks";
+  },
+  "/tasks/cancel": (form) => { T?.cancel(String(form.get("id") ?? "")); return "/tasks"; },
+  "/tasks/ack": (form) => { T?.ack(String(form.get("id") ?? "")); return "/tasks"; },
 };
 
 /* --------------------------------------------------------- cards + agent */
@@ -1170,7 +1280,11 @@ function cardSnapshot() {
   if (scout.status === "ready" && !scout.proposal) scout.status = "error";
 
   const sources = S.sources();
-  const rooms = sources.map((s) => ({ place: s.place, state: S.roomState(s.place).state }));
+  // The room a probe just read is on the list too: `mq watch` refuses a room
+  // whose rules nobody has read, so its rules card must be dealt before the
+  // watch card — not after a watch that quietly wrote nothing.
+  const probed = stash.probe?.fired && stash.probe.place && !sources.some((x) => x.place === stash.probe.place) ? [{ place: stash.probe.place }] : [];
+  const rooms = [...sources, ...probed].map((s) => ({ place: s.place, state: S.roomState(s.place).state }));
 
   // Probe economics for the room being walked through onboarding.
   let probe = { running: J.busy("probe"), last: null, fitRate: null };
@@ -1211,6 +1325,13 @@ function cardSnapshot() {
     itemCount: S.items().size,
     contactedCount: S.contacted().size,
     syncRunning: J.busy("sync"),
+    // Colleagues at work: a blocked one's question outranks everything, a
+    // finished one's result is a card once. No runtime, no tasks.
+    tasks: T ? T.list() : [],
+    brain: Boolean(T),
+    // Sites a leased tab is on that the extension may not read yet — the
+    // panel's card carries the button Chrome needs the click from.
+    grants: CONTROL.grantsNeeded(),
   };
 }
 
@@ -1224,12 +1345,70 @@ function cardSnapshot() {
  * Returns {ok} or {error}; the client re-fetches the deck either way, because
  * the deck is the truth about what comes next.
  */
-function actCard({ card, action, choice, text }) {
+async function actCard({ card, action, choice, choices, text }) {
   const id = String(card ?? "");
   const act = String(action ?? "");
   const t = String(text ?? "").trim();
   const picked = String(choice ?? "");
+  const many = Array.isArray(choices) ? choices.map(String).filter(Boolean) : [];
   const spawn = (verb, args = []) => { J.spawn(verb, args, { label: SPAWNABLE[verb] }); return { ok: true }; };
+  /** One question's answer, as the asker gets it back: a choice id, the list
+   *  of them, free text, both when the card had both, null when skipped. */
+  const answerValue = () => (act === "skip" ? null : many.length > 1 ? many : picked && t ? { choice: picked, text: t } : picked || t || null);
+
+  /* ---- colleagues: a worker's question, its result, the specialist's own
+     proposals, notes and questions. The runtime is the one that acts; the
+     deck only carries the answer to it. */
+  if (id.startsWith("task.ask.")) {
+    if (!T) return { error: "the runtime is not installed — npm run brain" };
+    const [, , taskId, qid] = id.split(".");
+    if (act === "show") return { ok: true };            // client-side: the browser fronts the tab
+    if (!qid) return { error: "which question?" };
+    const out = T.answerQuestion(taskId, qid, answerValue());
+    return out.error ? { error: out.error } : { ok: true };
+  }
+  if (id.startsWith("task.done.") || id.startsWith("task.failed.")) {
+    if (!T) return { error: "the runtime is not installed — npm run brain" };
+    const taskId = id.split(".")[2];
+    T.ack(taskId);
+    if (act === "retry") { const r = await T.retry(taskId); if (r.error) return { error: r.error }; }
+    return { ok: true };
+  }
+  if (id === "cmo.propose") {
+    const list = readStash(DIR).proposals ?? [];
+    const p = list[0];
+    patchStash(DIR, { proposals: list.slice(1) });    // either way, the card is spent
+    if (act !== "start" || !p?.task?.agent) { if (p && T) T.note("proposal.dismissed", { agent: p.task?.agent, question: p.question }); return { ok: true }; }
+    if (!T) return { error: "the runtime is not installed — npm run brain" };
+    // The colleague and its input are re-read from the STASH, never taken
+    // from the request — the click only ever says "start" to what the
+    // specialist itself wrote there.
+    const r = await T.start(p.task.agent, p.task.input ?? {}, { title: p.task.title ?? p.question });
+    if (r.error) return { error: r.error };
+    T.note("proposal.accepted", { task: r.id, agent: p.task.agent, question: p.question });
+    return { ok: true };
+  }
+  if (id === "cmo.note") { patchStash(DIR, { cmo_note: null }); return { ok: true }; }
+  // The grant card: "allow" is answered in the panel (Chrome's own prompt,
+  // then /api/control/granted); "later" puts the ask away until a task hits
+  // that wall again.
+  if (id.startsWith("grant.")) {
+    if (act === "later") CONTROL.dismiss(id.slice("grant.".length));
+    return { ok: true };
+  }
+  if (id.startsWith("cmo.ask.")) {
+    const qid = id.slice("cmo.ask.".length);
+    const a = readStash(DIR).cmo_ask;
+    if (!a?.questions?.length) return { ok: true };
+    const answers = { ...(a.answers ?? {}), [qid]: answerValue() };
+    if (a.questions.every((q) => q.id in answers)) {
+      patchStash(DIR, { cmo_ask: null });
+      T?.note("person.answered", { ask: a.id ?? null, answers });
+    } else {
+      patchStash(DIR, { cmo_ask: { ...a, answers } });
+    }
+    return { ok: true };
+  }
 
   if (id === "onboard.account") {
     if (act === "skip") { patchStash(DIR, { account_skipped: true }); return { ok: true }; }
@@ -1301,9 +1480,19 @@ function actCard({ card, action, choice, text }) {
   }
 
   if (id === "onboard.watch") {
-    const place = readStash(DIR).probe?.place;
+    const probe = readStash(DIR).probe;
+    const place = probe?.place;
+    if (act === "watch" && place) {
+      // The verb would refuse and the job would still say ok: say it here,
+      // keep the probe, and let the rules card (dealt first) settle it.
+      const state = S.roomState(place).state;
+      if (state === "unanswered") return { error: `Record r/${place}'s rules first — that card is on the deck.` };
+      if (state === "banned") return { error: `r/${place}'s rules forbid it, as you recorded — nothing here will draft for it. Try another room.` };
+      patchStash(DIR, { probe: null });
+      // Watched the way it was measured: the phrase that cleared the floor.
+      return spawn("watch", probe.q ? [place, "--q", probe.q] : [place]);
+    }
     patchStash(DIR, { probe: null });
-    if (act === "watch" && place) return spawn("watch", [place]);
     return { ok: true }; // "another" — back to the room card
   }
 
@@ -1311,6 +1500,9 @@ function actCard({ card, action, choice, text }) {
 
   if (id === "onboard.welcome") {
     patchStash(DIR, { welcomed: true });
+    // The CMO hears that setup is done — its cue to propose the first task.
+    const watched = S.sources().map((s) => `r/${s.place}${s.q ? ` for "${s.q}"` : " (new posts)"}`).join(", ");
+    INBOX?.({ type: "setup.done", title: `the operator finished setup on the panel — watching ${watched || "no room yet"}`, sources: S.sources().map((s) => ({ place: s.place, q: s.q ?? null, url: s.q ? `https://www.reddit.com/r/${s.place}/search/?q=${encodeURIComponent(s.q)}&restrict_sr=1&sort=new&t=week` : `https://www.reddit.com/r/${s.place}/new/`, feed: s.url })) });
     return act === "tick" ? spawn("tick") : { ok: true };
   }
 
@@ -1397,6 +1589,12 @@ const JSON_HEAD = { "content-type": "application/json", "cache-control": "no-sto
  *  long-lived process the extension is attached to. */
 const RELAY = relayBroker();
 
+const controlSummary = () => ({
+  attached: CONTROL.attached(),
+  leases: CONTROL.leases().map((l) => ({ id: l.id, task: l.task, url: l.url, tabs: l.tabs })),
+  grants: CONTROL.grantsNeeded(),
+});
+
 /** Read a JSON body, refusing anything that is not declared as one. The
  *  declaration is the CSRF boundary: a cross-origin page cannot send
  *  application/json without a preflight, and nothing here answers preflights. */
@@ -1419,6 +1617,8 @@ const server = createServer((req, res) => {
         cards,
         jobs: J.running().map((j) => ({ label: j.label, note: j.note })),
         relay: { attached: RELAY.attached(), pending: RELAY.pending() },
+        control: controlSummary(),
+        tasks: T ? [...T.running(), ...T.blocked()].map((t) => ({ id: t.id, title: t.title, status: t.status, tabId: t.lease?.tabId ?? null })) : [],
       }));
     } catch (e) {
       console.error(e);
@@ -1458,10 +1658,70 @@ const server = createServer((req, res) => {
       .catch((e) => res.writeHead(400, JSON_HEAD).end(JSON.stringify({ error: e.message })));
   }
 
-  if (url.pathname === "/api/cards/act" && req.method === "POST") {
+  /* The control lane (lib/control.mjs). /lease, /act and /release are what a
+   * task manager or a script calls and holds open; /jobs is the extension's
+   * service worker asking "anything for me?" (long-polled); /answer is the
+   * result coming back; /granted is the panel saying the operator allowed a
+   * site. Grants ride in the request because a local caller already has the
+   * run of the machine — the screen that matters is the one an AGENT's
+   * definition passes, in agent/, and the extension's own label screen. */
+  if (url.pathname === "/api/control/lease" && req.method === "POST") {
+    return jsonBody(req)
+      .then(async (body) => {
+        const out = await CONTROL.lease({ task: body.task, url: body.url });
+        res.writeHead(out.error ? 502 : 200, JSON_HEAD).end(JSON.stringify(out));
+      })
+      .catch((e) => res.writeHead(400, JSON_HEAD).end(JSON.stringify({ error: e.message })));
+  }
+
+  if (url.pathname === "/api/control/act" && req.method === "POST") {
+    return jsonBody(req)
+      .then(async (body) => {
+        const grants = Array.isArray(body.grants) ? body.grants.map(String) : ["read"];
+        const out = await CONTROL.act(body.lease, String(body.tool ?? ""), body.input ?? {}, { grants });
+        res.writeHead(out?.error ? (out.refused ? 403 : 502) : 200, JSON_HEAD).end(JSON.stringify(out ?? {}));
+      })
+      .catch((e) => res.writeHead(400, JSON_HEAD).end(JSON.stringify({ error: e.message })));
+  }
+
+  if (url.pathname === "/api/control/release" && req.method === "POST") {
+    return jsonBody(req)
+      .then(async (body) => res.writeHead(200, JSON_HEAD).end(JSON.stringify(await CONTROL.release(body.lease))))
+      .catch((e) => res.writeHead(400, JSON_HEAD).end(JSON.stringify({ error: e.message })));
+  }
+
+  if (url.pathname === "/api/control/jobs" && req.method === "GET") {
+    const wait = Math.min(25_000, Math.max(0, Number(url.searchParams.get("wait")) || 0));
+    return CONTROL.claim(wait)
+      .then((jobs) => res.writeHead(200, JSON_HEAD).end(JSON.stringify({ jobs })))
+      .catch(() => res.writeHead(200, JSON_HEAD).end(JSON.stringify({ jobs: [] })));
+  }
+
+  if (url.pathname === "/api/control/answer" && req.method === "POST") {
     return jsonBody(req)
       .then((body) => {
-        const out = actCard(body ?? {});
+        const { id, ...result } = body ?? {};
+        res.writeHead(200, JSON_HEAD).end(JSON.stringify({ ok: true, took: CONTROL.answer(id, result) }));
+      })
+      .catch((e) => res.writeHead(400, JSON_HEAD).end(JSON.stringify({ error: e.message })));
+  }
+
+  if (url.pathname === "/api/control/reload" && req.method === "POST") {
+    return CONTROL.reload().then((out) => { res.writeHead(200, JSON_HEAD).end(JSON.stringify(out)); });
+  }
+  if (url.pathname === "/api/control/granted" && req.method === "POST") {
+    return jsonBody(req)
+      .then((body) => { CONTROL.granted(body.origin); res.writeHead(200, JSON_HEAD).end(JSON.stringify({ ok: true })); })
+      .catch((e) => res.writeHead(400, JSON_HEAD).end(JSON.stringify({ error: e.message })));
+  }
+
+  if (url.pathname === "/api/control/leases" && req.method === "GET")
+    return res.writeHead(200, JSON_HEAD).end(JSON.stringify({ ...controlSummary(), detail: CONTROL.leases() }));
+
+  if (url.pathname === "/api/cards/act" && req.method === "POST") {
+    return jsonBody(req)
+      .then(async (body) => {
+        const out = await actCard(body ?? {});
         res.writeHead(out.error ? 400 : 200, JSON_HEAD).end(JSON.stringify(out));
       })
       .catch((e) => res.writeHead(400, JSON_HEAD).end(JSON.stringify({ error: e.message })));
@@ -1560,7 +1820,7 @@ const server = createServer((req, res) => {
         "cache-control": "no-cache",
         // Its own CSP, not the dashboard's: the panel is scripted by design,
         // but only by its own files, and it talks only to this origin.
-        "content-security-policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'",
+        "content-security-policy": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'",
       }).end(body);
     } catch {
       return res.writeHead(404, JSON_HEAD).end(JSON.stringify({ error: "panel files missing" }));
@@ -1570,6 +1830,25 @@ const server = createServer((req, res) => {
   if (url.pathname === "/api/jobs.json")
     return res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" })
       .end(JSON.stringify({ jobs: J.list().slice(0, 12) }));
+
+  /* The runtime, as JSON: tasks, colleagues, and why there are none. */
+  if (url.pathname === "/api/tasks.json")
+    return res.writeHead(200, JSON_HEAD).end(JSON.stringify({
+      tasks: T ? T.list() : [],
+      colleagues: T ? T.colleagues().map((c) => ({ id: c.id, name: c.name, description: c.description, tools: c.tools, grants: c.grants, model: c.model, ring: c.ring })) : [],
+      inbox: T ? T.inbox(Math.max(0, Number(url.searchParams.get("since")) || 0)) : null,
+      why: T ? null : (TASKS_WHY || "the runtime is not installed — npm run brain"),
+    }));
+
+  /* What a paused worker saw. Served from disk, never anywhere else. */
+  {
+    const m = /^\/api\/tasks\/(t[a-z0-9]+)\/screenshot$/.exec(url.pathname);
+    if (m) {
+      const p = T?.screenshotPath(m[1]);
+      if (!p) return res.writeHead(404, JSON_HEAD).end(JSON.stringify({ error: "no screenshot for that task" }));
+      return res.writeHead(200, { "content-type": "image/png", "cache-control": "no-store" }).end(readFileSync(p));
+    }
+  }
 
   // The page door: skills the registry resolved, mounted beside the core
   // views. A page that throws renders its failure — a broken skill must not
@@ -1628,6 +1907,9 @@ export function serve(port = PORT) {
           : `no OpenRouter key — add one at /settings (the free plan needs one too), or pick Local there to run a model on this machine.`);
       console.log(`ctrl-c to stop.`);
       resolve(server);
+      // The brain, if installed, after the port: the deck answers now, the
+      // colleagues arrive a few seconds later and say so on /tasks meanwhile.
+      loadRuntime().then(() => { if (T) console.log(`colleagues: ${T.colleagues().map((c) => c.name).join(", ") || "none installed"} (agent/ is in).`); });
     });
   });
 }

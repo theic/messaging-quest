@@ -613,6 +613,54 @@ const writeRoom = (place, found_) => {
   writeFileSync(p, roomFile(place, found_));
 };
 
+/**
+ * Findings from the BROWSER lane — the scout reading a search in the
+ * operator's own signed-in session (skills/reddit/agent.md), where the
+ * anonymous feed cannot go. stdin: { place, q, url, items: [{ id?, url,
+ * author, title, body, posted_at }] }. Same table, same law as probe: the
+ * room's refusals run first, ids are the platform's (t3_… off the permalink),
+ * first write wins, everything new goes to pending for the judge, and the
+ * read is recorded on probes.jsonl with `via: "browser"` so the fit rate
+ * settles the same way. A page of posts is one call.
+ */
+cmds.found = (args, stdin) => {
+  let body;
+  try { body = JSON.parse(stdin); } catch { die("stdin is not JSON — expected { place, q, items: [{ url, title, author, body }] }"); }
+  const place = String(body?.place ?? "").replace(/^\/?r\//, "").replace(/[^\w-]/g, "");
+  if (!place) die("no place — which subreddit were these read in?");
+  const q = body.q ? String(body.q).slice(0, 120) : null;
+  if (isParody(place)) return refused(`r/${place} is a parody community — Reddit's "-jerk" suffix. Nothing recorded.`);
+  const room = roomState(place);
+  if (room.state === "banned") return refused(`r/${place} does not allow it — ${room.source ?? "recorded"}. Nothing recorded.`);
+
+  const known = found(), fresh = [];
+  let dupes = 0, noId = 0;
+  for (const it of (Array.isArray(body.items) ? body.items : []).slice(0, 200)) {
+    const url = String(it?.url ?? "").split("?")[0];
+    const m = /\/comments\/([a-z0-9]+)/i.exec(url);
+    const id = /^t3_[a-z0-9]+$/i.test(String(it?.id ?? "")) ? String(it.id) : m ? `t3_${m[1]}` : null;
+    if (!id) { noId++; continue; }
+    if (known.has(id) || fresh.some((f) => f.id === id)) { dupes++; continue; }
+    const text = String(it.body ?? "").slice(0, 1200);
+    fresh.push({
+      id, place, url, author: it.author ? String(it.author).replace(/^u\//, "").slice(0, 60) : null,
+      title: String(it.title ?? "").slice(0, 300), body: text, body_sha256: sha(text),
+      posted_at: it.posted_at ? String(it.posted_at).slice(0, 40) : null, seen_at: now(),
+      probe: `${place}:${q ?? "new"}`, via: "browser",
+    });
+  }
+  for (const f of fresh) append("found.jsonl", f);
+  append("probes.jsonl", { place, q, url: body.url ? String(body.url).slice(0, 400) : null, read: fresh.length, at: now(), settled: false, via: "browser" });
+  const p = pending();
+  for (const f of fresh) p.push({ n: p.length + 1, id: f.id, probe: `${place}:${q ?? "new"}` });
+  setPending(p);
+  writeRoom(place, null);
+
+  console.log(`${fresh.length} new post${fresh.length === 1 ? "" : "s"} recorded from r/${place}${q ? ` for "${q}"` : ""}${dupes ? `, ${dupes} already known` : ""}${noId ? `, ${noId} without a post permalink (skipped)` : ""}.`);
+  if (fresh.length) console.log(`They wait on a verdict: mq pending, then mq judge — or the Judge button.`);
+  if (room.state === "unanswered") console.log(`r/${place}'s rules are not readable from here — a human reads ${sidebarUrl(place)} once and answers ${roomPath(place)}.`);
+};
+
 cmds.rooms = () => {
   const rows = readJsonl("probes.jsonl");
   const places = [...new Set(rows.map((r) => r.place))];
@@ -1063,6 +1111,9 @@ find — other people, and the rooms it refuses to look in
   unwatch <id>            stop
   sources                 what is watched, and when each was last read
   tick [--limit N]        read what is due. No model runs in this loop
+  found < items.json      record posts a colleague read in YOUR browser
+                          ({place, q, items:[{url,title,author,body}]}) — same
+                          table and refusals as probe, judged the same way
   pending                 what needs a verdict, numbered, as JSON
   judge < verdicts.json   [{n, fit, why}] — the model lives outside this process
   queue [--json]          who is waiting for an answer from you
@@ -1101,6 +1152,6 @@ Nothing here posts, messages, votes, or reads anybody else's account.`);
 if (!existsSync(DIR) && cmd !== "init") die(`no ${DIR}/ here — run \`mq init\` first`);
 // `judge` is the one place a verdict comes IN from outside — the model runs in
 // whatever you point at this, never in here.
-const wantsStdin = cmd === "judge" || (cmd === "draft" && args.includes("--save"));
+const wantsStdin = cmd === "judge" || cmd === "found" || (cmd === "draft" && args.includes("--save"));
 const stdin = wantsStdin && !process.stdin.isTTY ? readFileSync(0, "utf8") : "";
 await cmds[cmd](args, stdin);

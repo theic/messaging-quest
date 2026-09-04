@@ -1,3 +1,4 @@
 .mq/
 .earshot/
 node_modules/
+.mq.*/

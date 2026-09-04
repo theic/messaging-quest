@@ -11,9 +11,12 @@ skills/<id>/
                  (door: lib/platform.mjs)
   page.mjs       optional seat: a DASHBOARD SCREEN
                  (door: bin/serve.mjs)
-  agent.mjs      optional seat: a SUBAGENT for the strategist
+  agent.mjs      optional seat: a SUBAGENT for the strategist, inside a turn
                  (door: agent/strategist.mjs — the one place that owns
                  the LangChain runtime; your module stays bare Node)
+  agent.md       optional seat: a COLLEAGUE — a background worker on its
+                 own thread, in a tab of the operator's own browser
+                 (door: agent/tasks.mjs). Markdown: frontmatter and a prompt.
 ```
 
 A folder with only a `SKILL.md` is **knowledge** — always active, never in
@@ -140,6 +143,47 @@ The strategist (installed with `npm run brain`) seats it as a Deep Agents
 subagent and can delegate to it mid-conversation. Everything it does inherits
 the house law: it drafts, it proposes, it never submits — there is no code in
 this repo that posts, so there is nothing for a tool to reach.
+
+## The colleague seat (a background worker, in markdown)
+
+`agent.md` is the agent seat for work that runs in the BACKGROUND — on its
+own thread, in a tab the runtime leased in the operator's own Chrome, started
+by the operator's click on a card the CMO proposed:
+
+```markdown
+---
+name: reddit-scout
+description: When the CMO should propose this colleague, in one sentence it reads.
+tools: browser.read, ask_person, record_findings, judge_pending, write_draft
+model: scout
+---
+
+The prompt. Plain sentences: what to read, when to stop and ask, what never.
+```
+
+- `tools` names what the runtime seats and screens: the browser families
+  `browser.read` / `browser.click` / `browser.type` (Claude-in-Chrome's
+  toolkit — `navigate`, `read_page`, `find`, `get_page_text`, `computer`,
+  `batch` … — on the leased tab, checked against this line before the
+  extension hears of it), `ask_person` (the question list: one or many
+  questions, dealt as cards on the deck, answered together, the thread paused
+  meanwhile), and the engine's verbs by name (`queue`, `pending`, `judge`,
+  `draft_material`, `save_draft`, `rooms`, `read_memory`, and for scouts
+  `record_findings`, `judge_pending`, `write_draft`). **No colleague is
+  granted click or type in milestone 1**, and the extension refuses a click on
+  any control labelled post, comment, reply, send or submit even if one were.
+- `model` is a SEAT — `scout`, `judge` or `writer` — never a model id. The
+  seats in `lib/models.mjs` decide what runs it; there is no second way.
+- The body is the prompt. The folder's `SKILL.md` is inlined into it too, so
+  the colleague learns the platform's facts and refusals from the same bytes
+  everyone else does.
+
+Both rings, same slot rules as every seat. `agent.mjs` stays for a colleague
+that needs tools written in code. `skills/_template/agent.md` is a colleague
+that reads one page and asks before a second, so the pause can be tried on
+purpose; `skills/reddit/agent.md` is the scout. The dashboard's **Tasks**
+page lists every colleague the registry resolved and lets you start one by
+hand.
 
 ## What a SKILL.md is for
 

@@ -11,7 +11,7 @@
 // own test directory.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,8 +25,10 @@ import { conforms } from "../lib/llm.mjs";
 import { loadPlatforms, platform, roomOf } from "../lib/platform.mjs";
 import { longestSharedRun, repeats, claims, inventedLinks, RUN_LIMIT } from "../lib/guards.mjs";
 import { standing, readiness, burst, mix } from "../lib/ready.mjs";
-import { nextCards, onboarded } from "../lib/cards.mjs";
+import { nextCards, onboarded, questionCards } from "../lib/cards.mjs";
+import { agentDefinition } from "../lib/skills.mjs";
 import { relayBroker } from "../lib/relay.mjs";
+import { controlBroker, permitted, familiesOf, grantsOf, TOOLKIT } from "../lib/control.mjs";
 import { readViaRelay } from "../skills/reddit/feed.mjs";
 import { allowed, memoryProgress, memoryContext, writeMemory, seedMissing } from "../lib/memory.mjs";
 import { proposable } from "../lib/cards.mjs";
@@ -621,6 +623,14 @@ const memDone = { done: 4, total: 4, files: [
   { file: "icp.md", filled: true }, { file: "me.md", filled: true }] };
 
 check("a fresh dir asks who you are first", nextCards(snap())[0].id, "onboard.account");
+// A site the extension may not read outranks everything — the button Chrome
+// needs the click from rides on the card itself, not on a line under it.
+{
+  const g = nextCards(snap({ grants: ["https://www.reddit.com"] }))[0];
+  check("a site the extension may not read yet is the first card", [g.id, g.kind, g.primary.id, g.secondary.id, g.data.origin],
+    ["grant.https://www.reddit.com", "grant.ask", "allow", "later", "https://www.reddit.com"]);
+  check("...naming the host on the button", g.primary.label, "Allow www.reddit.com");
+}
 check("skipping the account moves to the url, not back to the account",
   nextCards(snap({ stash: { account_skipped: true } }))[0].id, "onboard.url");
 check("a url with no key on file asks for the key, with the site named",
@@ -738,6 +748,41 @@ else {
   const relayed = await (await reading).json();
   check("the answered body reaches the caller", relayed.status, 200);
   check("...verbatim", /t1_aaa/.test(relayed.body), true);
+
+  /* The control lane, end to end over HTTP: a lease blocks until a "browser"
+     answers with the tab it opened; a call carries THAT tab, never the
+     caller's; a click is refused by the grant screen before any browser hears
+     of it; release closes the tab. */
+  const cpost = (p, body) => fetch(baseC + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const cjobs = async () => (await (await fetch(baseC + "/api/control/jobs")).json()).jobs;
+  const leasing = cpost("/api/control/lease", { task: "smoke", url: "https://www.reddit.com/r/saas/" });
+  await new Promise((r) => setTimeout(r, 150));
+  let cj = await cjobs();
+  check("a lease is handed to the browser as a tab to open", cj.map((j) => j.tool), ["lease"]);
+  await cpost("/api/control/answer", { id: cj[0].id, tabId: 41, groupId: 7, windowId: 1 });
+  const lease = await (await leasing).json();
+  check("...and resolves with the tab the browser opened", lease.tabId, 41);
+  const foreign = await cpost("/api/control/act", { lease: lease.id, tool: "read_page", input: { tabId: 999 } });
+  check("a call may not name a tab the lease does not hold", foreign.status, 403);
+  const treeing = cpost("/api/control/act", { lease: lease.id, tool: "read_page", input: { filter: "interactive" } });
+  await new Promise((r) => setTimeout(r, 150));
+  cj = await cjobs();
+  check("a read carries the lease's own tab", cj[0]?.input?.tabId, 41);
+  check("...and the deck reports the lane attached, with the lease on it",
+    (await (await fetch(baseC + "/api/cards")).json()).control.leases[0]?.tabs, [41]);
+  await cpost("/api/control/answer", { id: cj[0].id, tree: 'button "Comment" [ref_3]', lines: 1 });
+  check("the tree reaches the caller", /ref_3/.test((await (await treeing).json()).tree), true);
+  const clicking = await cpost("/api/control/act", { lease: lease.id, tool: "computer", input: { action: "left_click", ref: "ref_3" } });
+  check("a click with read-only grants is refused before the browser hears of it", clicking.status, 403);
+  check("...naming the grant it lacks", /"click" grant/.test((await clicking.json()).error), true);
+  check("...and nothing was queued for the browser", (await cjobs()).length, 0);
+  const releasing = cpost("/api/control/release", { lease: lease.id });
+  await new Promise((r) => setTimeout(r, 150));
+  cj = await cjobs();
+  check("release closes the lease's tabs", cj[0]?.input?.tabIds, [41]);
+  await cpost("/api/control/answer", { id: cj[0].id, ok: true });
+  check("...and the lease is gone", (await (await releasing).json()).ok, true);
+  check("a call on a released lease is refused", (await cpost("/api/control/act", { lease: lease.id, tool: "read_page", input: {} })).status, 403);
 }
 srvC.kill();
 
@@ -795,6 +840,141 @@ srvC.kill();
   stub.close();
 }
 
+/* -------------------------------------------------------- the control lane */
+
+// The second protocol the extension speaks (PLAN.md 2026-09-03). Screened
+// twice: here by GRANT — the agent's tools line, parsed in the zero-dep heart
+// so this suite guards it without the brain — and in the page by LABEL
+// (extension/screen.js). No agent holds click or type in milestone 1.
+
+{
+  check("read_page is a read", familiesOf("read_page"), ["read"]);
+  check("a click is a click, by action", familiesOf("computer", { action: "left_click" }), ["click"]);
+  check("form_input is typing", familiesOf("form_input"), ["type"]);
+  check("a batch needs the union of its items",
+    familiesOf("batch", { actions: [{ name: "navigate", input: { url: "https://x" } }, { name: "computer", input: { action: "type", text: "a" } }] }), ["read", "type"]);
+  check("a batch with an unknown action is refused whole", familiesOf("batch", { actions: [{ name: "read_page" }, { name: "eval" }] }), null);
+  check("a batch inside a batch is refused", familiesOf("batch", { actions: [{ name: "batch", input: { actions: [] } }] }), null);
+  check("there is no eval in the toolkit", Object.keys(TOOLKIT).some((t) => /eval|javascript|script/.test(t)), false);
+  check("a tools line grants families, and nothing else", grantsOf("browser.read, ask_person, judge"), ["read"]);
+  check("read-only grants refuse a click, naming the grant",
+    permitted("computer", { action: "left_click", ref: "ref_1" }, ["read"]).why?.includes('"click" grant'), true);
+  check("...and a screenshot passes", permitted("computer", { action: "screenshot" }, ["read"]).ok, true);
+  check("an unknown action is not a toolkit call, whatever the grants", permitted("computer", { action: "eval" }, ["read", "click", "type"]).ok, false);
+
+  const b = controlBroker({ ttlMs: 60_000, paceMs: 120 });
+  check("a lease opens on http(s) only", (await b.lease({ task: "t", url: "file:///etc/passwd" })).error, "a lease opens on an http(s) url");
+  const leasing = b.lease({ task: "scout", url: "https://www.reddit.com/r/saas/" });
+  let jobs = await b.claim(1000);
+  check("a lease is a tab to open, handed to one claimer", jobs.map((j) => j.tool), ["lease"]);
+  check("...never twice", (await b.claim()).length, 0);
+  b.answer(jobs[0].id, { tabId: 12, groupId: 3, windowId: 1 });
+  const L = await leasing;
+  check("the lease holds the tab the browser opened", L.tabId, 12);
+  check("a caller may not name a tab it does not hold", (await b.act(L.id, "read_page", { tabId: 13 })).refused, true);
+  const clicking = await b.act(L.id, "computer", { action: "left_click", coordinate: [1, 1] }, { grants: ["read"] });
+  check("a click without the grant is refused here, and the browser never hears of it", [clicking.refused, b.pending()], [true, 0]);
+  check("typing needs its own grant", (await b.act(L.id, "form_input", { ref: "ref_1", value: "x" }, { grants: ["read", "click"] })).refused, true);
+  // Pacing: two navigations to one host are handed out paceMs apart.
+  const n1 = b.act(L.id, "navigate", { url: "https://www.reddit.com/r/a/" });
+  const n2 = b.act(L.id, "navigate", { url: "https://www.reddit.com/r/b/" });
+  const j1 = await b.claim(2000); const at1 = Date.now();
+  check("a navigation carries the lease's tab", j1[0]?.input.tabId, 12);
+  b.answer(j1[0].id, { url: "https://www.reddit.com/r/a/" });
+  const j2 = await b.claim(2000); const at2 = Date.now();
+  check("navigations to one host are spaced by the lane", at2 - at1 >= 100, true);
+  b.answer(j2[0].id, { url: "https://www.reddit.com/r/b/" });
+  check("both callers get their answers", [(await n1).url, (await n2).url].map((u) => u.slice(-3)), ["/a/", "/b/"]);
+  // The grant that is missing: the browser names the origin, the lane
+  // remembers, the panel asks — never a dialog from a worker nobody watches.
+  const reading = b.act(L.id, "read_page", {});
+  jobs = await b.claim(1000);
+  b.answer(jobs[0].id, { error: "not_granted", origin: "https://acme.dev" });
+  check("a site the extension may not read is named back", (await reading).grant, "https://acme.dev");
+  check("...and listed for the panel to ask", b.grantsNeeded(), ["https://acme.dev"]);
+  b.granted("https://acme.dev/*");
+  check("...until the operator grants it", b.grantsNeeded(), []);
+  // A script that hits the wall and releases still leaves the ask standing —
+  // the panel shows the button to whoever looks next, not only while a lease lives.
+  const reading2 = b.act(L.id, "read_page", {});
+  jobs = await b.claim(1000);
+  b.answer(jobs[0].id, { error: "not_granted", origin: "https://acme.dev" });
+  await reading2;
+  const releasing = b.release(L.id);
+  jobs = await b.claim(1000);
+  check("release closes exactly the lease's tabs", jobs[0]?.input.tabIds, [12]);
+  b.answer(jobs[0].id, { ok: true });
+  check("...and is idempotent", [(await releasing).ok, (await b.release(L.id)).ok], [true, true]);
+  check("the ask outlives the lease that hit the wall", b.grantsNeeded(), ["https://acme.dev"]);
+  b.granted("https://acme.dev");
+  check("...and clears once the operator grants it", b.grantsNeeded(), []);
+  check("a released lease refuses calls", (await b.act(L.id, "read_page", {})).refused, true);
+  const dead = controlBroker({ ttlMs: 100 });
+  check("a lease nobody claims dies with its reason", /unanswered/.test((await dead.lease({ task: "t", url: "https://x.y/" })).error), true);
+}
+
+/* ---------------------------------------------- findings from the browser */
+
+// The scout reads a search page in the operator's own browser and records
+// what it saw through `mq found` — the same table, the same refusals and the
+// same judging as a probe; only the lane differs, and the row says which.
+{
+  const boxF = mkdtempSync(join(tmpdir(), "mq-found-"));
+  const DF = join(boxF, ".mq");
+  execFileSync(process.execPath, [ES, "init"], { env: { ...process.env, MQ_DIR: DF }, stdio: "ignore" });
+  const found = (body) => { try { return execFileSync(process.execPath, [ES, "found"], { env: { ...process.env, MQ_DIR: DF }, encoding: "utf8", input: JSON.stringify(body), stdio: ["pipe", "pipe", "pipe"] }); } catch (e) { return `${e.stdout || ""}${e.stderr || ""}`; } };
+  const items = [
+    { url: "https://www.reddit.com/r/saas/comments/abc123/how_do_i_get_clients/", title: "how do I get clients", author: "u/ana", body: "stuck at zero" },
+    { url: "https://www.reddit.com/r/saas/comments/def456/anyone_else/?utm=x", title: "anyone else", author: "bo", body: "same" },
+    { url: "https://www.reddit.com/r/saas/", title: "not a post" },
+  ];
+  const out = found({ place: "saas", q: "how do I get clients", items });
+  check("a colleague's findings are recorded through the CLI, ids off the permalink", /2 new posts/.test(out), true);
+  check("...and a line without a post permalink is skipped, said so", /1 without a post permalink/.test(out), true);
+  const rows = readFileSync(join(DF, "found.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  check("the rows carry the platform's id, the room, and which lane read them", [rows[0].id, rows[0].place, rows[0].via, rows[0].author], ["t3_abc123", "saas", "browser", "ana"]);
+  check("...and wait on a verdict like any probe's", JSON.parse(readFileSync(join(DF, "pending.json"), "utf8")).length, 2);
+  check("the same page recorded twice adds nothing", /0 new posts.*2 already known/.test(found({ place: "saas", q: "how do I get clients", items })), true);
+  check("a parody room is refused, nothing recorded", /refused.*parody/.test(found({ place: "saasjerk", items })), true);
+  check("the room's rules line is opened for a human to answer", readFileSync(join(DF, "rooms", "saas.md"), "utf8").includes("promotion_allowed"), true);
+
+  const { discoverSkills: discover } = await import("../lib/skills.mjs");
+  const def = agentDefinition(discover(null).found.find((s) => s.id === "reddit"));
+  check("the reddit skill ships the scout as agent.md", [def.name, def.model], ["reddit-scout", "scout"]);
+  check("...read-only in the browser, with the engine's verbs by name",
+    [grantsOf(def.tools.join(",")), def.tools.includes("record_findings"), def.tools.includes("judge_pending"), def.tools.includes("write_draft")], [["read"], true, true, true]);
+  check("...and never click or type", def.tools.some((t) => /click|type/.test(t)), false);
+}
+
+// The insert screen IS the click screen, one layer down: every label
+// insert.js refuses to press, the control lane refuses too — plus the
+// composer openers a human-initiated insert is allowed to press.
+{
+  const insertSrc = readFileSync(join(here, "..", "extension", "insert.js"), "utf8");
+  const never = /const NEVER = \/\\b\(([^)]+)\)\\b\/i/.exec(insertSrc)?.[1].split("|") ?? [];
+  const { CLICK_SCREEN } = await import("../extension/screen.js");
+  const screen = new RegExp(CLICK_SCREEN, "i");
+  check("insert.js's NEVER list was found", never.length > 5, true);
+  check("every label the insert screen refuses, the click screen refuses", never.filter((w) => !screen.test(w)), []);
+  check("...and the composer openers too", ["Comment", "Reply", "Add a comment"].every((w) => screen.test(w)), true);
+  check("...while an ordinary control passes", screen.test("Open the thread"), false);
+}
+
+// The browser is a person's. The page-side code READS: it never fires a
+// synthetic event, sets a value, scrolls by script, or enables the CDP
+// domain sites test for — every scroll, click and key goes through Chrome's
+// own input pipeline (isTrusted), and that would break quietly if a
+// convenience crept back in.
+{
+  const src = ["control.js", "insert.js"].map((f) => readFileSync(join(here, "..", "extension", f), "utf8")).join("\n")
+    .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");   // code, not the comments that name what it avoids
+  const tells = ["dispatchEvent(", "execCommand(", "scrollIntoView(", "scrollBy(", ".click()", "Runtime.enable", ".value =", "setAttribute("];
+  check("the extension's page code writes nothing into the page", tells.filter((t) => src.includes(t)), []);
+  check("...every input event is the browser's own", ["Input.dispatchMouseEvent", "Input.dispatchKeyEvent", "mouseWheel", "Log.enable"].every((t) => src.includes(t)), true);
+  check("...and it never fetches a page itself", /fetch\((?!`\$\{base\}|`data:)/.test(src), false);
+  check("...and before any input it asks the page whether Chrome is drawing it, raising the window when not", src.includes("document.visibilityState") && src.includes("focused: true"), true);
+}
+
 /* -------------------------------------------------------- agent proposals */
 
 // The strategist may reach for buttons it can see but not press. The
@@ -825,6 +1005,72 @@ check("a proposal is visible during onboarding too",
 check("a proposal with a verb outside the law never renders",
   nextCards({ ...proposalSnap, stash: { ...proposalSnap.stash, agent_card: { question: "x", why: "y", verb: "rm -rf /" } } })
     .some((c) => c.kind === "agent.propose"), false);
+
+/* ------------------------------------------------- the question list, tasks */
+
+// ONE input primitive: a list of questions, dealt one card at a time, the
+// answers returned together. A worker's pause and the specialist's own
+// question are the same shape; the deck decides the order.
+
+{
+  const qs = [
+    { id: "second", question: "Read a second page?", choices: [{ id: "yes", label: "yes, this one" }, { id: "no", label: "no" }], field: { placeholder: "https://…" } },
+    { id: "why", question: "Why?", optional: true },
+  ];
+  const first = questionCards(qs, {}, { prefix: "task.ask.t1", kind: "task.ask", eyebrow: "reader · needs you" });
+  check("the first unanswered question is the card, under the prefix", [first.id, first.kind], ["task.ask.t1.second", "task.ask"]);
+  check("...with its choices AND its field when it asked for both", [first.choices.length, Boolean(first.field)], [2, true]);
+  check("...and its place in the list", first.progress, { step: 1, of: 2 });
+  const second = questionCards(qs, { second: "no" }, { prefix: "task.ask.t1" });
+  check("an answered question is not dealt again", second.id, "task.ask.t1.why");
+  check("a question with no choices gets a field, so it can be answered", Boolean(second.field), true);
+  check("an optional question can be skipped", second.secondary?.id, "skip");
+  check("a finished list deals nothing", questionCards(qs, { second: "no", why: null }, { prefix: "x" }), null);
+  check("a question with a bad id is dropped rather than dealt", questionCards([{ id: "no good", question: "?" }], {}, { prefix: "x" }), null);
+
+  const blocked = { id: "t1", title: "reader", status: "blocked", askedAt: "2026-09-03T10:00:00Z", questions: qs, answers: {}, shot: "2026-09-03T10:00:01Z", lease: { tabId: 44 } };
+  const older = { ...blocked, id: "t0", askedAt: "2026-09-03T09:00:00Z", shot: null, lease: null };
+  const withWork = snap({ ...onb, rooms: [{ place: "saas", state: "yes" }], queue: [qItem], tasks: [blocked] });
+  check("a worker waiting on a person outranks the queue", nextCards(withWork)[0].kind, "task.ask");
+  check("...oldest first, one at a time", nextCards(snap({ tasks: [blocked, older] })).filter((c) => c.kind === "task.ask").map((c) => c.id), ["task.ask.t0.second"]);
+  const card = nextCards(snap({ tasks: [blocked] }))[0];
+  check("the card carries the screenshot and the tab", [card.image, card.data.tabId, card.actions[0].id], ["/api/tasks/t1/screenshot", 44, "show"]);
+  const finished = { id: "t2", title: "scout", status: "done", finishedAt: "2026-09-03T11:00:00Z", result: "3 threads worth answering.\nAll in r/saas.", acked: false };
+  const doneDeck = nextCards(snap({ ...onb, rooms: [{ place: "saas", state: "yes" }], queue: [qItem], tasks: [finished] }));
+  check("a finished task's result is a card after the people, not before", doneDeck.map((c) => c.kind).slice(0, 2), ["work.reply", "task.done"]);
+  check("...leading with the count, one action", [doneDeck[1].question, doneDeck[1].primary.id], ["3 threads worth answering.", "ack"]);
+  check("...and once acknowledged it is gone", nextCards(snap({ tasks: [{ ...finished, acked: true }] })).some((c) => c.kind === "task.done"), false);
+  const failed = nextCards(snap({ tasks: [{ ...finished, status: "failed", error: "no key" }] })).find((c) => c.kind === "task.failed");
+  check("a failed task says why and offers a retry", [failed.help, failed.primary.id], ["no key", "retry"]);
+
+  // The specialist's proposals and notes ride second, like the verb card.
+  const prop = { question: "Search r/saas for people asking this?", why: "3 posts a day", task: { agent: "reddit", input: { url: "https://www.reddit.com/r/saas/" } } };
+  const withProp = nextCards(snap({ ...onb, rooms: [{ place: "saas", state: "yes" }], queue: [qItem], stash: { ...onb.stash, proposals: [prop] } }));
+  check("a task proposal rides second, behind the top action", [withProp[0].kind, withProp[1].kind], ["work.reply", "cmo.propose"]);
+  check("...naming the colleague it starts", /reddit colleague/.test(withProp[1].help), true);
+  check("a note takes that seat when there is no proposal",
+    nextCards(snap({ stash: { cmo_note: { text: "Two of the six were the same person." } } }))[1].kind, "cmo.note");
+  const ask = nextCards(snap({ stash: { cmo_ask: { id: "a1", questions: [{ id: "room", question: "Which room first?", choices: [{ id: "saas", label: "r/saas" }] }] } } }));
+  check("the specialist's own question is dealt before setup, never interrupting its thread", ask[0].id, "cmo.ask.room");
+}
+
+// The registry reads a colleague off agent.md — a manifest, not a seat it
+// runs — and the definition carries what the runtime screens against.
+{
+  const ringBox = mkdtempSync(join(tmpdir(), "mq-ring-"));
+  const folder = join(ringBox, "skills", "reader");
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, "SKILL.md"), "---\nname: reader\ndescription: reads\n---\n# reader\n");
+  writeFileSync(join(folder, "agent.md"), readFileSync(join(here, "..", "skills", "_template", "agent.md"), "utf8"));
+  const { found } = discoverSkills(null, [{ root: join(ringBox, "skills"), ring: "local" }]);
+  const def = agentDefinition(found[0]);
+  check("a folder with agent.md carries the colleague seat", Object.keys(found[0].seats), ["agent.md"]);
+  check("...read as a definition: name, tools, seat, prompt", [def.name, def.tools, def.model, def.prompt.length > 100], ["page-reader", ["browser.read", "ask_person"], "scout", true]);
+  check("...whose grants are read-only", grantsOf(def.tools.join(",")), ["read"]);
+  writeFileSync(join(folder, "agent.md"), "---\nname: x\n---\nno description");
+  check("a definition without a description is refused, not seated", agentDefinition(discoverSkills(null, [{ root: join(ringBox, "skills"), ring: "local" }]).found[0]), null);
+  check("the template folder itself is never discovered", discoverSkills(null).found.some((s) => s.id === "_template"), false);
+}
 
 /* ---------------------------------------------------------------- persona */
 
@@ -1048,6 +1294,51 @@ check("a proposal with a verb outside the law never renders",
       /nothing is listening at http:\/\/127\.0\.0\.1:11434\/v1/.test((await G4("/settings")).body), true);
   }
   srv4.kill();
+}
+
+/* ------------------------------------------- rules before watch (2026-09-04) */
+
+// The done-when run found the deck's watch step looping: `mq watch` refuses
+// a room whose rules nobody recorded, the job said ok, the deck went back to
+// the room card. Now the probed room is on the rooms list — its rules card
+// is dealt before the watch card — the handler refuses an unanswered or
+// forbidden room in words, and the watch carries the probed phrase.
+{
+  const boxW = mkdtempSync(join(tmpdir(), "mq-watch-"));
+  const DWr = join(boxW, ".mq");
+  execFileSync(process.execPath, [ES, "init"], { env: { ...process.env, MQ_DIR: DWr }, stdio: "ignore" });
+  writeFileSync(join(DWr, "account.json"), JSON.stringify({ name: "watcher_7", added: "2026-09-04T00:00:00Z" }));
+  writeFileSync(join(DWr, "project.md"), "# What we sell\n\nA small tool that finds the people asking for what you built.\n");
+  writeFileSync(join(DWr, "icp.md"), "# Who it is for\n\nA builder who just launched and has no idea where the first users are.\n");
+  writeFileSync(join(DWr, "rule.md"), "# Fit rule\n\nYes when the author just launched and asks where to find users. No otherwise.\n");
+  writeFileSync(join(DWr, "cards.json"), JSON.stringify({ probe: { place: "testroom", q: "find clients", fired: true } }));
+  // Two probed posts, both judged fit: the floor the watch verb checks is cleared.
+  for (const id of ["t3_w1", "t3_w2"]) {
+    appendFileSync(join(DWr, "found.jsonl"), JSON.stringify({ id, place: "testroom", url: `https://www.reddit.com/r/testroom/comments/${id.slice(3)}/x/`, author: "a", title: "just launched, where are the users", body: "", probe: "testroom:find clients", at: "2026-09-04T00:00:00Z" }) + "\n");
+    appendFileSync(join(DWr, "verdicts.jsonl"), JSON.stringify({ id, fit: true, why: "asks where the users are", rule: "test", at: "2026-09-04T00:00:01Z" }) + "\n");
+  }
+  const srvW = spawn(process.execPath, [SERVE, "--port", "0"], { env: { ...process.env, MQ_DIR: DWr }, stdio: ["ignore", "pipe", "pipe"] });
+  const baseW = await new Promise((resolve) => {
+    let out = "";
+    const t = setTimeout(() => resolve(null), 8000);
+    srvW.stdout.on("data", (d) => { out += d; const m = out.match(/http:\/\/127\.0\.0\.1:(\d+)/); if (m) { clearTimeout(t); resolve(`http://127.0.0.1:${m[1]}`); } });
+  });
+  if (!baseW) { console.log("FAIL  the watch dashboard did not start"); fail++; }
+  else {
+    const actW = async (body) => { const r = await fetch(baseW + "/api/cards/act", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); return r.json(); };
+    const deckW = async () => (await (await fetch(baseW + "/api/cards")).json()).cards.map((c) => c.id);
+    check("the probed room's rules card is dealt before it is watched", (await deckW()).includes("room.rules.testroom"), true);
+    check("the watch card refuses, in words, while the rules are unanswered", /rules first/.test((await actW({ card: "onboard.watch", action: "watch" })).error ?? ""), true);
+    await actW({ card: "room.rules.testroom", action: "record", choice: "no" });
+    check("...and a room whose rules forbid it", /forbid/.test((await actW({ card: "onboard.watch", action: "watch" })).error ?? ""), true);
+    check("...writing no source either way", existsSync(join(DWr, "sources.jsonl")) ? readFileSync(join(DWr, "sources.jsonl"), "utf8").trim() : "", "");
+    await actW({ card: "room.rules.testroom", action: "record", choice: "yes" });
+    check("with the rules recorded the watch goes through", (await actW({ card: "onboard.watch", action: "watch" })).ok, true);
+    let src = "";
+    for (let i = 0; i < 40 && !src; i++) { await new Promise((r) => setTimeout(r, 250)); src = existsSync(join(DWr, "sources.jsonl")) ? readFileSync(join(DWr, "sources.jsonl"), "utf8").trim() : ""; }
+    check("...watched the way it was measured, phrase and all", /"q":"find clients"/.test(src) && /"place":"testroom"/.test(src), true);
+  }
+  srvW.kill();
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

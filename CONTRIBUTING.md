@@ -32,13 +32,25 @@ is about honesty more than style:
 
 - **Skills carry no dependencies.** A skill is bare Node and may import from
   `lib/`. The one dependency-carrying directory is `agent/`, and skills don't
-  live there. (An agent seat is still bare Node — the strategist adapts it.)
+  live there. (An agent seat is still bare Node — the strategist adapts it;
+  a colleague, `agent.md`, is markdown the runtime seats.)
+- **No colleague clicks or types.** An `agent.md`'s `tools:` line carries
+  `browser.read` at most in this milestone; a contribution that grants
+  `browser.click` or `browser.type` is a decision for PLAN.md first, not a
+  line in a skill. The extension refuses a click on any control labelled
+  post, comment, reply, send or submit regardless (`extension/screen.js`).
 - **Measured claims carry dates.** A pace, a rate, a limit — say when and how
   it was measured. A number without a date is a guess wearing a suit.
 - **A skill ships its refusals or it ships nothing.** Name what your skill
   will not do and why, in SKILL.md, and enforce it in code where the engine
   lets you. A platform folder with no stated refusals and no measured pace is
   a spam cannon with a manifest.
+- **The browser is a person's.** Page-side code in the extension reads and
+  never writes: no synthetic event, no `.value =`, no script scroll, no
+  fetch of a page. Anything that acts goes through Chrome's input pipeline
+  (`chrome.debugger`) at a person's uneven tempo. `bin/test.mjs` reads the
+  extension's page code and fails on the first tell; `bin/control-smoke.mjs
+  --fixture` proves it against a page that tallies untrusted events.
 - **Nothing submits.** There is no code in this repo that posts, votes,
   messages, or writes to any platform, and no contribution adds the first.
   Drafts are typed into real composers by the extension at most — the click
