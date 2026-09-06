@@ -15,6 +15,8 @@ import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { readOne } from "../lib/memory.mjs";
 import { store } from "../lib/store.mjs";
+import { readCampaign, readCampaigns, judgeLine } from "../lib/campaigns.mjs";
+import { labelsOf, platformFor } from "../lib/platform.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const ES = join(ROOT, "bin", "mq.mjs");
@@ -34,7 +36,7 @@ export const es = (dir, args, stdin = null) =>
 export const VERBS = {
   status: (dir) => tool(async () => es(dir, ["status"]), {
     name: "status",
-    description: "What became of the operator's own Reddit comments, read as a logged-out stranger sees them: visible, filtered, removed, what changed.",
+    description: "What became of the operator's own comments, read as a logged-out stranger sees them: visible, filtered, removed, what changed.",
     schema: z.object({}),
   }),
   queue: (dir) => tool(async () => es(dir, ["queue", "--json"]), {
@@ -78,6 +80,15 @@ export const VERBS = {
     description: "Every room known so far: probed, watched, its recorded rules answer, and standing where there is any.",
     schema: z.object({}),
   }),
+  campaigns: (dir) => tool(async () => {
+    const all = readCampaigns(dir);
+    if (!all.length) return "no campaigns yet — the operator's general fit rule applies to everything found";
+    return JSON.stringify(all.map((c) => ({ id: c.id, name: c.name, status: c.status, mention: c.mention, platform: c.platform, idea: c.idea, fit: c.fit, never: c.never })));
+  }, {
+    name: "campaigns",
+    description: "This project's campaigns (lib/campaigns.mjs): each a direction the writer applies — an idea, who it fits, what it never does, whether a first message may name what the operator built (disclosed only). Findings, drafts and sources carry the campaign they came in under.",
+    schema: z.object({}),
+  }),
   read_memory: (dir) => tool(async ({ file }) => {
     const m = readOne(dir, file);
     return m ? m.body : `not a memory file: ${file}`;
@@ -92,13 +103,14 @@ export const VERBS = {
      against rule.md, the writer from the same material `mq draft` assembles —
      and land through the CLI, which stamps the rubric hash and runs the
      refusals. The colleague orchestrates; it does not judge or write itself. */
-  record_findings: (dir) => tool(async ({ place, q, url, items }) => es(dir, ["found"], JSON.stringify({ place, q: q ?? null, url, items })), {
+  record_findings: (dir) => tool(async ({ place, q, url, items, campaign }) => es(dir, ["found"], JSON.stringify({ place, q: q ?? null, url, items, campaign: campaign ?? null })), {
     name: "record_findings",
-    description: "Record the posts you read on a search or listing page in the operator's browser — one call per page. Each item: url (the post's own permalink, /r/<sub>/comments/<id>/…), title, author (u/ name if shown), body (the visible text, up to 1200 characters), posted_at only if the page shows a real date. The store drops duplicates and refuses parody rooms and rooms whose rules forbid promotion — the answer says which. New posts wait for the judge.",
+    description: "Record the posts you read on a search or listing page in the operator's browser — one call per page. Each item: url (the post's own permalink), title, author (the name if shown), body (the visible text, up to 1200 characters), posted_at only if the page shows a real date. Pass the campaign id your brief names, so the judge and the writer apply its direction. The store drops duplicates and refuses parody rooms and rooms whose rules forbid promotion — the answer says which. New posts wait for the judge.",
     schema: z.object({
-      place: z.string().describe("The subreddit, without r/"),
+      place: z.string().describe("The room, without the platform's prefix (saas, not r/saas)"),
       q: z.string().nullable().optional().describe("The search phrase, or null for a plain listing"),
       url: z.string().optional().describe("The page these came off"),
+      campaign: z.string().nullable().optional().describe("The campaign id from your brief, if any"),
       items: z.array(z.object({
         url: z.string(),
         title: z.string().optional(),
@@ -113,7 +125,12 @@ export const VERBS = {
     const pend = S.pending();
     if (!pend.length) return "nothing pending — record findings first";
     const all = S.found();
-    const items = pend.map((x) => { const it = all.get(x.id) ?? {}; return { n: x.n, place: it.place, author: it.author, title: it.title, body: it.body }; });
+    const L = labelsOf(platformFor(pend.map((x) => all.get(x.id)?.url).find(Boolean)) ?? undefined);
+    const items = pend.map((x) => {
+      const it = all.get(x.id) ?? {};
+      const c = it.campaign ? readCampaign(dir, it.campaign) : null;
+      return { n: x.n, place: it.place, room: L.room(it.place), author: it.author, title: it.title, body: it.body, campaign: c ? judgeLine(c) : "" };
+    });
     const { judgeItems } = await import("../lib/agents.mjs");
     const rule = readFileSync(join(dir, "rule.md"), "utf8");
     const verdicts = await judgeItems(dir, items, rule, {});
@@ -122,7 +139,12 @@ export const VERBS = {
     return `${verdicts.length} judged by the judge seat, ${verdicts.filter((v) => v.fit).length} fit.\n${out}`;
   }, {
     name: "judge_pending",
-    description: "Have the engine's JUDGE seat judge everything pending against rule.md, five at a time, and record the verdicts through the CLI (rubric hash stamped, pending cleared, the room's fit rate settled). Returns the counts. You do not judge these yourself.",
+    description: "Have the engine's JUDGE seat judge everything pending against rule.md — and a campaign's own fit clause where the finding came in under one — five at a time, and record the verdicts through the CLI (rubric hash stamped, pending cleared, the room's fit rate settled). Returns the counts. You do not judge these yourself.",
+    schema: z.object({}),
+  }),
+  waiting: (dir) => tool(async () => es(dir, ["waiting"]), {
+    name: "waiting",
+    description: "Who wrote back and is waiting on the operator: the conversations this machine tracks (opened on 'I posted it', bound to their own comment by a profile read, updated by the return pass), oldest first, with what they said and what the operator said. The deck already deals these before any new person — you do not draft the turn; write_draft on the person's id does, at the conversation stage.",
     schema: z.object({}),
   }),
   write_draft: (dir) => tool(async ({ id }) => {
@@ -135,7 +157,7 @@ export const VERBS = {
     return `saved the first of ${options.length} option${options.length === 1 ? "" : "s"} for ${id} — it is on the operator's card now; they post it.\n\n${options[0].text}\n\n— the refusals said: ${saved}`;
   }, {
     name: "write_draft",
-    description: "Have the engine's WRITER seat draft the reply to one queued person (an id from queue), from the same material `mq draft` assembles — their words, the operator's measured voice, the room's risks, what me.md supports — then save it through the CLI, which runs the refusals. The draft lands on the operator's card; THEY post it. You never write the reply yourself.",
+    description: "Have the engine's WRITER seat draft the reply to one queued person (an id from queue), from the same material `mq draft` assembles — their words, the operator's measured voice, the room's risks, what me.md supports, and the campaign's direction with what was already said under it — then save it through the CLI, which runs the refusals (the eight-word repeat guard included). The draft lands on the operator's card; THEY post it. You never write the reply yourself.",
     schema: z.object({ id: z.string().describe("Item id from queue, e.g. t3_abc123") }),
   }),
 };

@@ -28,7 +28,7 @@ import { CLICK_SCREEN } from "../extension/screen.js";
 
 const argv = process.argv.slice(2);
 const flag = (name, dflt) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : dflt);
-const base = flag("--base", process.env.MQ_RELAY || "http://127.0.0.1:8787");
+const base = flag("--base", process.env.MQ_SERVER || "http://127.0.0.1:8787");
 const redditUrl = flag("--url", "https://www.reddit.com/r/smallbusiness/search/?q=how+do+I+get+clients&type=posts&sort=new&t=week");
 const only = argv.includes("--fixture") ? "fixture" : argv.includes("--reddit") ? "reddit" : "both";
 const ALL = ["read", "click", "type"];   // every grant, on purpose: the extension's own screen is what is being tested
@@ -196,6 +196,14 @@ async function fixturePass() {
     const hover = await act(L, "computer", { action: "hover", ref: more }, ALL);
     step("hover travels back up the page", !hover.error, hover.error ?? `pointer at ${Math.round(hover.x)},${Math.round(hover.y)}`);
 
+    // read_dom: the engine's read — a selector and a field map the skill
+    // declares, run in the page, nothing touched.
+    const rows = await act(L, "read_dom", { spec: { items: "shreddit-post", limit: 5, fields: { title: "text:a#title", href: "href:a#title", meta: "text:span", tag: "tag", join: "text:shreddit-join-button" } } }, ["read"]);
+    const row = rows.rows?.[0];
+    step("read_dom returns rows by the declared spec", !rows.error && rows.total === 1 && row?.title === "A thread title the lane may open" && /\/fixture#top$/.test(row?.href ?? "") && row?.tag === "shreddit-post" && row?.join === "Join", rows.error ?? JSON.stringify(row));
+    const bad = await act(L, "read_dom", { spec: { items: "", fields: {} } }, ["read"]);
+    step("...and a spec without a selector is refused in words", /needs spec\.items/.test(bad.error ?? ""), bad.error ?? "it answered");
+
     const shot = await act(L, "computer", { action: "screenshot" }, ALL);
     step("screenshot", !shot.error && /^data:image\/png/.test(shot.screenshot ?? ""), shot.error ?? `${shot.width}×${shot.height}`);
 
@@ -272,6 +280,24 @@ async function redditPass() {
 
   const scrolled = await act(L, "computer", { action: "scroll", scroll_direction: "down", scroll_amount: 4 }, ALL);
   step("a wheel scroll on the real page", !scrolled.error && (scrolled.scrollY ?? 0) > 0, scrolled.error ?? `scrollY ${scrolled.scrollY}`);
+
+  // The engine's read of a thread page: the post's own element and its
+  // comments, by the skill's spec (skills/reddit/pages.mjs).
+  if (onThread) {
+    const { SPECS } = await import("../skills/reddit/pages.mjs");
+    const post = await act(L, "read_dom", { spec: SPECS.post }, ["read"]);
+    const pr = post.rows?.[0];
+    step("read_dom reads the post off its page by the skill's spec", !post.error && /^t3_/.test(pr?.id ?? "") && Boolean(pr?.title) && Boolean(pr?.permalink), post.error ?? `${pr?.id} "${String(pr?.title).slice(0, 50)}" by ${pr?.author} at ${pr?.at}, body ${String(pr?.body ?? "").length} chars`);
+    // The comments load a beat after the post (measured 2026-09-04): one
+    // more look after a scroll, the way the engine's read does, before "no
+    // comments" is believed — and a thread with none is not a failure.
+    let cs = await act(L, "read_dom", { spec: SPECS.comments }, ["read"]);
+    if (!cs.error && !(cs.rows ?? []).length) { await act(L, "computer", { action: "scroll", scroll_direction: "down", scroll_amount: 3 }, ALL); cs = await act(L, "read_dom", { spec: SPECS.comments }, ["read"]); }
+    const tree = await act(L, "read_dom", { spec: SPECS.tree }, ["read"]);
+    const total = Number(tree.rows?.[0]?.total) || Number(pr?.comments) || 0;
+    const some = (cs.rows ?? []).some((r) => /^t1_/.test(r.id ?? "") && r.author);
+    step("...and the comments, ids and authors and bodies", !cs.error && (some || total === 0), cs.error ?? `${cs.total} of ${total} comments rendered; first: ${JSON.stringify(cs.rows?.[0] ?? null).slice(0, 160)}`);
+  }
 
   const shot = await act(L, "computer", { action: "screenshot" }, ALL);
   step("screenshot", !shot.error && /^data:image\/png/.test(shot.screenshot ?? ""), shot.error ?? `${shot.width}×${shot.height}, scale ${shot.scale?.toFixed?.(2)}`);

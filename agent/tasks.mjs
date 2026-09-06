@@ -128,6 +128,14 @@ const BROWSER_SCHEMAS = {
     ref_id: z.string().optional().describe("Read only this node and its children"),
     tabId: TAB,
   }),
+  read_dom: z.object({
+    spec: z.object({
+      items: z.string().min(1).describe("A CSS selector for the rows, run through shadow roots"),
+      limit: z.number().int().min(1).max(500).optional(),
+      fields: z.record(z.string()).describe("name → attr:<name> | attr:<name>@<selector> | text:<selector> | href:<selector> | text | href | tag"),
+    }),
+    tabId: TAB,
+  }),
   find: z.object({ query: z.string().min(1), tabId: TAB }),
   form_input: z.object({ ref: z.string(), value: z.union([z.string(), z.number(), z.boolean()]), tabId: TAB }),
   get_page_text: z.object({ max_chars: z.number().int().min(500).max(200_000).optional(), tabId: TAB }),
@@ -143,6 +151,7 @@ const BROWSER_DESCRIPTIONS = {
   navigate: "Go to an http(s) url in your tab, or back / forward. Waits for the page to load and looks at it for a moment, like a person. Navigations to one site are spaced out by the lane; a wait of some seconds is normal.",
   computer: "screenshot (saved for the operator's card; you get its size), scroll (scroll_direction + scroll_amount in wheel ticks, at the pointer or a coordinate), scroll_to (ref — the wheel brings it into view; inView says whether it got there), hover, zoom (region), wait (duration ≤ 10s). left_click / right_click / double_click / type / key exist and need the click or type grant, which your definition may not carry — a refusal says so.",
   read_page: "The page as an accessibility tree. Interactive nodes carry [ref_N] for find/scroll_to. filter 'interactive' for controls only; ref_id to focus on one part.",
+  read_dom: "Rows off the page by a spec: items (a selector) and fields (attr:<name>, text:<selector>, href:<selector>, text, href, tag). The way the engine reads a platform; your SKILL.md names the elements that carry a post or a comment.",
   find: "Elements whose role, name, text or href contains the query (case-insensitive). Up to 20, with refs; a link carries its href.",
   form_input: "Set a form control's value by ref (needs the type grant).",
   get_page_text: "The page's readable text, through shadow roots, article or main first.",
@@ -237,7 +246,7 @@ export function taskManager(dir, { control, modelFor = null, deadlineMs = 30 * 6
 
   const openLease = async (task, url) => {
     if (task.lease?.id) return task.lease;
-    const r = await control.lease({ task: task.title, url });
+    const r = await control.lease({ task: task.title, url, project: dir });
     if (r.error) return { error: r.error };
     task.lease = { id: r.id, tabId: r.tabId, url };
     logLine(task, `opened a tab (${r.tabId}) at ${url}`);
@@ -256,7 +265,7 @@ export function taskManager(dir, { control, modelFor = null, deadlineMs = 30 * 6
    *  has not. Adopt the tab that is still open in Chrome. */
   const readopt = (task) => {
     if (task.lease?.id && task.lease.tabId !== undefined && typeof control.adopt === "function")
-      control.adopt({ id: task.lease.id, task: task.title, tabs: [task.lease.tabId], url: task.lease.url });
+      control.adopt({ id: task.lease.id, task: task.title, tabs: [task.lease.tabId], url: task.lease.url, project: dir });
   };
 
   /* ---------------------------------------------------------------- tools */
@@ -305,6 +314,7 @@ export function taskManager(dir, { control, modelFor = null, deadlineMs = 30 * 6
   const brief = (task) => [
     `Task: ${task.title}`,
     task.input && Object.keys(task.input).length ? `Input: ${JSON.stringify(task.input)}` : "",
+    task.input?.campaign ? `Campaign: ${task.input.campaign} — pass it as \`campaign\` to record_findings, so the judge and the writer apply its direction.` : "",
     task.lease?.tabId ? `Your tab is open at ${task.lease.url}. Read it with read_page or get_page_text.` : "",
   ].filter(Boolean).join("\n");
 

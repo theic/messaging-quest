@@ -45,7 +45,15 @@
 //     origin, and the panel asks for it — a permission dialog nobody is
 //     looking at is not a read.
 //   * No JavaScript-eval tool. The page-side vocabulary is the functions in
-//     this file, and adding to it means editing the extension.
+//     this file, and adding to it means editing the extension. A platform's
+//     knowledge of a page is a declared spec (read_dom: a selector and a
+//     field map) that domExtract runs — never platform code in the page.
+//   * From 0.6.0 this is the only way anything reads a platform: there is no
+//     background fetch in the extension (the relay pass is gone) and none in
+//     the engine. A page is read in a tab a person can watch, or not at all.
+//     The visibility verbs read in an Incognito tab (strangerTab) — the
+//     stranger's seat — which Chrome allows only once the operator has
+//     allowed the extension there.
 //   * The console reader enables the Log domain only. Runtime.enable is the
 //     one CDP call sites are known to test for, and nothing here makes it.
 //
@@ -55,7 +63,7 @@
 // worker anyway — neither alone is enough (the predecessor's bridge, sw.js).
 
 import { CLICK_SCREEN } from "./screen.js";
-import { composerState, OPENS, REPLIES, NEVER } from "./insert.js";
+import { composerState, wordsSource, OPENS_DEFAULT, REPLIES_DEFAULT, NEVER } from "./insert.js";
 
 export const GROUP_TITLE = "Messaging Quest";
 
@@ -120,7 +128,7 @@ async function run(job) {
   const input = job.input ?? {};
   const tabId = Number(input.tabId ?? job.tabId);
   switch (job.tool) {
-    case "lease": return openTab(input.url, null);
+    case "lease": return openTab(input.url, null, { stranger: Boolean(input.stranger) });
     case "release": {
       for (const t of input.tabIds ?? []) { await detach(Number(t)); try { await chrome.tabs.remove(Number(t)); } catch { /* already gone */ } }
       return { ok: true };
@@ -130,9 +138,10 @@ async function run(job) {
     case "tabs_create": await think("act"); return openTab(input.url, tabId);
     case "tabs_close": { await detach(tabId); try { await chrome.tabs.remove(tabId); } catch { /* gone */ } return { ok: true }; }
     case "navigate": await think("act"); return navigate(tabId, String(input.url ?? ""));
-    case "read_page": await think("read"); return inPage(tabId, pageTree, [String(input.filter ?? "all"), Number(input.depth) || 15, Number(input.max_chars) || 50_000, input.ref_id ?? null]);
-    case "find": await think("read"); return inPage(tabId, findInPage, [String(input.query ?? "")]);
-    case "get_page_text": await think("read"); return inPage(tabId, pageText, [Number(input.max_chars) || 50_000]);
+    case "read_page": { const no = await shown(tabId); if (no) return no; await think("read"); return inPage(tabId, pageTree, [String(input.filter ?? "all"), Number(input.depth) || 15, Number(input.max_chars) || 50_000, input.ref_id ?? null]); }
+    case "read_dom": { const no = await shown(tabId); if (no) return no; await think("read"); return inPage(tabId, domExtract, [input.spec && typeof input.spec === "object" ? input.spec : {}]); }
+    case "find": { const no = await shown(tabId); if (no) return no; await think("read"); return inPage(tabId, findInPage, [String(input.query ?? "")]); }
+    case "get_page_text": { const no = await shown(tabId); if (no) return no; await think("read"); return inPage(tabId, pageText, [Number(input.max_chars) || 50_000]); }
     case "form_input": await think("act"); return formInput(tabId, input);
     case "computer": await think(/^(screenshot|zoom|wait)$/.test(String(input.action)) ? "read" : "act"); return computer(tabId, input);
     case "read_console_messages": await think("read"); return consoleMessages(tabId, input);
@@ -161,12 +170,37 @@ async function run(job) {
 async function groupTab(tabId, windowId) {
   try {
     const [g] = await chrome.tabGroups.query({ title: GROUP_TITLE, windowId });
-    if (g) { await chrome.tabs.group({ tabIds: [tabId], groupId: g.id }); return g.id; }
+    if (g) {
+      await chrome.tabs.group({ tabIds: [tabId], groupId: g.id });
+      // A tab moved into a COLLAPSED group is hidden and Chrome activates a
+      // neighbour instead — measured 2026-09-04: every leased tab came up
+      // inactive, and Reddit's feed never loaded in it. The group opens and
+      // the tab comes back to the front.
+      try { if (g.collapsed) await chrome.tabGroups.update(g.id, { collapsed: false }); } catch { /* fine */ }
+      await chrome.tabs.update(tabId, { active: true }).catch(() => {});
+      return g.id;
+    }
     const id = await chrome.tabs.group({ tabIds: [tabId] });
     await chrome.tabGroups.update(id, { title: GROUP_TITLE, color: "green" });
+    await chrome.tabs.update(tabId, { active: true }).catch(() => {});
     return id;
   } catch {
     return null;   // a window that cannot group (an app window) still gets its tab
+  }
+}
+
+/** A read needs the tab drawn as much as a click does: a page a person is
+ *  not looking at may never finish loading (Reddit's feed does not). The
+ *  same probe-and-raise as before input, and a look-pause when the page was
+ *  hidden until now, so what loads on becoming visible has loaded. Null
+ *  when the tab is on screen; the reason when it cannot be. */
+async function shown(tabId) {
+  try {
+    const { raised } = await front(tabId);
+    if (raised) { await think("look"); }
+    return null;
+  } catch (e) {
+    return { error: e.message };
   }
 }
 
@@ -186,8 +220,9 @@ async function machineWindow(siblingTabId) {
   return null;
 }
 
-async function openTab(url, siblingTabId) {
+async function openTab(url, siblingTabId, { stranger = false } = {}) {
   if (!/^https?:\/\//i.test(String(url ?? ""))) return { error: "a tab opens on an http(s) url" };
+  if (stranger) return strangerTab(url);
   const windowId = await machineWindow(siblingTabId);
   let tab;
   if (windowId !== null) {
@@ -202,6 +237,46 @@ async function openTab(url, siblingTabId) {
   await think("look");
   const t = await chrome.tabs.get(tab.id).catch(() => tab);
   return { tabId: tab.id, groupId, windowId: tab.windowId, url: t.url ?? url, title: t.title ?? "" };
+}
+
+/**
+ * The STRANGER's seat: an Incognito window, for the visibility verbs. What
+ * became of a comment is only measurable logged out — Reddit shows an
+ * author their own shadow-removed comment as if nothing happened — so
+ * sync/check/back lease their tab here. Chrome lets an extension into
+ * Incognito only once the operator has allowed it (chrome://extensions →
+ * Details → Allow in Incognito); until then the lease says so, and the verb
+ * refuses rather than answering from the wrong seat. The window is the
+ * machine's own, like the other one: kept unfocused, its tabs grouped, its
+ * id remembered for the session so one window serves every stranger read.
+ */
+async function strangerTab(url) {
+  let allowed = false;
+  try { allowed = await chrome.extension.isAllowedIncognitoAccess(); } catch { allowed = false; }
+  if (!allowed) return { error: "incognito_not_allowed" };
+  let windowId = null;
+  try {
+    const { strangerWindow } = await chrome.storage.session.get({ strangerWindow: null });
+    if (strangerWindow !== null) { const w = await chrome.windows.get(strangerWindow); if (w?.incognito) windowId = w.id; }
+  } catch { windowId = null; }
+  let tab;
+  try {
+    if (windowId !== null) {
+      tab = await chrome.tabs.create({ url, active: true, windowId });
+    } else {
+      const w = await chrome.windows.create({ url, focused: false, type: "normal", incognito: true });
+      tab = w.tabs?.[0] ?? (await chrome.tabs.query({ windowId: w.id }))[0];
+      try { await chrome.storage.session.set({ strangerWindow: w.id }); } catch { /* fine */ }
+    }
+  } catch (e) {
+    return { error: `could not open an Incognito tab: ${e.message}` };
+  }
+  if (!tab.active) await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
+  const groupId = await groupTab(tab.id, tab.windowId);
+  await loaded(tab.id, 20_000);
+  await think("look");
+  const t = await chrome.tabs.get(tab.id).catch(() => tab);
+  return { tabId: tab.id, groupId, windowId: tab.windowId, url: t.url ?? url, title: t.title ?? "", stranger: true };
 }
 
 async function tabsContext(tabIds) {
@@ -305,8 +380,13 @@ function sweepSessions() {
  *  after all that is an error the caller sees, not a click nobody saw. */
 async function front(tabId) {
   const t = await chrome.tabs.get(tabId).catch(() => null);
-  if (!t) return;
-  if (!t.active) await chrome.tabs.update(tabId, { active: true }).catch(() => {});
+  if (!t) return { raised: false };
+  let raised = false;
+  if (!t.active) { raised = true; await chrome.tabs.update(tabId, { active: true }).catch(() => {}); }
+  try {
+    // The group it sits in may be collapsed — an active tab cannot be.
+    if (t.groupId !== undefined && t.groupId >= 0) { const g = await chrome.tabGroups.get(t.groupId); if (g?.collapsed) { raised = true; await chrome.tabGroups.update(g.id, { collapsed: false }); } }
+  } catch { /* not in a group, or no group API */ }
   try {
     const w = await chrome.windows.get(t.windowId);
     if (w.state === "minimized") await chrome.windows.update(t.windowId, { state: "normal" });
@@ -320,15 +400,16 @@ async function front(tabId) {
       await sleep(200);
     }
   };
-  if (await drawn()) return;
+  if (await drawn()) return { raised };
+  raised = true;
   try { await chrome.windows.update(t.windowId, { focused: true }); } catch { /* raised or not */ }
-  if (await drawn(1500)) return;
+  if (await drawn(1500)) return { raised };
   try {
     const w = await chrome.windows.create({ tabId, focused: false, type: "normal" });
     const moved = w.tabs?.[0] ?? (await chrome.tabs.query({ windowId: w.id }))[0];
     if (moved) await groupTab(moved.id, w.id);
   } catch { /* could not move it; the check below says so */ }
-  if (await drawn(1500)) return;
+  if (await drawn(1500)) return { raised };
   const tab = await chrome.tabs.get(tabId).catch(() => t);
   const wins = await chrome.windows.getAll().catch(() => []);
   const where = wins.map((w) => `${w.id}${w.id === tab.windowId ? " (ours)" : ""}${w.focused ? " focused" : ""} ${w.state} ${w.width}×${w.height} at ${w.left},${w.top}`).join("; ");
@@ -768,11 +849,17 @@ async function consoleMessages(tabId, input) {
  * (Input.insertText: the same event a paste produces). Nothing synthetic
  * touches the page.
  */
-export async function insertDraft(tabId, message) {
+export async function insertDraft(tabId, message, spec = {}) {
   const text = String(message ?? "").trim();
   if (!text) return { ok: false, reason: "nothing to insert" };
+  // The platform's words, off the reply card (lib/platform.mjs composerOf):
+  // which labels open a composer, which sit on a reply box, which custom
+  // elements host one. The words that may never be pressed are ours.
+  const opens = wordsSource(spec?.opens, OPENS_DEFAULT);
+  const replies = wordsSource(spec?.replies, REPLIES_DEFAULT);
+  const hosts = (Array.isArray(spec?.hosts) ? spec.hosts : []).map((h) => String(h).trim()).filter((h) => /^[a-z][a-z0-9-]*$/i.test(h)).join(", ");
   const state = async () => {
-    const s = await inPage(tabId, composerState, [OPENS.source, REPLIES.source, NEVER.source]);
+    const s = await inPage(tabId, composerState, [opens, replies, NEVER.source, hosts]);
     return s?.error ? { error: s.error === "not_granted" ? "not_granted" : s.error } : s;
   };
   let st = await state();
@@ -996,6 +1083,64 @@ function pageText(maxChars) {
   const truncated = text.length > maxChars;
   if (truncated) text = text.slice(0, maxChars) + "\n… truncated";
   return { text, truncated, url: location.href, title: document.title };
+}
+
+/**
+ * Rows off the page by a declared spec — the way the engine reads a
+ * platform (lib/browse.mjs; the spec is the skill's, skills/<id>/pages.mjs).
+ * `items` is a selector run through every shadow root; each field is
+ *   attr:<name>            an attribute of the item
+ *   attr:<name>@<selector> an attribute of the first matching descendant
+ *   text:<selector>        the trimmed text of the first matching descendant
+ *   href:<selector>        that descendant's href, made absolute
+ *   text | href | tag      the item's own text, href, or tag name
+ *   attrs                  every attribute of the item, as an object — for
+ *                          measuring a shape, not for reading one
+ * and `a|b` tries a, then b, and takes the first that answers — a page
+ * that renders a date as <time datetime> here and <faceplate-timeago ts>
+ * there is one field, not two.
+ * Reads only: nothing here touches the page. Capped by `limit` (default
+ * 100, at most 500) and by 4000 characters a field, so one page cannot
+ * flood a run.
+ */
+function domExtract(spec) {
+  const items = String(spec?.items ?? "").trim();
+  const limit = Math.max(1, Math.min(500, Number(spec?.limit) || 100));
+  const fields = spec?.fields && typeof spec.fields === "object" ? spec.fields : {};
+  if (!items) return { error: "read_dom needs spec.items — a selector" };
+  const roots = () => {
+    const found = [document];
+    for (let i = 0; i < found.length; i++) {
+      for (const el of found[i].querySelectorAll("*")) if (el.shadowRoot) found.push(el.shadowRoot);
+    }
+    return found;
+  };
+  let matched;
+  try { matched = []; for (const r of roots()) for (const el of r.querySelectorAll(items)) matched.push(el); }
+  catch (e) { return { error: `bad selector: ${e.message}` }; }
+  const total = matched.length;
+  const seen = new Set();
+  const uniq = [];
+  for (const el of matched) { if (!seen.has(el)) { seen.add(el); uniq.push(el); } if (uniq.length >= limit) break; }
+  const textOf = (el) => (el?.textContent ?? "").replace(/[ \t]+/g, " ").replace(/\s*\n\s*/g, "\n").trim().slice(0, 4000);
+  const hrefOf = (el) => { const h = el?.getAttribute?.("href"); if (!h) return null; try { return new URL(h, location.href).href; } catch { return h; } };
+  const inside = (el, sel) => { try { return el.querySelector(sel) ?? (el.shadowRoot ? el.shadowRoot.querySelector(sel) : null); } catch { return null; } };
+  const read = (el, how) => {
+    const h = String(how ?? "");
+    if (h.includes("|")) { for (const part of h.split("|")) { const v = read(el, part.trim()); if (v !== null && v !== undefined && v !== "") return v; } return null; }
+    if (h === "text") return textOf(el);
+    if (h === "href") return hrefOf(el);
+    if (h === "tag") return el.tagName.toLowerCase();
+    if (h === "attrs") { const o = {}; for (const a of el.attributes) o[a.name] = String(a.value).slice(0, 300); return o; }
+    let m;
+    if ((m = /^attr:([^@]+)@(.+)$/.exec(h))) { const d = inside(el, m[2]); return d ? d.getAttribute(m[1]) : null; }
+    if ((m = /^attr:(.+)$/.exec(h))) return el.getAttribute(m[1]);
+    if ((m = /^text:(.+)$/.exec(h))) { const d = inside(el, m[1]); return d ? textOf(d) : null; }
+    if ((m = /^href:(.+)$/.exec(h))) { const d = inside(el, m[1]); return d ? hrefOf(d) : null; }
+    return null;
+  };
+  const rows = uniq.map((el) => { const row = {}; for (const [k, how] of Object.entries(fields)) row[k] = read(el, how); return row; });
+  return { rows, total, url: location.href, title: document.title };
 }
 
 /** A ref's box on the viewport plus the viewport itself — what the wheel

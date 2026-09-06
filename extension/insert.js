@@ -1,33 +1,48 @@
 // Where a reply goes: the composer, found but never touched from here.
 //
-// composerState() is injected into a Reddit tab via
+// composerState() is injected into a platform's tab via
 // chrome.scripting.executeScript({func}). Chrome SERIALIZES it — it runs in
 // the page with no closure over this file — so it is fully self-contained,
-// takes the three word lists as regex sources, and READS ONLY: it says where
-// the composer is, or where the control that opens one is, and the hands in
-// control.js (insertDraft) do the clicking and the pasting through Chrome's
-// own input pipeline. Nothing in this file dispatches an event or sets a
-// value; the synthetic clicks and `input` events an earlier version fired
-// (isTrusted: false, the oldest automation tell there is) are gone.
+// takes the word lists as regex sources and the host selector as a string,
+// and READS ONLY: it says where the composer is, or where the control that
+// opens one is, and the hands in control.js (insertDraft) do the clicking
+// and the pasting through Chrome's own input pipeline. Nothing in this file
+// dispatches an event or sets a value.
+//
+// The platform's words — which labels open a composer, which sit on a reply
+// box, which custom elements host one — ride on the reply card
+// (lib/platform.mjs composerOf → card.data.insert), so this file carries
+// none of Reddit's own. What stays here is the extension's: NEVER, the
+// labels that could submit or destroy, screened whatever a platform says.
 //
 // Ported from the predecessor (messaging-quest, page-scripts.js MQInsert),
 // where every clause below was paid for on a real page:
-//   - Reddit builds its composer inside web components; a shadow root is
-//     invisible to an ordinary querySelectorAll, so the search walks them.
-//   - The box does not EXIST until "Add a comment" is clicked, so a closed
-//     composer names its opener — chosen against ANY label that could submit.
-//     That click may only ever open a box.
+//   - A composer built inside web components is invisible to an ordinary
+//     querySelectorAll, so the search walks shadow roots.
+//   - The box may not EXIST until an opener is clicked, so a closed composer
+//     names its opener — chosen against ANY label that could submit. That
+//     click may only ever open a box.
 //   - A focused box beats a guessed one; otherwise the biggest editor on the
 //     page, never a bare <input> — that is how a reply ends up in a search
 //     field.
 //
-// Pressing Reddit's own Comment button stays the human's job. Always. There is
-// no code path here that submits, and keeping it that way is the product.
+// Pressing the platform's own button stays the human's job. Always. There
+// is no code path here that submits, and keeping it that way is the product.
 
-export const OPENS = /^(add a comment|add comment|write a comment|leave a comment|join the conversation)$/i;
-export const REPLIES = /^(reply|write a reply|reply to post|comment)$/i;
+/** Generic openers and reply labels, used when a card names none. */
+export const OPENS_DEFAULT = ["add a comment", "add comment", "write a comment", "leave a comment", "join the conversation"];
+export const REPLIES_DEFAULT = ["reply", "write a reply", "reply to post", "comment"];
 const NEVER = /\b(post|submit|send|save|publish|delete|remove|report|share|edit|upvote|downvote)\b/i;
 export { NEVER };
+
+/** A whole-label regex source from a list of labels. */
+export const wordsSource = (list, dflt) => {
+  const words = (Array.isArray(list) && list.length ? list : dflt).map((w) => String(w).trim().toLowerCase()).filter(Boolean)
+    .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return `^(${words.join("|")})$`;
+};
+export const OPENS = new RegExp(wordsSource([], OPENS_DEFAULT), "i");
+export const REPLIES = new RegExp(wordsSource([], REPLIES_DEFAULT), "i");
 
 /**
  * In the page: `{ box, opener }`. `box` is the composer if one is open —
@@ -35,8 +50,11 @@ export { NEVER };
  * whether it is empty; `opener` is the control that would open one, with
  * its label. Either may be null. The rects carry the viewport and the
  * scroll position, which is what the wheel needs to bring them into view.
+ * `hostsSel` is the platform's list of custom elements that host a
+ * composer, as a selector list ("shreddit-composer, comment-composer-host")
+ * or empty.
  */
-export function composerState(opensSrc, repliesSrc, neverSrc) {
+export function composerState(opensSrc, repliesSrc, neverSrc, hostsSel) {
   const OPENS = new RegExp(opensSrc, "i"), REPLIES = new RegExp(repliesSrc, "i"), NEVER = new RegExp(neverSrc, "i");
   const roots = () => {
     const found = [document];
@@ -86,7 +104,8 @@ export function composerState(opensSrc, repliesSrc, neverSrc) {
   /** The control that opens a closed composer, thread-level ones first. An
    *  anchor that really navigates would take the thread away with it. */
   let best = null, bestRank = 9;
-  for (const el of queryAll("button, [role='button'], a, summary, shreddit-composer, comment-composer-host")) {
+  const selector = "button, [role='button'], a, summary" + (hostsSel && String(hostsSel).trim() ? ", " + hostsSel : "");
+  for (const el of queryAll(selector)) {
     const href = el.getAttribute("href");
     if (el.tagName === "A" && href && !/^(#|javascript:)/i.test(href)) continue;
     const r = el.getBoundingClientRect();

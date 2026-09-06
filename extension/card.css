@@ -187,6 +187,7 @@ footer button:active { transform: translateY(1px); box-shadow: 0 1px 0 0 var(--i
 
 .es-server { color: var(--dim); font: 11px var(--mono); padding: 4px 14px 10px; }
 .es-server a { color: var(--dim); }
+.es-server select { color: var(--ink); background: var(--panel); border: 1.5px solid var(--line); font: 11px var(--mono); padding: 2px 4px; }
 
 @keyframes es-pulse { 50% { opacity: 0.4; } }
 .es-waiting .es-primary { animation: es-pulse 1.6s ease-in-out infinite; pointer-events: none; }

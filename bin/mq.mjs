@@ -1,9 +1,16 @@
 #!/usr/bin/env node
-// Messaging Quest — phase 0, the listener.
+// Messaging Quest — the CLI: one implementation of every verb.
 //
-// It watches one thing: what Reddit did to the comments you already wrote. It
-// posts nothing, reads nobody else's account, calls no model, needs no key and
-// sends nothing anywhere. Everything is append-only JSONL in .mq/.
+// It began as the listener: what the platform did to the comments you already
+// wrote. It posts nothing, reads nobody else's account, calls no model, needs
+// no key and sends nothing anywhere. Everything is append-only JSONL in .mq/.
+//
+// From 0.6.0 every read happens in the operator's own browser (lib/browse.mjs)
+// — a real tab, rendered, read in the isolated world, closed after — and
+// nowhere else; every verb acts on the current PROJECT (lib/projects.mjs); a
+// person found under a CAMPAIGN (lib/campaigns.mjs) is judged and drafted
+// under its direction; and nothing here names a platform — the active adapter
+// (lib/platform.mjs) supplies the pages, the labels and the refusals.
 //
 // Why this and not a lead tool first: Reddit removed 154 million posts and
 // comments in one half-year, 44.7% of them by admins, and told almost nobody.
@@ -21,38 +28,44 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { setTimeout as sleep } from "node:timers/promises";
-import reddit from "../skills/reddit/adapter.mjs";
-import { loadPlatforms, platforms } from "../lib/platform.mjs";
+import { loadPlatforms, platforms, first, platformFor, labelsOf } from "../lib/platform.mjs";
 import { skillState, writeChoice } from "../lib/skills.mjs";
 import { PLANS, ROLES, plan, setPlan, chosen, choose, localConfig, setLocal, probeLocal, hasKey, keySource } from "../lib/models.mjs";
 import { classify, history, STATES } from "../lib/verdict.mjs";
 import { conversation, byUrgency } from "../lib/conversation.mjs";
-import { scoped, submissions, refuse } from "../skills/reddit/shapes.mjs";
+import { conversationRows, openConversation, bindConversations, recordReturn, waiting as waitingRows, yourTurns, dueConversations, unbound, campaignDigest, digestText } from "../lib/conversations.mjs";
+import { readStash, patchStash } from "../lib/cards.mjs";
 import { verdictOf } from "../lib/probe.mjs";
-import { fromDescription, isParody, sidebarUrl, roomFile } from "../lib/rules.mjs";
+import { fromDescription, roomFile } from "../lib/rules.mjs";
 import { store, FILES, dataDir } from "../lib/store.mjs";
+import { browser, serverBase } from "../lib/browse.mjs";
+import { readCampaigns, readCampaign, setCampaignStatus, writerBlock } from "../lib/campaigns.mjs";
+import { listProjects, createProject, useProject, currentDir } from "../lib/projects.mjs";
 import { seedMissing } from "../lib/memory.mjs";
 import { measureVoice, mergeVoice, voiceRules, voiceSummary, lengthCeiling, MIN_SAMPLE_CHARS } from "../lib/voice.mjs";
 import { signalWritingRules, communityRisks } from "../lib/writing.mjs";
 import { repeats, claims, inventedLinks, tells, RUN_LIMIT } from "../lib/guards.mjs";
 import { standing, readiness, burst, mix, CQS_NOTE, PER_ROOM_24H, OVERALL_24H } from "../lib/ready.mjs";
 
-const DIR = dataDir();
+const ROOT = dataDir();          // the root: the default project, the registry, the machine's files
+const DIR = currentDir(ROOT);    // the project every verb below acts on
 const F = (n) => join(DIR, n);
-
-// The registry finds skills/ and <DIR>/skills/. This CLI still speaks to the
-// reddit adapter by name — mastering one platform before connecting a second
-// is the plan, not an accident — but everything platform-mechanical it uses
-// comes through that adapter, and the store resolves rooms via the registry.
-await loadPlatforms(DIR);
-const { gapMs: ANON_GAP_MS, waitFor, read, readViaRelay, userFeed, threadFeed, commentFeed, threadOf, roomOf: subredditOf } = reddit;
 const now = () => new Date().toISOString();
 const die = (m) => { console.error(`mq: ${m}`); process.exit(1); };
+
+// The registry finds skills/ and <ROOT>/skills/. Everything platform-mechanical
+// this CLI does comes through the active adapter; nothing here names one.
+await loadPlatforms(ROOT);
+const P = () => first() ?? die("no platform skill is active — `mq skills` says why");
+const L = () => labelsOf(P());
+const roomOfUrl = (url) => platformFor(url)?.roomOf(url) ?? null;
+const isParody = (place) => Boolean(P().parody?.(place));
+const rulesUrl = (place) => P().rulesUrl?.(place) ?? "the room's own rules page";
+const threadOf = (it) => (platformFor(it.url) ?? P()).threadOf?.(it) ?? null;
 const sha = (s) => createHash("sha256").update(String(s)).digest("hex");
 
 /** §04. Reddit requires deleting what was deleted from Reddit and recommends
- *  dropping stored content within 48 hours. The excerpt is a convenience for
+ *  dropping stored content within 48 hours; the same courtesy holds anywhere. The excerpt is a convenience for
  *  reading the report; the hash is what every measurement actually runs on, so
  *  the excerpt can expire without costing anything. */
 const BODY_TTL_MS = 48 * 3600_000;
@@ -67,61 +80,42 @@ const { readJsonl, append, items, found, verdicts, checksById, contacted,
         lastById, rewrite } = S;
 const sources = S.sources;
 
-/* ------------------------------------------------- the anonymous governor */
+/* ------------------------------------------------------------ the browser */
 
-// Anonymously Reddit answers one request a minute, per address, measured. The
-// gap is therefore held ACROSS runs — a limit tracked only in memory is one that
-// a second `mq check` in the same minute walks straight through.
-const clock = () => (existsSync(F("clock")) ? Number(readFileSync(F("clock"), "utf8")) : 0);
+// Every read is a page in the operator's own Chrome (lib/browse.mjs), reached
+// through the server that holds the control lane. `mq serve` sets MQ_SERVER
+// for the children it spawns; a bare terminal reaches the same server when
+// one is running, and otherwise the verb says so and stops — there is no
+// other way to read, by the operator's rule. Two seats: the operator's own
+// session for finding people, the stranger's (an Incognito tab) for what
+// became of their own words.
+const lane = ({ stranger = false, task = null } = {}) =>
+  browser(serverBase() ?? "http://127.0.0.1:8787", { task: task ?? `mq ${cmd}`, stranger, project: DIR });
 
-/**
- * Which failed reads are worth offering to the browser lane: the shapes that
- * mean "this address is refused", not "the network hiccuped". A timeout gets
- * retried by the next tick; a 403 will be a 403 tomorrow too.
- */
-const BLOCKED_SHAPES = /^(http_403|rate_limited)$|not a feed/;
-
-async function fetchAnon(url, { quiet = false, relay = false } = {}) {
-  const wait = waitFor(clock());
-  if (wait > 0) {
-    if (!quiet) process.stdout.write(`  waiting ${Math.ceil(wait / 1000)}s — anonymous Reddit answers one request a minute\n`);
-    await sleep(wait);
-  }
-  writeFileSync(F("clock"), String(Date.now()));
-  let r = await read(url);
-  append("reads.jsonl", { url, at: now(), ok: r.ok, err: r.ok ? null : r.error, n: r.ok ? r.entries.length : 0 });
-  // A 429 means the gap was not enough; wait it out and say so rather than
-  // recording a finding that is really our own impatience.
-  if (!r.ok && r.error === "rate_limited") {
-    if (!quiet) process.stdout.write(`  rate limited — waiting ${r.retryAfter}s\n`);
-    await sleep((r.retryAfter + 2) * 1000);
-    writeFileSync(F("clock"), String(Date.now()));
-    const again = await read(url);
-    // The retry's outcome has to reach the ledger too. Logging only the 429
-    // leaves a trail where the last word on a URL is "rate_limited" while a
-    // verdict was in fact reached from a good read — and the ledger is the
-    // thing somebody checks when they doubt the verdict.
-    append("reads.jsonl", { url, at: now(), ok: again.ok, err: again.ok ? null : again.error, n: again.ok ? again.entries.length : 0, retry: true });
-    r = again;
-  }
-
-  /* The browser lane — the fallback for a FINDING read the anonymous lane
-   * refused. `relay: true` is passed by exactly two callers, tick and probe,
-   * and a test counts them: sync, check and back measure what a logged-out
-   * stranger sees, and a logged-in read would answer that question wrongly
-   * while looking right. MQ_RELAY is set by the dashboard server for its
-   * children; a bare terminal run has no broker and stays honestly anonymous.
-   * Pace is unchanged either way — the relayed attempt only ever follows a
-   * governed one, so reads stay at least one gap apart no matter the seat. */
-  const broker = process.env.MQ_RELAY;
-  if (!r.ok && relay && broker && readViaRelay && BLOCKED_SHAPES.test(r.error)) {
-    if (!quiet) process.stdout.write("  refused anonymously — asking your browser to read it\n");
-    const b = await readViaRelay(broker, url);
-    append("reads.jsonl", { url, at: now(), ok: b.ok, err: b.ok ? null : b.error, n: b.ok ? b.entries.length : 0, via: "browser" });
-    if (!quiet && !b.ok) process.stdout.write(`  the browser lane said: ${b.error}\n`);
-    return b;
-  }
+/** One page, on a lease, into the read ledger. Three outcomes, never two. */
+async function readPage(b, url, { source = null } = {}) {
+  const r = await P().read(url, { browse: b });
+  append("reads.jsonl", { url, ...(source ? { source } : {}), at: now(), ok: r.ok, err: r.ok ? null : r.error, n: r.ok ? r.entries.length : 0, via: b.stranger ? "stranger" : "browser" });
   return r;
+}
+
+/** Posts a search or a listing only previewed get their own page opened,
+ *  one by one, for the author and the full body — up to the platform's
+ *  number per read, the way a person opens the ones that look like them. */
+async function fillBodies(b, entries) {
+  const cap = Number(P().bodiesPerRead) || 0;
+  if (!cap || typeof P().readPost !== "function") return entries;
+  const out = [];
+  let opened = 0;
+  for (const e of entries) {
+    const wants = e.kind === "post" && (e.preview || !e.body || !e.author);
+    if (!wants || opened >= cap) { out.push(e); continue; }
+    opened++;
+    const r = await P().readPost(e.url, { browse: b });
+    const full = r.ok ? (r.entries.find((x) => x.kind === "post" && x.id === e.id) ?? r.entries.find((x) => x.kind === "post")) : null;
+    out.push(full ? { ...e, ...full, id: e.id, url: e.url, preview: false } : e);
+  }
+  return out;
 }
 
 /* --------------------------------------------------------------- commands */
@@ -136,14 +130,14 @@ cmds.init = () => {
   // the dashboard edits them and the agents read them, and a seed defined in
   // two places is a rubric that means two things.
   seedMissing(DIR);
-  console.log(`ready — ${DIR}/\n\nThe quickest way in is the dashboard:  mq serve\n\nOr by hand:  mq me <your-reddit-username>\n             mq sync\n             mq check\n\nWhen you want to find people: edit ${DIR}/rule.md, then \`mq probe <subreddit> --q "<phrase>"\`.`);
+  console.log(`ready — ${DIR}/\n\nThe quickest way in is the dashboard:  mq serve   (every read happens in your own browser, through it)\n\nOr by hand:  mq me <your-username>\n             mq sync\n             mq check\n\nWhen you want to find people: edit ${DIR}/rule.md, then \`mq probe <room> --q "<phrase>"\`.`);
 };
 
 cmds.me = (args) => {
-  const name = String(args[0] || die("usage: mq me <your-reddit-username>")).replace(/^\/?u\//, "").trim();
-  if (!/^[\w-]{3,20}$/.test(name)) die(`that does not look like a Reddit username: '${name}'`);
-  writeFileSync(F("account.json"), JSON.stringify({ name, added: now() }, null, 2));
-  console.log(`listening for u/${name}.\n\nNothing is posted, nothing is sent, and only your own account is read.\nNext: mq sync`);
+  const name = String(args[0] || die("usage: mq me <your-username>")).replace(/^\/?u\//, "").trim();
+  if (!/^[\w-]{3,20}$/.test(name)) die(`that does not look like a ${P().name} username: '${name}'`);
+  writeFileSync(F("account.json"), JSON.stringify({ name, platform: P().id, added: now() }, null, 2));
+  console.log(`listening for ${name} on ${P().name}.\n\nNothing is posted, nothing is sent, and only your own account is read — in an Incognito tab of your browser, the way a stranger sees it.\nNext: mq sync`);
 };
 
 /**
@@ -156,9 +150,12 @@ cmds.me = (args) => {
  * account with genuinely no comments looks identical.
  */
 cmds.sync = async () => {
-  const acct = account() || die("nobody to listen to yet — run: mq me <your-reddit-username>");
-  console.log(`reading reddit.com/user/${acct.name} as a stranger would\n`);
-  const r = await fetchAnon(userFeed(acct.name));
+  const acct = account() || die("nobody to listen to yet — run: mq me <your-username>");
+  if (typeof P().userPage !== "function") die(`${P().name} has no profile page this install can read`);
+  console.log(`reading ${acct.name}'s profile as a stranger would — an Incognito tab of your own browser\n`);
+  const b = lane({ stranger: true, task: `mq sync — ${acct.name} as a stranger` });
+  const r = await readPage(b, P().userPage(acct.name));
+  await b.close();
 
   if (!r.ok) {
     if (r.error === "http_404") return console.log(notFound(acct.name));
@@ -180,6 +177,11 @@ cmds.sync = async () => {
   }
 
   console.log(`  ${r.entries.length} on the profile, ${fresh} new to the store.`);
+  // A conversation opened on "I posted it" is bound to the comment that
+  // turned up on the profile in the same thread, so the return pass knows
+  // which page to read for its replies.
+  const bound = bindConversations(S, { threadOf: (x) => threadOf(x) });
+  if (bound) console.log(`  ${bound} conversation${bound === 1 ? "" : "s"} bound to your own comments — the return pass reads their replies.`);
   if (r.entries.length === 0) {
     console.log(`\n  Zero entries, logged out, with a 200.`);
     console.log(`  Either you have not commented, or nothing you wrote is visible to strangers.`);
@@ -200,18 +202,15 @@ cmds.sync = async () => {
  * profile-only tool cannot help.
  */
 cmds.add = (args) => {
-  const url = String(args[0] || die("usage: mq add <reddit-permalink>")).split("?")[0].replace(/\/+$/, "");
-  if (!/^https?:\/\/(www\.|old\.)?reddit\.com\/r\/[^/]+\/comments\//i.test(url)) die("that is not a Reddit post or comment permalink");
-  const parts = url.split("/");
-  const post = parts[parts.indexOf("comments") + 1];
-  const tail = parts[parts.length - 1];
-  // .../comments/<post>/<slug>/<comment>/  — a trailing segment that is neither
-  // the post id nor the slug is a comment id. Getting this wrong checks the
-  // wrong thing and reports confidently about it.
-  const isComment = tail !== post && parts.indexOf("comments") + 2 < parts.length - 1;
-  const id = isComment ? `t1_${tail}` : `t3_${post}`;
+  const url = String(args[0] || die("usage: mq add <permalink>")).split("?")[0].replace(/\/+$/, "");
+  // The platform says what a permalink is and whether it names a post or a
+  // comment — getting that wrong checks the wrong thing and reports
+  // confidently about it, which is why it is the adapter's to say.
+  const it = platformFor(url)?.itemOf?.(url) ?? null;
+  if (!it) die("that is not a post or comment permalink on a platform this install reads");
+  const { id, kind } = it;
   if (items().has(id)) return console.log(`already listening to ${id}`);
-  append("items.jsonl", { id, kind: isComment ? "comment" : "post", url, author: account()?.name ?? null, at: null, title: null, body: "", body_sha256: null, seen_at: now(), source: "by hand" });
+  append("items.jsonl", { id, kind, url, author: account()?.name ?? null, at: null, title: null, body: "", body_sha256: null, seen_at: now(), source: "by hand" });
   console.log(`added ${id}\n  ${url}\nNext: mq check`);
 };
 
@@ -249,31 +248,37 @@ cmds.check = async (args) => {
     (groups.get(t) ?? groups.set(t, []).get(t)).push(it);
   }
   const work = [...groups.entries()].slice(0, limit);
-  const mins = Math.ceil((work.length * ANON_GAP_MS) / 60_000);
   console.log(`${todo.length} to check across ${groups.size} threads; doing ${work.length}.`);
-  // "At least", because a thread longer than one page costs a second read to
-  // settle, and quoting the floor as though it were the total is how a progress
-  // estimate becomes a small lie.
-  console.log(`At least ${mins} minute${mins === 1 ? "" : "s"} — logged out, Reddit answers one request a minute.\n`);
+  // A page turn each, in an Incognito tab of your own browser — and a thread
+  // longer than one page costs a second read to settle.
+  console.log(`Each thread is a page turn in an Incognito tab of your browser — the stranger's seat.\n`);
 
+  const p = P();
+  if (typeof p.threadPage !== "function") die(`${p.name} has no thread page this install can read`);
+  const b = lane({ stranger: true, task: "mq check — as a stranger" });
   for (const [thread, group] of work) {
-    const sub = subredditOf(thread);
-    console.log(`r/${sub ?? "?"}  ${group.length} of yours`);
-    const t = await fetchAnon(threadFeed(thread));
+    const sub = roomOfUrl(thread);
+    console.log(`${sub ? L().room(sub) : "?"}  ${group.length} of yours`);
+    const t = await readPage(b, p.threadPage(thread));
     for (const it of group) {
       let verdict = classify(it, t);
-      // Only the genuinely open question is worth another minute.
+      // Only the genuinely open question is worth another page.
       if (verdict.state === "inconclusive" && it.kind === "comment") {
         console.log(`    thread is longer than a page — reading the comment's own view`);
-        const f = await fetchAnon(commentFeed(it.url));
+        const f = await readPage(b, p.commentPage(it.url));
         verdict = classify(it, t, f);
       }
       append("checks.jsonl", { id: it.id, at: now(), state: verdict.state, why: verdict.why, confident: verdict.confident, entries: t.ok ? t.entries.length : 0 });
       console.log(`    ${mark(verdict.state)} ${verdict.state.padEnd(12)} ${line(it)}`);
       if (!verdict.confident) console.log(`                    ${verdict.why}`);
     }
+    // A lane that is dark stays dark for every thread after this one: the
+    // error is on each of this group's checks (never a removal), and the
+    // rest wait for the next run rather than each failing in turn.
+    if (!t.ok && /not attached|no server|Incognito/i.test(t.error)) { console.log(`\n  ${t.error}`); break; }
   }
-  console.log(`\nes status`);
+  await b.close();
+  console.log(`\nmq status`);
 };
 
 /**
@@ -286,7 +291,7 @@ cmds.check = async (args) => {
  * back into, and reading for it spends the same minute as one you can.
  */
 cmds.back = async (args) => {
-  const acct = account() || die("nobody to listen to yet — run: mq me <your-reddit-username>");
+  const acct = account() || die("nobody to listen to yet — run: mq me <your-username>");
   const me = acct.name.toLowerCase();
   const days = args.includes("--days") ? Number(args[args.indexOf("--days") + 1]) : 14;
   const limit = args.includes("--limit") ? Number(args[args.indexOf("--limit") + 1]) : 25;
@@ -307,17 +312,23 @@ cmds.back = async (args) => {
 
   if (!todo.length) return console.log(`nothing from the last ${days} days that a stranger can still see. \`mq back --days 60\` looks further back.`);
   console.log(`${todo.length} of your comments from the last ${days} days.`);
-  console.log(`At least ${Math.ceil((todo.length * ANON_GAP_MS) / 60_000)} minutes — one read each, because only a comment's own view carries its replies.\n`);
+  console.log(`One page each, in an Incognito tab of your browser — only a comment's own view carries its replies.\n`);
 
+  const p = P();
+  if (typeof p.commentPage !== "function") die(`${p.name} has no comment page this install can read`);
+  const b = lane({ stranger: true, task: "mq back — as a stranger" });
   const waiting = [];
   for (const it of todo) {
-    const f = await fetchAnon(commentFeed(it.url));
+    const f = await readPage(b, p.commentPage(it.url));
+    if (!f.ok && /not attached|no server|Incognito/i.test(f.error)) { console.log(`  ${f.error}`); break; }
     const c = conversation(it, f, me);
     append("replies.jsonl", { id: it.id, at: now(), state: c.state, replies: c.replies ?? 0, latest: c.latest ?? null, since_you: c.since_you ?? false });
+    noteReturn(it, c);
     if (c.state === "waiting") waiting.push({ it, c });
     process.stdout.write(`  ${c.state === "waiting" ? "!" : " "} ${c.state.padEnd(9)} ${(c.replies ?? 0)} repl${(c.replies ?? 0) === 1 ? "y" : "ies"}  ${line(it)}\n`);
   }
 
+  await b.close();
   if (!waiting.length) return console.log(`\nNobody is waiting on you.`);
   console.log(`\n${waiting.length} waiting for you — oldest first, because that is the one going cold:\n`);
   for (const { it, c } of byUrgency(waiting.map(({ it, c }) => ({ it, c, at: c.at })))) {
@@ -327,6 +338,54 @@ cmds.back = async (args) => {
     console.log(`    ${c.latest.url || it.url}\n`);
   }
   console.log(`You answer these yourself, in your own words. Nothing here writes or sends anything.`);
+};
+
+/** One read of one of your comments, folded into the conversation it
+ *  belongs to (if the operator opened one on "I posted it"). A reply this
+ *  machine had not seen is the one event worth the specialist's inbox. */
+const noteReturn = (it, c) => {
+  const conv = [...conversationRows(S).values()].find((k) => k.comment_id === it.id);
+  if (!conv) return null;
+  const { row, fresh } = recordReturn(S, conv, c);
+  if (fresh) S.note("reply.waiting", { id: row.id, author: row.latest?.author ?? null, place: row.place, campaign: row.campaign ?? null, url: row.latest?.url ?? row.url, title: `${row.latest?.author ?? "somebody"} wrote back in ${L().room(row.place)}`, text: String(row.latest?.text ?? "").slice(0, 300) });
+  return row;
+};
+
+/** The return half of a tick: the conversations due a look, read from the
+ *  stranger's seat. Returns how many were read, or -1 when the lane is dark. */
+async function returnPass(due) {
+  const acct = account();
+  const me = acct?.name?.toLowerCase();
+  if (!me || typeof P().commentPage !== "function") return 0;
+  const store = items();
+  const b = lane({ stranger: true, task: `mq tick — ${due.length} conversation${due.length === 1 ? "" : "s"} as a stranger` });
+  let read = 0;
+  for (const conv of due) {
+    const it = store.get(conv.comment_id);
+    if (!it) continue;
+    const f = await readPage(b, P().commentPage(it.url));
+    if (!f.ok && /not attached|no server|Incognito/i.test(f.error)) { console.log(`  ${f.error}`); await b.close(); return -1; }
+    const c = conversation(it, f, me);
+    append("replies.jsonl", { id: it.id, at: now(), state: c.state, replies: c.replies ?? 0, latest: c.latest ?? null, since_you: c.since_you ?? false });
+    const row = noteReturn(it, c);
+    read++;
+    console.log(`  ${row?.state === "waiting" ? "!" : " "} ${String(c.state).padEnd(9)} ${row?.author ?? "?"} in ${L().room(conv.place)}`);
+  }
+  await b.close();
+  return read;
+}
+
+/** The day's numbers into the specialist's inbox, at most once in 20 hours
+ *  — or now, when something just came back. Counted, never tallied by a
+ *  model. */
+const noteDigest = ({ force = false } = {}) => {
+  const last = readStash(DIR).digest_at;
+  if (!force && last && Date.now() - Date.parse(last) < 20 * 3600_000) return false;
+  const rows = campaignDigest(S, readCampaigns(DIR));
+  const w = waitingRows(S).length;
+  S.note("day.digest", { title: `${w} waiting on you · ${rows.reduce((n, r) => n + r.found, 0)} found in all`, text: digestText(rows), waiting: w, campaigns: rows });
+  patchStash(DIR, { digest_at: now() });
+  return true;
 };
 
 const ago = (iso) => {
@@ -381,8 +440,8 @@ const notFound = (name, at = null) => [
   `  404 — logged out, that profile does not render at all${at ? ` (read ${at.slice(0, 16).replace("T", " ")} UTC)` : ""}.`,
   ``,
   `  That is the site-wide signal. A suspended or shadowbanned account 404s to`,
-  `  strangers while looking normal to you. Check reddit.com/user/${name} in a`,
-  `  private window to confirm with your own eyes, then appeal at reddit.com/appeals.`,
+  `  strangers while looking normal to you. Open your profile in a private window`,
+  `  to confirm with your own eyes, then appeal${L().appeals ? ` at ${L().appeals.replace(/^https?:\/\/(www\.)?/, "")}` : " where the platform takes appeals"}.`,
 ].join("\n");
 
 cmds.status = () => {
@@ -390,7 +449,7 @@ cmds.status = () => {
   const pend = pending().length;
   const backlog = pend ? `\n  ${pend} found post${pend === 1 ? "" : "s"} waiting for a verdict — mq judge` : "";
   if (!store.size) {
-    const r = acct?.name ? S.lastReadOf(userFeed(acct.name)) : null;
+    const r = acct?.name && typeof P().userPage === "function" ? S.lastReadOf(P().userPage(acct.name)) : null;
     if (r && !r.ok && r.err === "http_404") return console.log(notFound(acct.name, r.at) + backlog);
     return console.log("nothing stored yet — run `mq sync`." + backlog);
   }
@@ -401,7 +460,7 @@ cmds.status = () => {
     if (h.state === "unchecked") { unchecked.push(it); continue; }
     tally.set(h.state, (tally.get(h.state) ?? 0) + 1);
   }
-  console.log(`u/${acct?.name ?? "?"} — ${store.size} things you said\n`);
+  console.log(`${acct?.name ?? "?"} — ${store.size} things you said\n`);
   for (const [state, n] of [...tally].sort((a, b) => b[1] - a[1])) {
     console.log(`  ${String(n).padStart(4)}  ${state.padEnd(13)} ${STATES[state]}`);
   }
@@ -557,49 +616,58 @@ cmds.sweep = () => {
  * promotion is not worth a request, let alone a place in a queue.
  */
 cmds.probe = async (args) => {
-  const place = String(args[0] || die(`usage: mq probe <subreddit> --q "<phrase>"`)).replace(/^\/?r\//, "").trim();
+  const place = String(args[0] || die(`usage: mq probe <room> --q "<phrase>" [--campaign <id>]`)).replace(/^\/?r\//, "").trim();
   const q = args.includes("--q") ? args[args.indexOf("--q") + 1] : null;
+  const campaign = args.includes("--campaign") ? String(args[args.indexOf("--campaign") + 1] ?? "").toLowerCase() : null;
+  if (campaign && !readCampaign(DIR, campaign)) die(`no campaign "${campaign}" — mq campaigns`);
+  const label = L().room(place);
 
-  if (isParody(place)) return refused(`r/${place} is a parody community — Reddit's "-jerk" suffix. A competitor's picker put one of these top of its list at 100/100.`);
+  if (isParody(place)) return refused(`${label} is a parody community — the platform's own convention for one. A competitor's picker put one of these top of its list at 100/100.`);
   const room = roomState(place);
-  if (room.state === "banned") return refused(`r/${place} does not allow it — ${room.source ?? "recorded"}.`);
+  if (room.state === "banned") return refused(`${label} does not allow it — ${room.source ?? "recorded"}.`);
 
-  const url = q ? scoped(place, q) : submissions(place);
-  const no = refuse({ url });
+  const url = P().sourceUrl({ place, q });
+  const no = P().refuse({ url });
   if (no) return refused(no);
 
-  console.log(`probing r/${place}${q ? ` for "${q}"` : " (new submissions)"}\n`);
-  const r = await fetchAnon(url, { relay: true });   // finding — the browser lane may answer
-  if (!r.ok) return console.log(`  could not read it: ${r.error}\n  That is a failed read, not a verdict on the room.`);
-  // A subreddit that does not exist is answered by a silent redirect to a
-  // search feed, with a 200. Only the final URL gives it away.
-  if (r.redirected) return refused(`there is no r/${place} — Reddit redirected the feed, which it does instead of 404ing.`);
+  console.log(`probing ${label}${q ? ` for "${q}"` : " (new posts)"}${campaign ? ` under the campaign ${campaign}` : ""} — in a tab of your own browser\n`);
+  const b = lane({ task: `mq probe ${label}` });
+  const r = await readPage(b, url);
+  if (!r.ok) { await b.close(); return console.log(`  could not read it: ${r.error}\n  That is a failed read, not a verdict on the room.`); }
+  // A room that does not exist is answered by a silent redirect, with a 200.
+  // Only the final URL gives it away.
+  if (r.redirected) { await b.close(); return refused(`there is no ${label} — the page redirected to ${r.finalUrl}, which the platform does instead of 404ing.`); }
 
   // Free, and it catches the blunt cases.
   const desc = fromDescription(r.subtitle);
   if (desc.state === "banned") {
+    await b.close();
     writeRoom(place, desc.quote);
-    return refused(`r/${place}'s own description says: "${desc.quote}"`);
+    return refused(`${label}'s own description says: "${desc.quote}"`);
   }
 
-  const known = found(), fresh = [];
-  for (const e of r.entries) {
-    if (e.kind !== "post") continue;              // submissions only, never a comment stream
-    if (known.has(e.id) || fresh.some((f) => f.id === e.id)) continue;
-    fresh.push({ id: e.id, place, url: e.url, author: e.author, title: e.title,
-      body: e.body.slice(0, 1200), body_sha256: sha(e.body), posted_at: e.at, seen_at: now(), probe: `${place}:${q ?? "new"}` });
-  }
+  const known = found();
+  const seen = new Set();
+  const fresh0 = r.entries.filter((e) => e.kind === "post" && !known.has(e.id) && !seen.has(e.id) && seen.add(e.id));
+  const filled = await fillBodies(b, fresh0);   // a person opens the ones that look like them
+  await b.close();
+  const tag = `${place}:${q ?? "new"}`;
+  const fresh = filled.map((e) => ({ id: e.id, place, url: e.url, author: e.author, title: e.title,
+    body: String(e.body ?? "").slice(0, 1200), body_sha256: sha(e.body ?? ""), posted_at: e.at, seen_at: now(), probe: tag, via: "browser",
+    comments: Number.isFinite(Number(e.comments)) ? Number(e.comments) : null,
+    ...(campaign ? { campaign } : {}) }));
   for (const f of fresh) append("found.jsonl", f);
-  append("probes.jsonl", { place, q: q ?? null, url, read: fresh.length, at: now(), settled: false });
+  append("probes.jsonl", { place, q: q ?? null, url, read: fresh.length, at: now(), settled: false, via: "browser", ...(campaign ? { campaign } : {}) });
 
   const p = pending();
-  for (const f of fresh) p.push({ n: p.length + 1, id: f.id, probe: `${place}:${q ?? "new"}` });
+  for (const f of fresh) p.push({ n: p.length + 1, id: f.id, probe: tag });
   setPending(p);
 
   writeRoom(place, null);
-  console.log(`  ${r.entries.length} entries, ${fresh.length} new posts to judge.`);
+  const bodies = fresh.filter((f) => f.body).length;
+  console.log(`  ${r.entries.length} posts on the page, ${fresh.length} new to judge${bodies < fresh.length ? ` (${fresh.length - bodies} previewed only — the page showed no body and the ${P().bodiesPerRead}-per-read cap on opening posts was spent)` : ""}.`);
   console.log(`\n  Its rules are NOT readable from here — measured, and the public description is not the rules list.`);
-  console.log(`  Read them once:  ${sidebarUrl(place)}`);
+  console.log(`  Read them once:  ${rulesUrl(place)}`);
   console.log(`  Then answer the line in ${roomPath(place)}`);
   console.log(`\n  Judge what came back:  mq pending    then    mq judge < verdicts.json`);
 };
@@ -610,7 +678,7 @@ const writeRoom = (place, found_) => {
   const p = roomPath(place);
   if (existsSync(p)) return;
   mkdirSync(join(DIR, "rooms"), { recursive: true });
-  writeFileSync(p, roomFile(place, found_));
+  writeFileSync(p, roomFile(place, found_, { label: L().room(place), rulesUrl: P().rulesUrl?.(place) ?? null }));
 };
 
 /**
@@ -625,20 +693,24 @@ const writeRoom = (place, found_) => {
  */
 cmds.found = (args, stdin) => {
   let body;
-  try { body = JSON.parse(stdin); } catch { die("stdin is not JSON — expected { place, q, items: [{ url, title, author, body }] }"); }
+  try { body = JSON.parse(stdin); } catch { die("stdin is not JSON — expected { place, q, campaign?, items: [{ url, title, author, body }] }"); }
   const place = String(body?.place ?? "").replace(/^\/?r\//, "").replace(/[^\w-]/g, "");
-  if (!place) die("no place — which subreddit were these read in?");
+  if (!place) die("no place — which room were these read in?");
+  const label = L().room(place);
   const q = body.q ? String(body.q).slice(0, 120) : null;
-  if (isParody(place)) return refused(`r/${place} is a parody community — Reddit's "-jerk" suffix. Nothing recorded.`);
+  let campaign = body.campaign ? String(body.campaign).toLowerCase().slice(0, 40) : null;
+  if (campaign && !readCampaign(DIR, campaign)) { console.log(`no campaign "${campaign}" in this project — recorded under the general fit instead.`); campaign = null; }
+  if (isParody(place)) return refused(`${label} is a parody community — the platform's own convention for one. Nothing recorded.`);
   const room = roomState(place);
-  if (room.state === "banned") return refused(`r/${place} does not allow it — ${room.source ?? "recorded"}. Nothing recorded.`);
+  if (room.state === "banned") return refused(`${label} does not allow it — ${room.source ?? "recorded"}. Nothing recorded.`);
 
   const known = found(), fresh = [];
   let dupes = 0, noId = 0;
   for (const it of (Array.isArray(body.items) ? body.items : []).slice(0, 200)) {
     const url = String(it?.url ?? "").split("?")[0];
-    const m = /\/comments\/([a-z0-9]+)/i.exec(url);
-    const id = /^t3_[a-z0-9]+$/i.test(String(it?.id ?? "")) ? String(it.id) : m ? `t3_${m[1]}` : null;
+    // The id is the platform's — off the permalink, by the adapter — so a
+    // colleague cannot invent one and first-write-wins stays honest.
+    const id = /^t[13]_[a-z0-9]+$/i.test(String(it?.id ?? "")) ? String(it.id) : ((platformFor(url) ?? P()).idOf?.(url) ?? null);
     if (!id) { noId++; continue; }
     if (known.has(id) || fresh.some((f) => f.id === id)) { dupes++; continue; }
     const text = String(it.body ?? "").slice(0, 1200);
@@ -646,29 +718,30 @@ cmds.found = (args, stdin) => {
       id, place, url, author: it.author ? String(it.author).replace(/^u\//, "").slice(0, 60) : null,
       title: String(it.title ?? "").slice(0, 300), body: text, body_sha256: sha(text),
       posted_at: it.posted_at ? String(it.posted_at).slice(0, 40) : null, seen_at: now(),
-      probe: `${place}:${q ?? "new"}`, via: "browser",
+      comments: Number.isFinite(Number(it.comments)) ? Number(it.comments) : null,
+      probe: `${place}:${q ?? "new"}`, via: "browser", ...(campaign ? { campaign } : {}),
     });
   }
   for (const f of fresh) append("found.jsonl", f);
-  append("probes.jsonl", { place, q, url: body.url ? String(body.url).slice(0, 400) : null, read: fresh.length, at: now(), settled: false, via: "browser" });
+  append("probes.jsonl", { place, q, url: body.url ? String(body.url).slice(0, 400) : null, read: fresh.length, at: now(), settled: false, via: "browser", ...(campaign ? { campaign } : {}) });
   const p = pending();
   for (const f of fresh) p.push({ n: p.length + 1, id: f.id, probe: `${place}:${q ?? "new"}` });
   setPending(p);
   writeRoom(place, null);
 
-  console.log(`${fresh.length} new post${fresh.length === 1 ? "" : "s"} recorded from r/${place}${q ? ` for "${q}"` : ""}${dupes ? `, ${dupes} already known` : ""}${noId ? `, ${noId} without a post permalink (skipped)` : ""}.`);
+  console.log(`${fresh.length} new post${fresh.length === 1 ? "" : "s"} recorded from ${label}${q ? ` for "${q}"` : ""}${campaign ? ` under ${campaign}` : ""}${dupes ? `, ${dupes} already known` : ""}${noId ? `, ${noId} without a post permalink (skipped)` : ""}.`);
   if (fresh.length) console.log(`They wait on a verdict: mq pending, then mq judge — or the Judge button.`);
-  if (room.state === "unanswered") console.log(`r/${place}'s rules are not readable from here — a human reads ${sidebarUrl(place)} once and answers ${roomPath(place)}.`);
+  if (room.state === "unanswered") console.log(`${label}'s rules are not readable from here — a human reads ${rulesUrl(place)} once and answers ${roomPath(place)}.`);
 };
 
 cmds.rooms = () => {
   const rows = readJsonl("probes.jsonl");
   const places = [...new Set(rows.map((r) => r.place))];
-  if (!places.length) return console.log(`no rooms probed yet — \`mq probe <subreddit> --q "<phrase>"\``);
+  if (!places.length) return console.log(`no rooms probed yet — \`mq probe <room> --q "<phrase>"\``);
   for (const place of places) {
     const st = roomState(place);
     const flag = st.state === "allowed" ? "ok " : st.state === "banned" ? "NO " : "?  ";
-    console.log(`${flag} r/${place.padEnd(24)} ${st.state === "unanswered" ? `rules unread — ${sidebarUrl(place)}` : st.state}`);
+    console.log(`${flag} ${L().room(place).padEnd(26)} ${st.state === "unanswered" ? `rules unread — ${rulesUrl(place)}` : st.state}`);
   }
   console.log(`\nA room stays unwatchable until its file answers. That is deliberate.`);
 };
@@ -680,18 +753,21 @@ cmds.rooms = () => {
  * probe that did not clear the floor. Four ways to say no and one to say yes.
  */
 cmds.watch = (args) => {
-  const place = String(args[0] || die(`usage: mq watch <subreddit> [--q "<phrase>"]`)).replace(/^\/?r\//, "").trim();
+  const place = String(args[0] || die(`usage: mq watch <room> [--q "<phrase>"] [--campaign <id>]`)).replace(/^\/?r\//, "").trim();
   const q = args.includes("--q") ? args[args.indexOf("--q") + 1] : null;
+  const campaign = args.includes("--campaign") ? String(args[args.indexOf("--campaign") + 1] ?? "").toLowerCase() : null;
+  if (campaign && !readCampaign(DIR, campaign)) die(`no campaign "${campaign}" — mq campaigns`);
   const id = `${place}:${q ?? "new"}`.toLowerCase();
+  const label = L().room(place);
 
-  if (isParody(place)) return refused(`r/${place} is a parody community.`);
+  if (isParody(place)) return refused(`${label} is a parody community.`);
   const room = roomState(place);
-  if (room.state === "banned") return refused(`r/${place} does not allow it — ${room.source ?? "recorded"}.`);
+  if (room.state === "banned") return refused(`${label} does not allow it — ${room.source ?? "recorded"}.`);
   if (room.state === "unanswered")
-    return refused(`nobody has read r/${place}'s rules yet.\n  Read them: ${sidebarUrl(place)}\n  Then answer the line in ${roomPath(place)}`);
+    return refused(`nobody has read ${label}'s rules yet.\n  Read them: ${rulesUrl(place)}\n  Then answer the line in ${roomPath(place)}`);
 
-  const url = q ? scoped(place, q) : submissions(place);
-  const no = refuse({ url });
+  const url = P().sourceUrl({ place, q });
+  const no = P().refuse({ url });
   if (no) return refused(no);
 
   // The probe has to have cleared the floor. A source nobody measured is the
@@ -699,13 +775,13 @@ cmds.watch = (args) => {
   const v = verdicts();
   const mine = [...found().values()].filter((f) => f.probe === `${place}:${q ?? "new"}`);
   const judged = mine.filter((f) => v.has(f.id));
-  if (!judged.length) return refused(`nothing from r/${place} has been judged yet — run \`mq probe\`, then \`mq judge\`.`);
+  if (!judged.length) return refused(`nothing from ${label} has been judged yet — run \`mq probe\`, then \`mq judge\`.`);
   const decision = verdictOf({ read: judged.length, fit: judged.filter((f) => v.get(f.id).fit).length });
   if (!decision.commit) return refused(decision.why);
 
   if (sources().some((x) => x.id === id)) return console.log(`already watching ${id}`);
-  append("sources.jsonl", { id, place, q, url, cadence_min: 60, added: now() });
-  console.log(`watching ${id} — ${decision.why}`);
+  append("sources.jsonl", { id, place, q, url, cadence_min: 60, added: now(), ...(campaign ? { campaign } : {}) });
+  console.log(`watching ${id}${campaign ? ` under ${campaign}` : ""} — ${decision.why}`);
 };
 
 cmds.unwatch = (args) => {
@@ -721,7 +797,7 @@ cmds.sources = () => {
   const seen = [...found().values()];
   for (const s of all) {
     const r = lr.get(s.id);
-    console.log(`${s.id.padEnd(34)} ${String(seen.filter((f) => f.probe === s.id).length).padStart(4)} found   ${!r ? "never read" : r.ok ? `read ${r.at.slice(0, 16).replace("T", " ")}` : `ERROR ${r.err ?? ""}`}`);
+    console.log(`${s.id.padEnd(34)} ${String(seen.filter((f) => f.probe === s.id).length).padStart(4)} found   ${!r ? "never read" : r.ok ? `read ${r.at.slice(0, 16).replace("T", " ")}` : `ERROR ${r.err ?? ""}`}${s.campaign ? `   campaign ${s.campaign}` : ""}`);
   }
 };
 
@@ -730,7 +806,7 @@ cmds.sources = () => {
  *  speculation about unmeasured ones. */
 cmds.platforms = () => {
   for (const p of platforms()) {
-    console.log(`${p.id.padEnd(12)} ${p.name.padEnd(10)} ${p.origin.padEnd(9)} one read per ${Math.round(p.gapMs / 1000)}s`);
+    console.log(`${p.id.padEnd(12)} ${p.name.padEnd(10)} ${p.origin.padEnd(9)} page turns at least ${Math.round(p.gapMs / 1000)}s apart, in your own browser`);
   }
   console.log(`\nA platform is a skill: a folder with a SKILL.md and an adapter.mjs.`);
   console.log(`Built-in ones live in skills/; drop your own into ${DIR}/skills/ and it loads.`);
@@ -770,33 +846,74 @@ cmds.tick = async (args) => {
     const r = lr.get(s.id);
     return !r || Date.now() - Date.parse(r.at) >= s.cadence_min * 60_000;  // never read is always due
   }).slice(0, limit);
-  if (!due.length) return console.log("nothing is due.");
-  console.log(`${due.length} source${due.length === 1 ? "" : "s"} due. At least ${Math.ceil((due.length * ANON_GAP_MS) / 60_000)} minutes.\n`);
+  // The return half: conversations the operator opened, bound to their own
+  // comments, not looked at in twelve hours. A reply going cold costs more
+  // than a missed post, so it runs even when no source is due.
+  const dueC = dueConversations(S);
+  if (!due.length && !dueC.length) { noteDigest(); return console.log("nothing is due."); }
+  if (due.length) console.log(`${due.length} source${due.length === 1 ? "" : "s"} due — read in a tab of your own browser, a page turn every few seconds.\n`);
 
   const known = found(), gone = contacted();
   const p = pending();
   let total = 0;
+  let dark = false;
+  const b = due.length ? lane({ task: `mq tick — ${due.length} source${due.length === 1 ? "" : "s"}` }) : null;
   for (const s of due) {
-    const r = await fetchAnon(s.url, { relay: true });   // finding — the browser lane may answer
-    append("reads.jsonl", { source: s.id, at: now(), ok: r.ok, err: r.ok ? null : r.error, n: r.ok ? r.entries.length : 0 });
-    if (!r.ok) { console.log(`  ${s.id}: ${r.error}`); continue; }
+    const r = await readPage(b, s.url, { source: s.id });
+    if (!r.ok) { console.log(`  ${s.id}: ${r.error}`); if (/not attached|no server/i.test(r.error)) { dark = true; break; } continue; }
+    const seen = new Set();
+    const fresh0 = r.entries.filter((e) => e.kind === "post" && !known.has(e.id) && !seen.has(e.id) && seen.add(e.id)
+      && !(e.author && gone.has(e.author.toLowerCase())));
+    const filled = await fillBodies(b, fresh0);
     let fresh = 0;
-    for (const e of r.entries) {
-      if (e.kind !== "post") continue;
-      if (known.has(e.id)) continue;
+    for (const e of filled) {
       // Somebody you have already written to is not a new lead, ever, and
-      // across every project. This is the check that makes a queue trustworthy.
+      // across every project. This is the check that makes a queue trustworthy
+      // — asked again here because the author may only be known after the
+      // post's own page was read.
       if (e.author && gone.has(e.author.toLowerCase())) continue;
       const row = { id: e.id, place: s.place, url: e.url, author: e.author, title: e.title,
-        body: e.body.slice(0, 1200), body_sha256: sha(e.body), posted_at: e.at, seen_at: now(), probe: s.id };
+        body: String(e.body ?? "").slice(0, 1200), body_sha256: sha(e.body ?? ""), posted_at: e.at, seen_at: now(), probe: s.id, via: "browser",
+        comments: Number.isFinite(Number(e.comments)) ? Number(e.comments) : null,
+        ...(s.campaign ? { campaign: s.campaign } : {}) };
       append("found.jsonl", row); known.set(e.id, row);
       p.push({ n: p.length + 1, id: e.id, probe: s.id });
       fresh++; total++;
     }
     console.log(`  ${s.id}: ${r.entries.length} read, ${fresh} new`);
   }
+  if (b) await b.close();
   setPending(p);
-  console.log(`\n${total} new to judge — mq pending`);
+  if (due.length) console.log(`\n${total} new to judge — mq pending`);
+
+  let back = 0;
+  if (dueC.length && !dark) {
+    console.log(`\n${dueC.length} conversation${dueC.length === 1 ? "" : "s"} due a look — the comment's own page, in an Incognito tab.\n`);
+    back = await returnPass(dueC);
+    if (back < 0) console.log(`  the stranger's seat is not open — Chrome needs "Allow in Incognito" for the extension; the conversations stay due.`);
+  }
+  const w = waitingRows(S).length;
+  if (w) console.log(`\n${w} waiting on you — mq waiting`);
+  const ub = unbound(S).length;
+  if (ub) console.log(`${ub} conversation${ub === 1 ? "" : "s"} not yet found on your profile — mq sync binds them.`);
+  noteDigest({ force: back > 0 && w > 0 });
+};
+
+/** Who wrote back and is waiting on you, from the conversations this
+ *  machine tracks. Oldest first — that is the one going cold. */
+cmds.waiting = (args) => {
+  const rows = waitingRows(S).map((c) => ({ id: c.id, author: c.latest?.author ?? c.author, place: c.place, campaign: c.campaign ?? null, url: c.latest?.url ?? c.url, at: c.latest?.at ?? null, turns: (c.turns ?? []).length, they_said: String(c.latest?.text ?? "").slice(0, 300), you_said: String((c.turns ?? []).filter((t) => t.by === "you").pop()?.text ?? "").slice(0, 300) }));
+  if (args.includes("--json")) return console.log(JSON.stringify(rows, null, 2));
+  const all = [...conversationRows(S).values()].filter((c) => c.state !== "closed");
+  if (!rows.length) return console.log(`nobody is waiting on you. ${all.length} conversation${all.length === 1 ? "" : "s"} tracked${unbound(S).length ? `, ${unbound(S).length} not yet found on your profile (mq sync)` : ""}.`);
+  console.log(`${rows.length} waiting for you — oldest first:\n`);
+  for (const r of rows) {
+    console.log(`  ${r.id}  u/${r.author} in ${L().room(r.place)} · ${ago(r.at)}${r.campaign ? `  [${r.campaign}]` : ""}`);
+    console.log(`    they said: ${r.they_said.replace(/\s+/g, " ").slice(0, 150)}`);
+    console.log(`    you said:  ${r.you_said.replace(/\s+/g, " ").slice(0, 150)}`);
+    console.log(`    ${r.url}\n`);
+  }
+  console.log(`mq draft <id> writes the next turn's material; you post it yourself.`);
 };
 
 cmds.pending = () => {
@@ -804,7 +921,7 @@ cmds.pending = () => {
   if (!p.length) return console.log("nothing waiting on a verdict.");
   console.log(JSON.stringify(p.map((x) => {
     const it = all.get(x.id);
-    return { n: x.n, author: it?.author ?? null, title: it?.title ?? "", body: (it?.body ?? "").slice(0, 1200) };
+    return { n: x.n, author: it?.author ?? null, title: it?.title ?? "", body: (it?.body ?? "").slice(0, 1200), comments: it?.comments ?? null, posted_at: it?.posted_at ?? null };
   }), null, 2));
 };
 
@@ -818,12 +935,16 @@ cmds.judge = (args, stdin) => {
   if (!Array.isArray(vs)) die("expected a JSON array of [{n, fit, why}]");
   const rule = ruleHash();
   const byN = new Map(p.map((x) => [x.n, x.id]));
+  const all = found();
   const seen = new Set();
   let fits = 0;
   for (const v of vs) {
     const id = byN.get(v.n);
     if (!id) { console.error(`  no item numbered ${v.n} — skipped`); continue; }
-    append("verdicts.jsonl", { id, fit: !!v.fit, why: v.why ?? "", rule, at: now() });
+    // A verdict under a campaign carries the campaign's rubric hash beside
+    // rule.md's, so "the queue changed" is answerable for both.
+    const c = all.get(id)?.campaign ? readCampaign(DIR, all.get(id).campaign) : null;
+    append("verdicts.jsonl", { id, fit: !!v.fit, why: v.why ?? "", rule, ...(c ? { campaign: c.id, campaign_hash: c.hash } : {}), at: now() });
     seen.add(v.n);
     if (v.fit) fits++;
   }
@@ -858,7 +979,7 @@ cmds.queue = (args) => {
   if (args.includes("--json")) return console.log(JSON.stringify(rows, null, 2));
   if (!rows.length) return console.log("queue is empty.");
   for (const r of rows) {
-    console.log(`\n${r.id}  r/${r.place}  ${(r.posted_at ?? r.seen_at).slice(0, 16).replace("T", " ")}  u/${r.author ?? "?"}`);
+    console.log(`\n${r.id}  ${L().room(r.place)}  ${(r.posted_at ?? r.seen_at).slice(0, 16).replace("T", " ")}  ${r.author ?? "?"}${r.campaign ? `  [${r.campaign}]` : ""}`);
     console.log(`  ${(r.title || "").slice(0, 90)}`);
     console.log(`  ${(r.body || "").replace(/\s+/g, " ").slice(0, 160)}`);
     console.log(`  ${r.url}`);
@@ -877,10 +998,10 @@ cmds.mark = (args) => {
   // what is NOT taken is their fixed seven-day timer, because a timer is not a
   // safety check.
   if (mark === "sent" && !args.includes("--anyway")) {
-    const place = it.place ?? subredditOf(it.url) ?? "?";
+    const place = it.place ?? roomOfUrl(it.url) ?? "?";
     const b = burst(sentLog(), place);
     const stand = readiness(standing([...items().values()], checksById()).get(place), roomState(place));
-    const stop = b ? b.why : stand.state === "not ready" ? `you are not ready in r/${place} — ${stand.why}` : null;
+    const stop = b ? b.why : stand.state === "not ready" ? `you are not ready in ${L().room(place)} — ${stand.why}` : null;
     if (stop) {
       console.log(`  not logged — ${stop}.\n`);
       console.log(`  The shape that cost this project its visibility was eleven replies in`);
@@ -891,11 +1012,15 @@ cmds.mark = (args) => {
     }
   }
   append("marks.jsonl", { id, mark, at: now() });
+  if (mark === "sent") {
+    const last = readJsonl("drafts.jsonl").filter((d) => d.id === id).pop();
+    openConversation(S, it, { text: last?.text ?? "", via: "cli" });
+  }
   if (mark === "sent" && it.author) {
     // Permanent, and across every project. Cheaper to write than to explain
     // why the same person turned up twice.
     append("contacted.jsonl", { author: it.author, id, at: now() });
-    console.log(`logged as answered: ${id}\n  u/${it.author} will never appear in a queue again.`);
+    console.log(`logged as answered: ${id}\n  ${it.author} will never appear in a queue again — in any project.`);
   } else console.log(mark === "sent" ? `logged as answered: ${id}` : `discarded: ${id}`);
 };
 
@@ -948,20 +1073,44 @@ cmds.draft = (args, stdin) => {
   const it = found().get(id) || die(`no such item: ${id}`);
   const fp = mergeVoice(voiceOf()?.measured ?? null, voiceOf()?.user ?? null);
 
-  if (args.includes("--save")) return saveDraft(it, stdin, fp);
+  if (args.includes("--save")) return saveDraft(it, stdin, fp, { turn: (() => { const k = conversationRows(S).get(id); return k && k.state !== "closed" && yourTurns(k) > 0 ? yourTurns(k) + 1 : 1; })() });
 
+  // The campaign this person came in under, if any: its direction is the
+  // idea the writer applies, its mention rule decides the stage, and what
+  // was already said under it is shown so "in your own words" is checkable.
+  const c = it.campaign ? readCampaign(DIR, it.campaign) : null;
+  // They wrote back: the stage is a conversation, whatever the campaign's
+  // mention rule said for the opener. Read off the facts, never configured.
+  const conv = conversationRows(S).get(id);
+  const turn = conv && conv.state !== "closed" && yourTurns(conv) > 0 ? yourTurns(conv) + 1 : 1;
+  const stage = turn > 1 ? "conversation" : c?.mention === "disclosed" ? "disclosed" : "opener";
   const me = meFile().trim();
-  console.log(`# Answer this person\n`);
-  console.log(`u/${it.author ?? "?"} in r/${it.place} — ${it.url}\n`);
+  const note = args.includes("--note") ? String(args[args.indexOf("--note") + 1] ?? "").trim() : "";
+  console.log(turn > 1 ? `# Answer this person — turn ${turn}\n` : `# Answer this person\n`);
+  console.log(`${it.author ?? "?"} in ${L().room(it.place)} — ${it.url}${c ? `\nCampaign: ${c.name} (${c.id}, mention: ${c.mention})` : ""}\n`);
   console.log(`## What they said\n\n${it.title ? `**${it.title}**\n\n` : ""}${(it.body || "").slice(0, 1600)}\n`);
+  if (turn > 1) {
+    console.log(`## The exchange so far\n`);
+    for (const t of conv.turns ?? []) console.log(`--- ${t.by === "you" ? "you" : `u/${t.author ?? "them"}`} · ${String(t.at ?? "").slice(0, 16).replace("T", " ")} ---\n${String(t.text ?? "").slice(0, 1600)}\n`);
+    console.log(`## What they wrote back — answer THIS\n\n${String(conv.latest?.text ?? (conv.turns ?? []).filter((t) => t.by === "them").pop()?.text ?? "").slice(0, 1600)}\n`);
+  }
   console.log(`## How to write it\n`);
   console.log(signalWritingRules({
-    intent: "signal", stage: "opener",
+    intent: "leads", stage,
     pitch: firstLine(me) || "(nothing in me.md yet — write it, or this is guesswork)",
     problem: null, style: null, styleNotes: null, voice: fp,
   }).trim());
-  const risks = communityRisks(it.url, "reddit", "opener");
+  if (note) {
+    const prior = readJsonl("drafts.jsonl").filter((d) => d.id === id && (d.turn ?? 1) === turn).pop();
+    console.log(`\n## What the operator said about the last draft — this outranks everything above except the refusals\n\n${note}\n`);
+    if (prior) console.log(`The draft they were looking at:\n\n--- rejected ---\n${prior.text}\n--- end ---\n\nWrite a different reply that does what the note asks. Do not lightly edit the rejected one.`);
+  }
+  const risks = communityRisks(it.url, P().id, stage === "conversation" ? "conversation" : "opener");
   if (risks.length) { console.log(`\n## Where you are writing\n`); for (const r of risks) console.log(`- ${r}`); }
+  if (c) {
+    const said = readJsonl("drafts.jsonl").filter((d) => d.campaign === c.id && d.id !== it.id).map((d) => d.text);
+    console.log(`\n## The campaign\n\n${writerBlock(c, { said })}`);
+  }
 
   // §15 keeps this block: named axes of difference, labels the writer chooses,
   // and one option being a correct answer.
@@ -984,7 +1133,7 @@ const firstLine = (s) => String(s).split("\n").map((l) => l.trim()).find((l) => 
 /** The two hard refusals, plus the one the store already had. Nothing is
  *  rejected outright — you are the one sending it — but nothing is quiet
  *  either. */
-const saveDraft = (it, text, fp) => {
+const saveDraft = (it, text, fp, { turn = 1 } = {}) => {
   const body = String(text ?? "").trim();
   if (!body) die("no draft text on stdin");
   // Everything you have drafted for SOMEBODY ELSE. Revisions of this same item
@@ -996,13 +1145,13 @@ const saveDraft = (it, text, fp) => {
   const said = claims(body);
   const links = inventedLinks(body, `${it.body} ${it.url}`);
   const tell = tells(body, fp);
-  append("drafts.jsonl", { id: it.id, url: it.url, text: body, at: now(), flags: { repeat: rep?.length ?? 0, claims: said.length, links: links.length, tells: tell.length } });
-  console.log(`draft saved for ${it.id}\n`);
+  append("drafts.jsonl", { id: it.id, url: it.url, text: body, at: now(), turn, ...(it.campaign ? { campaign: it.campaign } : {}), flags: { repeat: rep?.length ?? 0, claims: said.length, links: links.length, tells: tell.length } });
+  console.log(`draft saved for ${it.id}${turn > 1 ? ` (turn ${turn})` : ""}\n`);
 
   if (rep) {
     console.log(`!! REPEATED PHRASING — ${rep.length} identical consecutive words you have used before:`);
     console.log(`   "${rep.phrase}"`);
-    console.log(`   Reddit names "the same or similar comments across communities" as reportable spam.`);
+    console.log(`   Reddit names "the same or similar comments across communities" as reportable spam — and a campaign is a direction, never a template.`);
     console.log(`   The corpus this was measured on shared a 26-word run while its duplicate check reported clean.\n`);
   }
   if (links.length) {
@@ -1049,13 +1198,13 @@ cmds.ready = (args) => {
   for (const src of sources()) if (!rooms.has(src.place)) rooms.set(src.place, null);
 
   const names = [...rooms.keys()].filter((p) => !only || p.toLowerCase() === only.toLowerCase()).sort();
-  if (!names.length) return console.log(only ? `nothing known about r/${only} yet.` : `no rooms yet — \`mq sync\` to read your own history, or \`mq probe <sub>\`.`);
+  if (!names.length) return console.log(only ? `nothing known about ${L().room(only)} yet.` : `no rooms yet — \`mq sync\` to read your own history, or \`mq probe <room>\`.`);
 
   for (const place of names) {
     const r = rooms.get(place);
     const v = readiness(r, roomState(place));
     const label = { ready: "ready    ", thin: "thin     ", unknown: "unknown  ", "not ready": "not ready" }[v.state];
-    console.log(`  ${label}  r/${place}`);
+    console.log(`  ${label}  ${L().room(place)}`);
     console.log(`             ${wrap(v.why, 66, "             ")}`);
     if (r?.quiet_days != null && r.quiet_days > 14 && v.state !== "not ready")
       console.log(`             last comment ${r.quiet_days} days ago`);
@@ -1078,6 +1227,58 @@ const wrap = (text, width, pad) => {
   return out.join(`\n${pad}`);
 };
 
+/* -------------------------------------------------- campaigns, projects */
+
+/** Campaigns: directions, never templates (lib/campaigns.mjs). Proposed by
+ *  the specialist on the panel and written by the operator's Save, or
+ *  written by hand; listed and paused here. */
+cmds.campaigns = (args) => {
+  const all = readCampaigns(DIR);
+  if (args.includes("--json")) return console.log(JSON.stringify(all, null, 2));
+  if (!all.length) return console.log(`no campaigns yet. Describe a tactic to the specialist on the panel and it proposes one as cards — or write ${join(DIR, "campaigns")}/<id>.md by hand (the shape is in lib/campaigns.mjs).`);
+  for (const c of all) console.log(`${c.status === "active" ? "on " : "off"} ${c.id.padEnd(28)} ${c.name.slice(0, 40).padEnd(40)} mention: ${c.mention.padEnd(9)} rubric ${c.hash}`);
+  console.log(`\nA campaign is a direction, never a template: the writer applies it to one person at a time, in its own words, and a draft that repeats eight words of an earlier one is flagged.`);
+};
+
+cmds.campaign = (args) => {
+  const [verb, id] = args;
+  if (verb === "pause" || verb === "resume") {
+    const r = setCampaignStatus(DIR, String(id ?? ""), verb === "pause" ? "paused" : "active");
+    if (r.error) die(r.error);
+    return console.log(`${r.id}: ${r.status}`);
+  }
+  if (verb === "show") {
+    const c = readCampaign(DIR, String(id ?? ""));
+    if (!c) die(`no campaign "${id}" — mq campaigns`);
+    return console.log(readFileSync(c.path, "utf8"));
+  }
+  die("usage: mq campaign show|pause|resume <id>");
+};
+
+/** Projects: one isolated context each (lib/projects.mjs). The root is the
+ *  default project; every verb acts on the current one. */
+cmds.projects = (args) => {
+  const all = listProjects(ROOT);
+  if (args.includes("--json")) return console.log(JSON.stringify(all, null, 2));
+  for (const p of all) console.log(`${p.current ? "* " : "  "}${p.id.padEnd(24)} ${p.name.slice(0, 30).padEnd(30)} ${p.dir}`);
+  console.log(`\nEvery verb acts on the current project (*). mq project use <id> switches; mq project new "<name>" starts another — complete, isolated, its setup on the panel.`);
+};
+
+cmds.project = (args) => {
+  const [verb, ...rest] = args;
+  if (verb === "new") {
+    const r = createProject(ROOT, rest.join(" "));
+    if (r.error) die(r.error);
+    return console.log(`made ${r.id} at ${r.dir} — and switched to it.\nIts setup starts on the panel: the account, the site, your voice, the first room. The key, the seats and the people you have already answered are shared; everything else is its own.`);
+  }
+  if (verb === "use") {
+    const r = useProject(ROOT, rest[0]);
+    if (r.error) die(r.error);
+    return console.log(`now on ${r.id} (${r.name}) — ${r.dir}`);
+  }
+  die('usage: mq project new "<name>" | mq project use <id>');
+};
+
 /** The dashboard. Imported rather than shelled out to, so one process, one
  *  store, and ctrl-c stops the thing you started. */
 cmds.serve = async (args) => {
@@ -1090,7 +1291,9 @@ cmds.serve = async (args) => {
 
 const [, , cmd, ...args] = process.argv;
 if (!cmd || !cmds[cmd]) {
-  console.log(`Messaging Quest — what did Reddit actually do to your comments?
+  console.log(`Messaging Quest — your marketing specialist, one card at a time.
+Every read below happens in a tab of YOUR browser (keep \`mq serve\` running,
+Chrome open, the extension loaded); the stranger's view in an Incognito tab.
 
   init                    make .mq/ here
   me <username>           whose comments to listen to (yours)
@@ -1099,21 +1302,23 @@ if (!cmd || !cmds[cmd]) {
                           when your profile itself is invisible
   check [--all] [--limit N]   re-read each thread as a stranger
   back [--days N] [--limit N] who replied to you, and has not been answered
+  waiting [--json]        the conversations waiting on you, oldest first
   status                  what became of the things you said
   log [item-id]           every check, in order
 
 find — other people, and the rooms it refuses to look in
 
-  probe <sub> --q "..."   try a room once. Refuses parody subs, rooms whose
-                          own words forbid it, and shapes measured dead
+  probe <room> --q "..."  try a room once. Refuses parody rooms, rooms whose
+        [--campaign <id>] own words forbid it, and shapes measured dead
   rooms                   which rooms' rules have been read, and which have not
-  watch <sub> [--q "..."] commit a probed room. Refuses until its rules are read
+  watch <room> [--q "..."] commit a probed room. Refuses until its rules are read
+        [--campaign <id>]
   unwatch <id>            stop
   sources                 what is watched, and when each was last read
   tick [--limit N]        read what is due. No model runs in this loop
   found < items.json      record posts a colleague read in YOUR browser
-                          ({place, q, items:[{url,title,author,body}]}) — same
-                          table and refusals as probe, judged the same way
+                          ({place, q, campaign?, items:[{url,title,author,body}]})
+                          — same table and refusals as probe, judged the same way
   pending                 what needs a verdict, numbered, as JSON
   judge < verdicts.json   [{n, fit, why}] — the model lives outside this process
   queue [--json]          who is waiting for an answer from you
@@ -1125,6 +1330,14 @@ find — other people, and the rooms it refuses to look in
   voice                   how you write, measured from your own comments
   draft <id>              the material for answering one person
   draft <id> --save       save a reply and run the refusals over it
+
+campaigns and projects
+
+  campaigns               this project's campaigns: a direction each, never a template
+  campaign show|pause|resume <id>
+  projects                every project on this machine; * is the one every verb acts on
+  project new "<name>"    another project — its own memory, store, campaigns, colleagues
+  project use <id>        switch (the panel and the dashboard follow)
 
   serve [--port N]        the dashboard, on localhost, in your browser
   models                  where the models run — paid, free or local — and which has each seat
@@ -1149,7 +1362,7 @@ sharing one machine's reading with several
 Nothing here posts, messages, votes, or reads anybody else's account.`);
   process.exit(cmd ? 1 : 0);
 }
-if (!existsSync(DIR) && cmd !== "init") die(`no ${DIR}/ here — run \`mq init\` first`);
+if (!existsSync(ROOT) && cmd !== "init") die(`no ${ROOT}/ here — run \`mq init\` first`);
 // `judge` is the one place a verdict comes IN from outside — the model runs in
 // whatever you point at this, never in here.
 const wantsStdin = cmd === "judge" || cmd === "found" || (cmd === "draft" && args.includes("--save"));

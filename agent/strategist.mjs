@@ -51,6 +51,11 @@ import { activeSkills, activeSeat } from "../lib/skills.mjs";
 import { PER_ROOM_24H, OVERALL_24H } from "../lib/ready.mjs";
 import { proposable, patchStash, readStash } from "../lib/cards.mjs";
 import { TOOLKIT } from "../lib/control.mjs";
+import { readCampaigns, campaignDraft, MENTIONS, STATUSES } from "../lib/campaigns.mjs";
+import { store } from "../lib/store.mjs";
+import { campaignDigest, digestText, waiting as waitingRows } from "../lib/conversations.mjs";
+import { listProjects } from "../lib/projects.mjs";
+import { dataDir } from "../lib/dirs.mjs";
 import { engineTools } from "./verbs.mjs";
 import { threadSaver } from "./threads.mjs";
 import { QUESTIONS, normalizeQuestions } from "./tasks.mjs";
@@ -60,11 +65,17 @@ const short = (s, n) => { const t = String(s ?? "").replace(/\s+/g, " ").trim();
 
 /* ---------------------------------------------------------------- runtime */
 
-/** What bin/serve.mjs hands over once the runtime is up: the task manager
- *  (workers, inbox) and the control lane's broker (tabs). Absent — a bare
- *  test harness — the tools that need them say so instead of failing. */
-let runtime = { tasks: null, control: null };
-export function attachRuntime({ tasks = null, control = null } = {}) { runtime = { tasks, control }; }
+/** What bin/serve.mjs hands over once a project's runtime is up: its task
+ *  manager (workers, inbox) and the control lane's broker (tabs — one per
+ *  machine). Per project directory: two projects are two CMOs, each on its
+ *  own thread with its own colleagues. Absent — a bare test harness — the
+ *  tools that need them say so instead of failing. */
+const runtimes = new Map();
+export function attachRuntime(dir, { tasks = null, control = null } = {}) {
+  if (dir && typeof dir === "object") { runtimes.set("*", { tasks: dir.tasks ?? null, control: dir.control ?? null }); return; }   // the pre-0.6.0 call shape
+  runtimes.set(String(dir), { tasks, control });
+}
+const runtimeOf = (dir) => runtimes.get(String(dir)) ?? runtimes.get("*") ?? { tasks: null, control: null };
 
 /* ------------------------------------------------------------------ verbs */
 
@@ -95,7 +106,7 @@ const makeTools = (dir) => [
 
   /* ---- colleagues: propose a task, hear about it, answer or stop it. */
   tool(async ({ proposals }) => {
-    const T = runtime.tasks;
+    const T = runtimeOf(dir).tasks;
     if (!T) return "no runtime here — the task manager is not attached; nothing can be started";
     const known = new Map(T.colleagues().map((c) => [c.id, c]));
     const kept = [];
@@ -104,6 +115,7 @@ const makeTools = (dir) => [
       const c = known.get(p.agent);
       if (!c) { refused.push(`${p.agent}: no such colleague (installed: ${[...known.keys()].join(", ") || "none"})`); continue; }
       if (c.grants.length && !p.input?.url) { refused.push(`${p.agent}: a browser colleague needs input.url — the page it opens`); continue; }
+      if (p.input?.campaign && !readCampaigns(dir).some((k) => k.id === p.input.campaign)) { refused.push(`${p.agent}: no campaign "${p.input.campaign}" — see campaigns`); continue; }
       kept.push({ agent: c.id, question: short(p.question, 140), why: short(p.why, 400), label: short(p.label, 40), task: { agent: c.id, title: short(p.title ?? p.question, 80), input: p.input ?? {} } });
     }
     patchStash(dir, { proposals: kept });
@@ -122,6 +134,7 @@ const makeTools = (dir) => [
         input: z.object({
           url: z.string().optional().describe("The page the colleague opens first (a browser colleague needs one)"),
           brief: z.string().optional().describe("What to do there, in a sentence or two"),
+          campaign: z.string().optional().describe("The campaign id this task works under, if any — its findings, verdicts and drafts carry it"),
         }).passthrough().optional(),
         title: z.string().optional().describe("Short title for the task list"),
         label: z.string().optional().describe("The button's label; default 'Start it'"),
@@ -130,7 +143,7 @@ const makeTools = (dir) => [
   }),
 
   tool(async () => {
-    const T = runtime.tasks;
+    const T = runtimeOf(dir).tasks;
     if (!T) return "no runtime here — nothing is running and nothing can be";
     const tasks = T.list().slice(0, 20).map((t) => ({
       id: t.id, title: t.title, agent: t.agent, status: t.status, startedAt: t.startedAt,
@@ -146,7 +159,7 @@ const makeTools = (dir) => [
   }),
 
   tool(async ({ task, answers }) => {
-    const T = runtime.tasks;
+    const T = runtimeOf(dir).tasks;
     if (!T) return "no runtime here";
     const out = T.answer(task, answers);
     return out.error ? out.error : `answered — ${task} resumes now; you hear task.done or task.blocked in your inbox`;
@@ -157,7 +170,7 @@ const makeTools = (dir) => [
   }),
 
   tool(async ({ task, why }) => {
-    const T = runtime.tasks;
+    const T = runtimeOf(dir).tasks;
     if (!T) return "no runtime here";
     const out = await T.cancel(task, short(why, 200) || "stopped by the specialist");
     return out.error ? out.error : `stopped — ${task} is cancelled and its tab closed`;
@@ -168,13 +181,13 @@ const makeTools = (dir) => [
   }),
 
   tool(async ({ since }) => {
-    const T = runtime.tasks;
+    const T = runtimeOf(dir).tasks;
     if (!T) return "no inbox here";
     const { events, cursor } = T.inbox(since ?? 0);
     return JSON.stringify({ cursor, events: events.slice(-60) });
   }, {
     name: "inbox",
-    description: "The runtime's events, oldest first from a cursor: task.started, task.tab, task.blocked (with its questions), task.answered, task.done (with the result), task.failed, task.cancelled, person.answered (answers to your own ask_person), proposal.accepted / dismissed, call.refused, grant.needed. New events are also delivered to you when you are idle.",
+    description: "The runtime's events, oldest first from a cursor: task.started, task.tab, task.blocked (with its questions), task.answered, task.done (with the result), task.failed, task.cancelled, person.answered (answers to your own ask_person), proposal.accepted / dismissed, call.refused, grant.needed, campaign.created / campaign.status, reply.waiting (somebody the operator answered wrote back — the turn card is on their deck), day.digest (the numbers per campaign, once a day or when replies land). New events are also delivered to you when you are idle.",
     schema: z.object({ since: z.number().int().min(0).optional() }),
   }),
 
@@ -196,7 +209,7 @@ const makeTools = (dir) => [
     const t = String(text ?? "").trim().slice(0, 700);
     if (!t) return "nothing to say";
     patchStash(dir, { cmo_note: { text: t, at: new Date().toISOString() } });
-    runtime.tasks?.note("cmo.note", { text: t });
+    runtimeOf(dir).tasks?.note("cmo.note", { text: t });
     return "on the deck — one note at a time; the newest replaces the last";
   }, {
     name: "notify",
@@ -220,16 +233,60 @@ const makeTools = (dir) => [
     schema: z.object({ text: z.string() }),
   }),
 
+  /* ---- campaigns: a direction the operator settles on cards; projects. */
+  tool(async ({ campaign, status, why }) => {
+    const c = readCampaigns(dir).find((k) => k.id === String(campaign ?? "").trim());
+    if (!c) return `no campaign "${campaign}" — see campaigns`;
+    if (!STATUSES.includes(status)) return `not a status: ${status} (${STATUSES.join(", ")})`;
+    if (c.status === status) return `“${c.name}” is already ${status}`;
+    patchStash(dir, { campaign_status_draft: { id: c.id, name: c.name, status, why: short(why, 500) } });
+    return `dealt — one card asks the operator to ${status === "paused" ? "pause" : status === "done" ? "finish" : "resume"} “${c.name}”; their press changes the file and you hear campaign.status in your inbox. Do not say it is ${status} until you do.`;
+  }, {
+    name: "propose_status",
+    description: "Propose pausing, resuming or finishing a campaign as ONE card on the operator's deck, with your reason. Use it after a digest when the numbers say a campaign is saturated (crowding rising, fit or second turns falling) or spent. The operator's press changes the status; you never change it yourself.",
+    schema: z.object({ campaign: z.string().describe("The campaign id, from campaigns"), status: z.enum(["paused", "active", "done"]), why: z.string().describe("One plain line: the number that says so") }),
+  }),
+  tool(async (input) => {
+    const d = campaignDraft(input);
+    if (!d.name || !d.idea) return "a campaign needs a name and an idea";
+    if (readCampaigns(dir).some((c) => c.id === d.id)) return `a campaign "${d.id}" already exists — propose a different name, or tell the operator to edit it on the dashboard's Campaigns page`;
+    patchStash(dir, { campaign_draft: { ...d, done: [] } });
+    return `dealt — “${d.name}” walks through the operator's deck now: the idea in their words, who it fits, whether a first message may name what they built (${d.mention}), the room, the phrase. Their last Save writes campaigns/${d.id}.md and probes the room in their browser; you hear campaign.created in your inbox. Do not say it exists until you do. Proposing again replaces the draft.`;
+  }, {
+    name: "propose_campaign",
+    description: "Propose a CAMPAIGN as cards on the operator's deck: a name; the idea as a DIRECTION in prose (what to say and why it is honest to say it — never wording, never a template: the writer applies it per person, and an eight-word repeat is flagged); optionally who it fits (narrows rule.md for this campaign) and what it never does; mention: 'never' (the house rule — a first message sells nothing) or 'disclosed' (may name what they built once, plainly, as theirs, no link unless asked — the only lift there is); the room and the phrase to search. Each card is seeded with your text and has a field for their own words; the file is written by their Save, not by you. Use it when they describe a tactic, an angle, a platform-specific tone — and ask campaigns first, so you do not propose one that exists.",
+    schema: z.object({
+      name: z.string().describe("Short: 'Honest comments under \"finding clients\"'"),
+      idea: z.string().describe("The direction, in prose. What to say and why it is honest — not the words to say it with."),
+      fit: z.string().optional().describe("Who this campaign is for, when narrower than rule.md"),
+      never: z.string().optional().describe("This campaign's own refusals, if any"),
+      voice: z.string().optional().describe("How it sounds under this campaign, when a room or a platform wants a different tone — laid over the measured voice, which still wins on anything it names"),
+      mention: z.enum(["never", "disclosed"]).optional().describe("Whether a first message may name what they built. Default never."),
+      place: z.string().optional().describe("The room to search, without a platform prefix"),
+      q: z.string().optional().describe("The phrase somebody types when they have the problem"),
+      why: z.string().optional().describe("Why this, why now — shown on the first card"),
+    }),
+  }),
+  tool(async () => {
+    const root = dataDir();
+    const all = listProjects(root);
+    return JSON.stringify({ current: all.find((p) => p.dir === dir || p.current)?.id ?? null, projects: all.map((p) => ({ id: p.id, name: p.name, current: p.current })) });
+  }, {
+    name: "projects",
+    description: "The projects on this machine and which one you are the specialist for. Each is its own isolated context — memory files, store, campaigns, colleagues; switching or creating one is the operator's, on the panel or the dashboard's Projects page.",
+    schema: z.object({}),
+  }),
+
   /* ---- the browser, read-only, on a tab leased for the turn. */
   ...browserTools(dir),
 
   tool(async () => {
     // The same deck the panel renders — the strategist should never guess
-    // what the operator is being shown. MQ_RELAY is the dashboard's own
+    // what the operator is being shown. MQ_SERVER is the dashboard's own
     // address (set at listen), and this process is the dashboard, so the
     // fetch is a loopback to ourselves; absent (a bare test harness), the
     // honest answer is that there is no deck to read.
-    const base = process.env.MQ_RELAY;
+    const base = process.env.MQ_SERVER;
     if (!base) return "no deck here — the dashboard is not running";
     try {
       const res = await fetch(`${base}/api/cards`, { signal: AbortSignal.timeout(5000) });
@@ -256,7 +313,7 @@ const makeTools = (dir) => [
  *  turn ends (see `turn`). Read-only by grant: the lane refuses anything
  *  else before the extension hears of it. */
 const CMO_GRANTS = ["read"];
-let turnLease = null;   // { id, tabId, url } while a turn holds a tab
+const turnLeases = new Map();   // dir → { id, tabId, url } while a turn holds a tab
 
 const BROWSER = {
   tabs_context: [z.object({}), "Your tab, if you opened one this turn: url, title, status."],
@@ -269,27 +326,28 @@ const BROWSER = {
 
 function browserTools(dir) {
   return Object.entries(BROWSER).map(([name, [schema, description]]) => tool(async (input) => {
-    const C = runtime.control;
+    const C = runtimeOf(dir).control;
     if (!C) return "no browser lane here — the control broker is not attached";
     if (!TOOLKIT[name]) return `${name} is not in the toolkit`;
-    if (!turnLease) {
+    if (!turnLeases.get(dir)) {
       const url = name === "navigate" && /^https?:\/\//i.test(String(input?.url ?? "")) ? input.url : null;
       if (!url) return "no tab open — navigate to an http(s) url first";
-      const r = await C.lease({ task: "your specialist", url });
+      const r = await C.lease({ task: "your specialist", url, project: dir });
       if (r.error) return `could not open a tab: ${r.error}`;
-      turnLease = { id: r.id, tabId: r.tabId, url };
+      turnLeases.set(dir, { id: r.id, tabId: r.tabId, url });
       return JSON.stringify({ opened: true, url, tabId: r.tabId, note: "the page is loaded; read it with read_page or get_page_text" });
     }
-    let out = await C.act(turnLease.id, name, input ?? {}, { grants: CMO_GRANTS });
+    let out = await C.act(turnLeases.get(dir).id, name, input ?? {}, { grants: CMO_GRANTS });
     if (name === "computer" && input?.action === "screenshot" && out?.screenshot) out = { ok: true, width: out.width, height: out.height, note: "taken; screenshots are for the operator's cards, you read the tree" };
     return JSON.stringify(out ?? {}).slice(0, 80_000);
   }, { name, description, schema }));
 }
 
-async function releaseTurnLease() {
-  const l = turnLease;
-  turnLease = null;
-  if (l && runtime.control) { try { await runtime.control.release(l.id); } catch { /* the tab is gone either way */ } }
+async function releaseTurnLease(dir) {
+  const l = turnLeases.get(dir);
+  turnLeases.delete(dir);
+  const C = runtimeOf(dir).control;
+  if (l && C) { try { await C.release(l.id); } catch { /* the tab is gone either way */ } }
 }
 
 /* ----------------------------------------------------------------- persona */
@@ -314,8 +372,9 @@ const skillsText = () => activeSkills()
 
 const doctrine = `
 House rules, non-negotiable:
-- Nothing posts to Reddit from this machine, ever. The operator reads every
-  draft in Reddit's own composer and presses Reddit's own button.
+- Nothing posts to any platform from this machine, ever. The operator reads
+  every draft in the platform's own composer and presses the platform's own
+  button.
 - The pacing limits stand: ${PER_ROOM_24H} replies per room and ${OVERALL_24H} overall in 24 hours.
   If the governor refuses a send, that is the answer — relay its reason.
 - Reading verbs (sync, probe, tick) run on the server's clock, not in chat.
@@ -342,7 +401,33 @@ House rules, non-negotiable:
 - Setup is the deck's: on a fresh directory it already asks the account, the
   site, the voice habits, the proof-read and the first room, one card at a
   time. Do not duplicate those with ask_person. Read the deck; when setup is
-  done, propose the first task — the Reddit search, in their own browser.`;
+  done, propose the first task — the search on the platform they chose, in
+  their own browser.
+- A CAMPAIGN is a direction, never a template (lib/campaigns.mjs). When the
+  operator describes a tactic, an angle, a different tone for a platform,
+  or a different disclosure rule, shape it as one with propose_campaign:
+  the idea in prose, who it fits, what it never does, whether a first
+  message may name what they built — disclosed is the only lift; there is
+  no undisclosed setting — and the room and phrase. It walks through their
+  deck as cards with their own words allowed on each; their Save writes the
+  file. Never write wording for people to paste. Read campaigns first.
+- You are one project's specialist. Its memory files, store, campaigns and
+  colleagues are its own; another project is another context, switched by
+  the operator on the panel. Do not mix them.
+- THE RETURN (0.7.0). An opener is not the product; the second and third
+  replies are. A conversation opens when the operator presses "I posted
+  it", is bound to their own comment by a profile read, and is read again
+  from the stranger's seat by the tick. A reply reaches their deck as a
+  turn card BEFORE any new person; you never draft the turn yourself and
+  never propose a task for it. Tracking is the engine's and deterministic;
+  you do not remember it — the day.digest event reminds you.
+- MANY CAMPAIGNS AT ONCE. On a digest, answer three questions with cards or
+  silence: who is waiting (already dealt — nothing to say), which campaign
+  is saturated (crowding rising, second turns flat: propose_status, one
+  line of why), where is the gap (propose ONE campaign aimed at a
+  different group of people or kind of post, with its own direction). A
+  room where every question gets a dozen generated answers on day one is
+  a room to leave, not to out-shout.`;
 
 /* -------------------------------------------------------------- the agent */
 
@@ -391,18 +476,38 @@ async function skillSubagents(dir) {
   return out;
 }
 
+const campaignsText = (dir) => {
+  const all = readCampaigns(dir);
+  if (!all.length) return "";
+  let numbers = "";
+  try {
+    const S = store(dir, () => null);
+    numbers = "\n\nTheir numbers, counted by the engine (found · judged · fit · sent · replied · second turns · waiting · crowding = median comments a post already had when found):\n" + digestText(campaignDigest(S, all));
+    const w = waitingRows(S).length;
+    if (w) numbers += `\n\n${w} conversation${w === 1 ? "" : "s"} waiting on the operator — already on their deck, ahead of any new person.`;
+  } catch { /* a store that cannot be read is not a reason to lose the turn */ }
+  return "This project's campaigns:\n\n" + all.map((c) => `- ${c.name} (${c.id}) — ${c.status}, mention: ${c.mention} (${MENTIONS[c.mention]?.label ?? c.mention}). ${short(c.idea, 300)}`).join("\n") + numbers;
+};
+const projectText = (dir) => {
+  try {
+    const all = listProjects(dataDir());
+    const me = all.find((p) => p.dir === dir) ?? all.find((p) => p.current);
+    return me ? `You are the specialist for the project “${me.name}”${all.length > 1 ? ` (one of ${all.length} on this machine — the others are not yours to advise on)` : ""}.` : "";
+  } catch { return ""; }
+};
+
 async function agentFor(dir) {
   const s = seat(dir, "scout"); // the researcher seat: biggest window, tool-happy
 
   // The system prompt bakes in the memory files, so an agent built before
   // setup finished would keep telling the user their files are empty. The
   // cache key is what the prompt was built FROM — the seat, the persona, the
-  // memory, the notebook, and which skills are active; when any of that
-  // moves, rebuild.
+  // memory, the notebook, the campaigns, and which skills are active; when
+  // any of that moves, rebuild.
   const fp = createHash("sha1").update([
-    dir, s.model, personaOf(dir), memoryContext(dir), notebook(dir),
+    dir, s.model, personaOf(dir), memoryContext(dir), notebook(dir), campaignsText(dir), projectText(dir),
     activeSkills().map((k) => `${k.id}@${k.path}`).join(","),
-    runtime.tasks ? "runtime" : "bare",
+    runtimeOf(dir).tasks ? "runtime" : "bare",
   ].join("\x00")).digest("hex");
   if (agents.get(dir)?.fp === fp) return agents.get(dir).agent;
 
@@ -423,8 +528,10 @@ async function agentFor(dir) {
     tools: makeTools(dir),
     systemPrompt: [
       personaOf(dir),
+      projectText(dir),
       doctrine,
       "What you know about the operator:\n\n" + (memoryContext(dir) || "(their memory files are still empty — setup is not finished)"),
+      campaignsText(dir),
       nb ? "Your notebook (AGENTS.md):\n\n" + nb : "Your notebook (AGENTS.md) is empty. Write it when you have learned something durable.",
       skills ? "What the skills teach:\n\n" + skills : "",
     ].filter(Boolean).join("\n\n"),
@@ -459,7 +566,7 @@ async function turn(dir, content, thread) {
     const last = result.messages?.[result.messages.length - 1];
     return contentText(last?.content);
   } finally {
-    await releaseTurnLease();
+    await releaseTurnLease(dir);
   }
 }
 
@@ -475,7 +582,7 @@ export async function strategist(dir, message, thread = "panel") {
 
 /* ------------------------------------------------------------------ inbox */
 
-const REACT_TO = new Set(["setup.done", "task.done", "task.failed", "task.blocked", "task.cancelled", "person.answered", "proposal.accepted", "proposal.dismissed", "call.refused", "grant.needed", "click.refused"]);
+const REACT_TO = new Set(["setup.done", "campaign.created", "campaign.status", "task.done", "task.failed", "task.blocked", "task.cancelled", "person.answered", "proposal.accepted", "proposal.dismissed", "call.refused", "grant.needed", "click.refused", "reply.waiting", "day.digest"]);
 
 /**
  * Inbox delivery when idle: every `everyMs`, the events since the last
@@ -489,7 +596,7 @@ export function startInboxLoop(dir, { everyMs = 20_000, thread = "panel" } = {})
   let backoffUntil = 0;
   let inFlight = false;
   const tick = async () => {
-    const T = runtime.tasks;
+    const T = runtimeOf(dir).tasks;
     if (!T || inFlight || Date.now() < backoffUntil || !hasModel(dir)) return;
     const cursor = Number(readStash(dir).cmo_cursor) || 0;
     const { events, cursor: next } = T.inbox(cursor);
@@ -503,9 +610,18 @@ export function startInboxLoop(dir, { everyMs = 20_000, thread = "panel" } = {})
       // first proposal, the Reddit search in their own browser (PLAN.md,
       // milestone 1). Everything else is the CMO's call.
       const setup = worth.find((e) => e.type === "setup.done");
-      const ask = setup
-        ? `Setup is done: ${setup.title}. Propose the first task now, with propose_tasks — one card: agent "reddit", the room and phrase the operator chose (their search URL is the input url: ${JSON.stringify(setup.sources ?? [])}), the reason on the card in one or two plain sentences. Do not answer "noted" to this one, and do not start anything yourself.`
-        : `React only if there is signal — notify the operator, propose the next task, answer a colleague you can answer — otherwise reply with the single word "noted".`;
+      const made = worth.find((e) => e.type === "campaign.created");
+      const dayDigest = worth.filter((e) => e.type === "day.digest").pop();
+      const replies = worth.filter((e) => e.type === "reply.waiting");
+      const ask = dayDigest
+        ? `The day's digest is in — the numbers per campaign are in the event below, counted by the engine, never by you. Three questions, answered only with cards or with silence: (1) who is waiting — the turn cards are already on the operator's deck, so say nothing about them; (2) which campaign is saturated — crowding rising, fit falling, second turns flat, or a room whose question everybody's bots now answer on day one: propose pausing or finishing it with propose_status, one plain line of why; (3) where is the gap — a kind of person or a kind of post nobody is answering yet, in a room you have reason to believe in: propose ONE new campaign with propose_campaign, aimed at a different group of people or a different kind of post, with its own direction. At most one proposal per digest, and "noted" when the campaigns are simply working.${replies.length ? ` Also: ${replies.length} ${replies.length === 1 ? "person" : "people"} wrote back since you last looked; their turn cards are dealt.` : ""}`
+        : replies.length && !setup && !made
+          ? `${replies.length === 1 ? "Somebody" : `${replies.length} people`} wrote back. The turn card is already on the operator's deck, ahead of any new person, and it offers to write the reply — do not propose a draft, a task or a search for it. Say nothing, unless several are waiting and the oldest is going cold; then one notify naming who.`
+          : setup
+        ? `Setup is done: ${setup.title}. Propose the first task now, with propose_tasks — one card: agent "${setup.sources?.[0]?.platform ?? "reddit"}" (the platform's colleague), the room and phrase the operator chose (their search URL is the input url: ${JSON.stringify(setup.sources ?? [])}), the reason on the card in one or two plain sentences. Do not answer "noted" to this one, and do not start anything yourself.`
+        : made
+          ? `The operator saved a campaign: ${made.title}. Its room is being probed in their browser now, so do not propose that search. Read campaigns, then write one short notify — what the campaign will do and what happens next (the probe, the judge, the watch card) — in two plain sentences. Nothing else.`
+          : `React only if there is signal — notify the operator, propose the next task, answer a colleague you can answer — otherwise reply with the single word "noted".`;
       await serial(dir, () => turn(dir,
         `Inbox (${worth.length} event${worth.length === 1 ? "" : "s"} since you last looked). ${ask}\n\n${digest}`,
         thread));
