@@ -109,15 +109,123 @@ No Chrome? The same deck is served at `http://127.0.0.1:8787/panel/` —
 everything works there except typing into the composer (you get the draft on
 your clipboard instead).
 
-The extension is also the **second reading lane**. Anonymous Reddit sits at a
-measured ceiling — one request a minute, and RSS itself is under review — so
-when a *finding* read (a probe, a tick) is refused anonymously, the engine
-hands that one URL to your browser, which reads it in your own session and
-hands the body back. GET only, by construction; your own visible per-site
-permission; same pace as everything else. The visibility checks never take
-this lane: what a logged-out stranger sees can only be measured logged out,
-and the tool would rather fail honestly than answer that question from the
-wrong seat.
+### Colleagues: the specialist at work in your browser
+
+From 0.5.0 the specialist is a CMO: it does not only talk, it puts
+**colleagues** to work — each a background task on its own thread, in a tab
+it leased in your own Chrome window under a "Messaging Quest" tab group. It
+proposes one as a card ("Search r/saas for people asking this?"); your click
+starts it; you go and do something else. Later the panel says what it found,
+or asks you something when it hits a wall — a login, a captcha, a choice —
+with a screenshot of its tab on the card and a button to show you the tab.
+Closing a task closes its tab. The **Tasks** page has the log, the colleagues
+installed, and a Stop button.
+
+A colleague is a markdown file, `skills/<id>/agent.md`, beside the SKILL.md
+that teaches it ([skills/README.md](skills/README.md)). The first is the
+Reddit scout: it reads a subreddit search in your signed-in session, records
+the posts, has the judge seat judge them and the writer seat draft the
+replies — and never clicks. **No colleague may click or type**: every browser
+call is checked against the colleague's `tools:` line before the extension
+hears of it, and the extension refuses a click on any control labelled post,
+comment, reply, send or submit even if one were granted. The colleague
+runtime lives in `agent/` with the strategist (`npm run brain`); without it
+the deck, the extension and everything else run exactly as before.
+
+Upgrading the extension: reload it on `chrome://extensions` after pulling —
+it asks for three more permissions (tabs, tab groups, and the debugger, which
+is what screenshots, the mouse, the wheel and the keys need; Chrome shows its
+bar while a task is working a tab and drops it after a minute idle).
+
+The browser stays a person's. A task's tab is a real tab, under the
+"Messaging Quest" group in a window of its own (Chrome
+only processes input for a tab it is drawing, so the extension asks the page
+whether it is on screen before every step and raises that window when it is
+not); nothing fetches a page in the background. Reading writes nothing into the
+page. Every scroll, click and key goes through Chrome's own input pipeline,
+with a mouse that travels and rests, wheel ticks of uneven size, typing one
+key at a time, and an uneven pause before every step — the page sees only
+trusted events, and a test fails the build on the first synthetic one. The
+Insert button works the same way: a real click on "Add a comment", a real
+click into the box, the draft pasted as one piece. Reddit's own button is
+yours.
+
+The extension is also **the only way anything here reads Reddit** (0.6.0).
+There is no feed, no background fetch, no API: a probe, a tick, a colleague's
+search, the site scout — each is a real tab in the "Messaging Quest" window,
+rendered, read the way the extension reads everything, closed after. What a
+page looks like is written down in the reddit skill with the date it was
+measured; the extension runs that spec in the page and hands rows back. The
+visibility checks (`sync`, `check`, `back`) read from the stranger's seat —
+an **Incognito** tab — because Reddit shows you your own shadow-removed
+comment as if nothing happened. Chrome lets the extension into Incognito
+only after you tick "Allow in Incognito" on chrome://extensions; until then
+those verbs say so and stop, rather than answer from the wrong seat.
+
+### Projects
+
+You work on more than one thing. A project is a whole data directory — its
+own memory files, store, voice, deck, campaigns, colleagues and threads —
+and the folder you started in (`.mq/`) is the default one, so nothing
+changes for a single product. Make another from the panel's project picker,
+the dashboard's **Projects** page, or `mq project new "Name"`: it is created
+complete under `.mq/projects/<id>/`, switched to at once, and its setup
+starts on the panel like a fresh install. Your account, voice, me.md and
+persona are copied in as a start. Shared across every project, on purpose:
+your key and the model seats, the people you have already answered (the same
+human never reaches a queue twice, in any project), and your local skills.
+Switching in one place switches everywhere; a colleague started under one
+project keeps working when you switch to another.
+
+### Campaigns
+
+The voice you answered at setup is how you sound. A **campaign** is what you
+are trying — a tactic, an angle, a different tone for a different room, a
+different rule about naming what you built. Tell the specialist ("under posts
+asking how to find clients, say honestly that…") and it proposes one as five
+cards: the idea in your words, who it fits, whether a first message may name
+what you built, the room, the phrase. Every card is seeded with its text and
+takes your own words instead; your last Save writes `campaigns/<id>.md` and
+probes the room in your browser. From then on what is found under the
+campaign is judged with its "who it fits" beside `rule.md` and drafted with
+its direction — as an idea to apply to *this* person, never wording: the
+writer is shown what it already said under the campaign and told not to reuse
+a phrase, and the save flags any eight-word run it repeats anyway. The one
+lift a campaign may ask for is *disclosed*: named once, plainly, as yours, no
+link unless they ask. There is no undisclosed setting. The **Campaigns** page
+edits, pauses and writes them by hand; `mq campaigns` lists them.
+
+### The return
+
+An opener is not the product; the second and third replies are. When you
+press **I posted it**, a conversation opens with the words you actually
+posted — the card's field as you edited it, not the draft. The next profile
+read binds it to your own comment; the next tick reads that comment's own
+page from the stranger's seat and, if somebody answered, the reply lands on
+your deck as a **turn card** before any new person: what you said, what
+they wrote back, a draft for this turn in a field you edit, Insert, I
+posted it, Rewrite, Let it go. No judge on a reply — they are already
+talking to you. **Rewrite** on any draft asks one question, what should
+change, and hands your note and the rejected draft to the writer. What is
+due is computed, never remembered: the deck's due card says how many reads
+are waiting and runs them; **Today** on the dashboard says the same. Once a
+day the engine writes the numbers per campaign into the specialist's inbox
+— found, fit, sent, replied, second turns, waiting, and *crowding*, the
+median number of comments a post already had when it was found — and the
+specialist answers three questions with cards or silence: who is waiting
+(already dealt), which campaign is saturated (a card to pause it), where is
+the gap (one new campaign aimed at a different kind of person). `mq waiting`
+lists who is waiting on you.
+
+### Four pages
+
+The dashboard asks four questions: **Today** (the next card, who is
+waiting, what is due, who is worth answering, the campaigns' numbers),
+**People** (everybody found, judged, waiting for you, answered, retired),
+**Campaigns** (each with its numbers, voice and sources), **You** (your
+account and standing, your voice, what the specialist knows, projects,
+models, skills — and the by-hand screens under Advanced). The panel is where
+things are answered; the dashboard is the ledger.
 
 ### Or drive it from the terminal
 
@@ -127,15 +235,19 @@ node bin/mq.mjs sync      # read your profile as a stranger sees it
 node bin/mq.mjs check     # re-read each thread, logged out
 node bin/mq.mjs status    # what became of the things you said
 node bin/mq.mjs back      # who replied to you and is still waiting
+node bin/mq.mjs campaigns # this project's campaigns, a direction each
+node bin/mq.mjs projects  # every project; * is the one the verbs act on
+node bin/mq.mjs waiting   # who wrote back and is waiting on you
 ```
 
 The CLI is still the one implementation of every verb — the dashboard's buttons
 spawn it rather than reimplementing it, so the two can never drift.
 
-`check` takes about a minute per thread. That is not politeness — logged out,
-Reddit answers one request a minute per address, measured. The tool waits rather
-than getting your address rate-limited, and it groups your comments by thread so
-one read answers for all of them.
+`check` opens each thread in an Incognito tab of your own browser — the
+stranger's seat — a page turn every few seconds, at a person's pace, and it
+groups your comments by thread so one read answers for all of them. Keep
+`mq serve` running and Chrome open with the extension loaded: every verb
+that reads does it there, and says so when it cannot.
 
 ## Coming back
 
@@ -416,7 +528,8 @@ Everything is here. Not a window onto the CLI — the whole product.
 | **Standing** | What became of the things you said. |
 | **Waiting** · **Ready** · **Voice** | Who is owed an answer, where you stand, how you write. |
 | **Sources** · **Rooms** | What is watched, and whose rules have been read. |
-| **Memory** | The five markdown files, edited in the browser. |
+| **Tasks** | Colleagues at work in your browser: each one's log, its tab, a Stop button, and the ones installed. |
+| **Memory** | The five markdown files, edited in the browser — and the sixth, AGENTS.md, the specialist's own notebook, the one file the model writes. |
 | **Skills** | Everything installed: what runs, what refused to load, and the choice when two skills serve one purpose. |
 | **Settings** | Where the models run — paid, free or local — a model per seat, and what each costs. |
 
@@ -591,8 +704,8 @@ which is the person who most needs an answer.
 ## What it does not do
 
 It does not post, reply, vote, message, or read anybody else's account. It has
-no verb that writes to Reddit. It reads public feeds, logged out, one request a
-minute, and everything it learns stays on your disk.
+no verb that writes to Reddit. It reads public pages in a tab of your own
+browser, at a person's pace, and everything it learns stays on your disk.
 
 Stored comment bodies are dropped after 48 hours (`node bin/mq.mjs sweep`); the
 ids, urls, dates, hashes and the full check history are kept, and every number
@@ -600,14 +713,19 @@ here is computed from those.
 
 ## Why the measurements are in the source
 
-Every URL and field in [skills/reddit/feed.mjs](skills/reddit/feed.mjs) carries
-the date it was measured, because
-most of what is written about reading Reddit is out of date in a specific and
-expensive way. `/r/<sub>/new.json` and every other `.json` path returns 403 with
-a page of HTML; `.rss` returns 200 in the same second from the same address. A
-feed answers valid, well-formed Atom with zero entries for at least three things
-that are not "nothing new", one of which is a 404. A subreddit that does not
-exist is answered by a silent redirect to a search feed with status 200.
+Every page shape in [skills/reddit/pages.mjs](skills/reddit/pages.mjs) carries
+the date it was measured, because most of what is written about reading
+Reddit is out of date in a specific and expensive way. A post on a listing is
+a `<shreddit-post>` whose attributes carry the author, the date and the
+permalink, with the body slotted in beside it; a search result is a
+`div[data-testid=search-post-unit]` with a title link and a time and no
+author or body at all, which is why each new post's own page is opened; a
+thread renders 94 of its 296 comments on the first screen and says how many
+there are elsewhere; and a tab Chrome is not drawing renders the header and
+nothing else. A subreddit that does not exist is answered by a silent redirect
+to a search page with status 200. (The feed facts this section used to hold —
+`.json` 403, `.rss` 200, one request a minute — are history: nothing here
+fetches a feed any more.)
 
 If you find one of these numbers is wrong now, that is a genuinely useful issue
 to open.
@@ -615,8 +733,10 @@ to open.
 ## Tests
 
 ```bash
-node bin/test.mjs                # the engine, the cards, the seams
+node bin/test.mjs                # the engine, the cards, the seams, the control lane
 node --test bin/voice-test.mjs   # the voice fingerprint
+node agent/test.mjs              # the runtime (needs npm run brain): workers on a scripted model
+node bin/control-smoke.mjs       # the control lane by hand, against your own Chrome
 ```
 
 They cover only the things that would break quietly — a body that gets

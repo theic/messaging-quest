@@ -16,10 +16,8 @@
     <input id="ask" placeholder="Ask your specialist…" autocomplete="off">
     <button id="send" type="button">Ask</button>
   </footer>
+  <div class="es-server" id="project-line"></div>
   <div class="es-server" id="server-line"></div>
-  <!-- Classic script FIRST: ESInsert must be a global before the module loads,
-       or chrome.scripting cannot serialize it into the page. -->
-  <script src="insert.js"></script>
   <script type="module" src="sidepanel.js"></script>
 </body>
 </html>

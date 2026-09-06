@@ -1,32 +1,61 @@
-// The one function injected into a Reddit tab, via
+// Where a reply goes: the composer, found but never touched from here.
+//
+// composerState() is injected into a platform's tab via
 // chrome.scripting.executeScript({func}). Chrome SERIALIZES it — it runs in
-// the page with no closure over this file — so it must be fully
-// self-contained. It is loaded into the panel as a classic script, before the
-// panel's modules, purely so sidepanel.js can pass it by name.
+// the page with no closure over this file — so it is fully self-contained,
+// takes the word lists as regex sources and the host selector as a string,
+// and READS ONLY: it says where the composer is, or where the control that
+// opens one is, and the hands in control.js (insertDraft) do the clicking
+// and the pasting through Chrome's own input pipeline. Nothing in this file
+// dispatches an event or sets a value.
+//
+// The platform's words — which labels open a composer, which sit on a reply
+// box, which custom elements host one — ride on the reply card
+// (lib/platform.mjs composerOf → card.data.insert), so this file carries
+// none of Reddit's own. What stays here is the extension's: NEVER, the
+// labels that could submit or destroy, screened whatever a platform says.
 //
 // Ported from the predecessor (messaging-quest, page-scripts.js MQInsert),
 // where every clause below was paid for on a real page:
-//   - Reddit builds its composer inside web components; a shadow root is
-//     invisible to an ordinary querySelectorAll, so the search walks them.
-//   - The box does not EXIST until "Add a comment" is clicked, so a closed
-//     composer gets opened — by a click screened against ANY label that could
-//     submit. This click may only ever open a box.
-//   - Coming from the deck we open the thread ourselves and an SPA is still
-//     rendering when "load" fires, so it keeps looking for a few seconds.
-//   - Controlled React inputs ignore plain `el.value = …`; text fields go
-//     through the native value setter + an `input` event, contenteditable gets
-//     execCommand("insertText"). Appends — never wipes what is there.
+//   - A composer built inside web components is invisible to an ordinary
+//     querySelectorAll, so the search walks shadow roots.
+//   - The box may not EXIST until an opener is clicked, so a closed composer
+//     names its opener — chosen against ANY label that could submit. That
+//     click may only ever open a box.
+//   - A focused box beats a guessed one; otherwise the biggest editor on the
+//     page, never a bare <input> — that is how a reply ends up in a search
+//     field.
 //
-// Pressing Reddit's own Comment button stays the human's job. Always. There is
-// no code path here that submits, and keeping it that way is the product.
+// Pressing the platform's own button stays the human's job. Always. There
+// is no code path here that submits, and keeping it that way is the product.
 
-async function ESInsert(message) {
-  const OPENS = /^(add a comment|add comment|write a comment|leave a comment|join the conversation)$/i;
-  const REPLIES = /^(reply|write a reply|reply to post|comment)$/i;
-  const NEVER = /\b(post|submit|send|save|publish|delete|remove|report|share|edit|upvote|downvote)\b/i;
+/** Generic openers and reply labels, used when a card names none. */
+export const OPENS_DEFAULT = ["add a comment", "add comment", "write a comment", "leave a comment", "join the conversation"];
+export const REPLIES_DEFAULT = ["reply", "write a reply", "reply to post", "comment"];
+const NEVER = /\b(post|submit|send|save|publish|delete|remove|report|share|edit|upvote|downvote)\b/i;
+export { NEVER };
 
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** A whole-label regex source from a list of labels. */
+export const wordsSource = (list, dflt) => {
+  const words = (Array.isArray(list) && list.length ? list : dflt).map((w) => String(w).trim().toLowerCase()).filter(Boolean)
+    .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return `^(${words.join("|")})$`;
+};
+export const OPENS = new RegExp(wordsSource([], OPENS_DEFAULT), "i");
+export const REPLIES = new RegExp(wordsSource([], REPLIES_DEFAULT), "i");
 
+/**
+ * In the page: `{ box, opener }`. `box` is the composer if one is open —
+ * its rect on the viewport, its kind (editable / textarea / input) and
+ * whether it is empty; `opener` is the control that would open one, with
+ * its label. Either may be null. The rects carry the viewport and the
+ * scroll position, which is what the wheel needs to bring them into view.
+ * `hostsSel` is the platform's list of custom elements that host a
+ * composer, as a selector list ("shreddit-composer, comment-composer-host")
+ * or empty.
+ */
+export function composerState(opensSrc, repliesSrc, neverSrc, hostsSel) {
+  const OPENS = new RegExp(opensSrc, "i"), REPLIES = new RegExp(repliesSrc, "i"), NEVER = new RegExp(neverSrc, "i");
   const roots = () => {
     const found = [document];
     for (let i = 0; i < found.length; i++) {
@@ -39,8 +68,10 @@ async function ESInsert(message) {
     for (const root of roots()) for (const el of root.querySelectorAll(selector)) out.push(el);
     return out;
   };
-
-  const box = (el) => el.getBoundingClientRect();
+  const rect = (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.left, y: r.top, w: r.width, h: r.height, vw: innerWidth, vh: innerHeight, scrollY: window.scrollY };
+  };
   const typable = (el) =>
     !!el && !el.disabled && !el.readOnly &&
     (el.isContentEditable || el.tagName === "TEXTAREA" ||
@@ -53,69 +84,38 @@ async function ESInsert(message) {
     while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement;
     return typable(el) ? el : null;
   };
-  // Otherwise the biggest editor on the page, never a bare <input> — that is
-  // how a reply ends up in a search field.
   const biggest = () => {
     let best = null, bestArea = 0;
     for (const el of queryAll("textarea, [contenteditable]")) {
       if (!typable(el) || el.tagName === "INPUT") continue;
-      const r = box(el);
+      const r = el.getBoundingClientRect();
       const size = r.width > 120 && r.height > 28 ? r.width * r.height : 0;
       if (size > bestArea) { best = el; bestArea = size; }
     }
     return best;
   };
-  const findBox = () => focused() || biggest();
+  const box = focused() || biggest();
+  if (box) {
+    const kind = box.isContentEditable ? "editable" : box.tagName === "TEXTAREA" ? "textarea" : "input";
+    const empty = !(box.isContentEditable ? box.textContent : box.value).trim();
+    return { box: { rect: rect(box), kind, empty }, opener: null };
+  }
 
   /** The control that opens a closed composer, thread-level ones first. An
    *  anchor that really navigates would take the thread away with it. */
-  const findOpener = () => {
-    let best = null, bestRank = 9;
-    for (const el of queryAll("button, [role='button'], a, summary, shreddit-composer, comment-composer-host")) {
-      const href = el.getAttribute("href");
-      if (el.tagName === "A" && href && !/^(#|javascript:)/i.test(href)) continue;
-      const r = box(el);
-      if (r.width < 8 || r.height < 8) continue;
-      const label = (el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.innerText || "").trim();
-      if (!label || label.length > 40 || NEVER.test(label)) continue;
-      const rank = OPENS.test(label) ? 0 : REPLIES.test(label) ? 1 : 9;
-      // Rank first, then document order: the first "Reply" belongs to the post
-      // we are answering, not to somebody else's comment underneath it.
-      if (rank < bestRank) { best = el; bestRank = rank; }
-    }
-    return best;
-  };
-
-  let el = findBox();
-  let opened = false;
-  const deadline = Date.now() + 4000;
-  while (!el && Date.now() < deadline) {
-    if (!opened) {
-      const opener = findOpener();
-      if (opener) { opener.click(); opened = true; }
-    }
-    await sleep(150);
-    el = findBox();
+  let best = null, bestRank = 9;
+  const selector = "button, [role='button'], a, summary" + (hostsSel && String(hostsSel).trim() ? ", " + hostsSel : "");
+  for (const el of queryAll(selector)) {
+    const href = el.getAttribute("href");
+    if (el.tagName === "A" && href && !/^(#|javascript:)/i.test(href)) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 8 || r.height < 8) continue;
+    const label = (el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.innerText || "").trim();
+    if (!label || label.length > 40 || NEVER.test(label)) continue;
+    const rank = OPENS.test(label) ? 0 : REPLIES.test(label) ? 1 : 9;
+    // Rank first, then document order: the first "Reply" belongs to the post
+    // we are answering, not to somebody else's comment underneath it.
+    if (rank < bestRank) { best = el; bestRank = rank; }
   }
-  if (!el) return { ok: false, reason: "no_composer" };
-
-  el.focus();
-  if (el.isContentEditable) {
-    // Caret to the end, so a composer with something in it gets the draft
-    // appended rather than spliced into the middle of the user's words.
-    const selection = window.getSelection();
-    const range = document.createRange();
-    range.selectNodeContents(el);
-    range.collapse(false);
-    selection.removeAllRanges();
-    selection.addRange(range);
-    document.execCommand("insertText", false, el.textContent.trim() ? `\n\n${message}` : message);
-  } else {
-    const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-    const setter = Object.getOwnPropertyDescriptor(proto, "value").set;
-    setter.call(el, el.value ? `${el.value}\n\n${message}` : message);
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-  }
-  el.scrollIntoView({ block: "center", behavior: "smooth" });
-  return { ok: true };
+  return { box: null, opener: best ? { rect: rect(best), label: (best.getAttribute("aria-label") || best.innerText || "").trim().slice(0, 40) } : null };
 }

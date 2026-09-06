@@ -37,6 +37,15 @@ export function renderCard(host, card, onAnswer) {
     article.append(help);
   }
 
+  // What a paused worker saw: the screenshot the runtime took when it
+  // stopped for a person. An image, never markup — the src is the server's.
+  if (card.image) {
+    const img = el("img", "es-shot");
+    img.src = card.image;
+    img.alt = "what the task sees in its tab";
+    article.append(img);
+  }
+
   if (card.choices?.length) {
     const list = el("ul", "es-choices");
     const buttons = [];

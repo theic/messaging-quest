@@ -8,10 +8,11 @@
 # crash, loudly, on a runner that never ran npm.
 #
 # `brain` is the one directory that carries dependencies (agent/, behind
-# `npm run brain`). It installs the lockfile and imports the strategist —
+# `npm run brain`). It installs the lockfile, imports the strategist —
 # which proves the LangChain tree still resolves and parses, with no API key
-# and no .mq/ anywhere. The seats are constructed lazily, so a bare
-# import is safe by design, and this job keeps it that way.
+# and no .mq/ anywhere — and runs the runtime's own suite (agent/test.mjs):
+# workers pausing on a question, resuming after a restart, cancelled, refused
+# a click, all against a SCRIPTED model, so no key is needed there either.
 
 name: tests
 
@@ -55,3 +56,5 @@ jobs:
         run: npm run brain
       - name: the strategist imports clean, keyless
         run: node -e "import('./agent/strategist.mjs').then(() => console.log('brain imports clean'))"
+      - name: the runtime — workers, the question list, restart, cancel — on a scripted model
+        run: node agent/test.mjs

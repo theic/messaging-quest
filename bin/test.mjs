@@ -11,25 +11,34 @@
 // own test directory.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseFeed, threadOf, waitFor, ANON_GAP_MS } from "../skills/reddit/feed.mjs";
+import { threadOf, itemOf, postEntries, searchEntries, commentEntries, kindOf, readPage, SPECS, pageOf } from "../skills/reddit/pages.mjs";
 import { classify, history } from "../lib/verdict.mjs";
 import { conversation, byUrgency } from "../lib/conversation.mjs";
-import { refuse, scoped } from "../skills/reddit/shapes.mjs";
+import { refuse, scoped, isParody } from "../skills/reddit/shapes.mjs";
 import { verdictOf } from "../lib/probe.mjs";
-import { fromDescription, isParody, readRoomFile, roomFile, bansPromotion } from "../lib/rules.mjs";
+import { fromDescription, readRoomFile, roomFile, bansPromotion } from "../lib/rules.mjs";
 import { conforms } from "../lib/llm.mjs";
 import { loadPlatforms, platform, roomOf } from "../lib/platform.mjs";
 import { longestSharedRun, repeats, claims, inventedLinks, RUN_LIMIT } from "../lib/guards.mjs";
 import { standing, readiness, burst, mix } from "../lib/ready.mjs";
-import { nextCards, onboarded } from "../lib/cards.mjs";
-import { relayBroker } from "../lib/relay.mjs";
-import { readViaRelay } from "../skills/reddit/feed.mjs";
+import { nextCards, onboarded, questionCards } from "../lib/cards.mjs";
+import { agentDefinition } from "../lib/skills.mjs";
+import { controlBroker, permitted, familiesOf, grantsOf, TOOLKIT } from "../lib/control.mjs";
+import { browser, NOT_ATTACHED } from "../lib/browse.mjs";
+import { parseCampaign, campaignFile, writeCampaign, readCampaigns, readCampaign, writerBlock, judgeLine, campaignDraft, campaignHash, MENTIONS } from "../lib/campaigns.mjs";
+import { createProject, useProject, listProjects, currentDir, slug as projectSlug } from "../lib/projects.mjs";
+import { sharedDir, isChildProject } from "../lib/dirs.mjs";
+import { signalWritingRules } from "../lib/writing.mjs";
+import { labelsOf, composerOf, first } from "../lib/platform.mjs";
 import { allowed, memoryProgress, memoryContext, writeMemory, seedMissing } from "../lib/memory.mjs";
 import { proposable } from "../lib/cards.mjs";
+import { store } from "../lib/store.mjs";
+import { voiceQuestions } from "../lib/voice.mjs";
+import { conversationRows, bindConversations, recordReturn, recordTurn, closeConversation, waiting as waitingRows, yourTurns, dueConversations, unbound, campaignDigest, digestText } from "../lib/conversations.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ES = join(here, "mq.mjs");
@@ -50,26 +59,37 @@ const check = (what, got, want) => {
 
 /* ---------------------------------------------------------------- parsing */
 
-const entryXml = (id, bodyHtml, extra = "") => `<entry><author><name>/u/me</name></author>${extra}
-<id>${id}</id><link href="https://www.reddit.com/r/x/comments/p1/slug/${id.replace(/^t1_/, "")}/" />
-<updated>2026-08-28T10:00:00+00:00</updated><title>/u/me on a thread</title>
-<content type="html">${bodyHtml}</content></entry>`;
+// A source watched before 0.6.0 still carries the feed's URL. The skill
+// reads the page it stands for; the stored row is not rewritten.
+check("a legacy feed URL from a 0.5 source reads as its page, and a page URL is left alone",
+  [pageOf("https://www.reddit.com/r/sideproject/search/.rss?q=where%20do%20I%20find%20clients&restrict_sr=1&sort=new&t=week&limit=100"), pageOf("https://www.reddit.com/r/saas/new/.rss"), pageOf("https://www.reddit.com/r/saas/search/?q=x&type=posts&restrict_sr=1&sort=new&t=week")],
+  ["https://www.reddit.com/r/sideproject/search/?q=where%20do%20I%20find%20clients&restrict_sr=1&sort=new&t=week", "https://www.reddit.com/r/saas/new/", "https://www.reddit.com/r/saas/search/?q=x&type=posts&restrict_sr=1&sort=new&t=week"]);
 
-const CHROME = "&lt;!-- SC_OFF --&gt;&lt;div class=&quot;md&quot;&gt;&lt;p&gt;the words&lt;/p&gt;&lt;/div&gt;&lt;!-- SC_ON --&gt; &lt;p&gt;submitted by /u/me [link] [comments]&lt;/p&gt;";
+/* ---- the pages: rows off a rendered page → the store's entries (0.6.0).
+   The feed's Atom went with the anonymous lane; what a page looks like is a
+   declared spec (skills/reddit/pages.mjs) and these pin the mapping. */
+{
+  const rows = [
+    { id: "t3_abc", title: "how do I get clients", author: "ana", permalink: "/r/saas/comments/abc/how_do_i_get_clients/", at: "2026-09-01T10:00:00.000Z", comments: "3", score: "2", type: "text", body: "stuck at zero\n\nany ideas", sub: "r/saas" },
+    { id: null, title: "no permalink", author: "bo", permalink: null, at: null },
+    { id: "t3_def", title: "link post", author: null, permalink: "https://www.reddit.com/r/saas/comments/def/link_post/?utm=x", at: "junk", comments: null, body: "" },
+  ];
+  const posts = postEntries(rows);
+  check("a listing's rows become post entries, ids and permalinks the platform's", posts.map((e) => [e.id, e.kind, e.url]), [["t3_abc", "post", "https://www.reddit.com/r/saas/comments/abc/how_do_i_get_clients/"], ["t3_def", "post", "https://www.reddit.com/r/saas/comments/def/link_post/"]]);
+  check("...with the author, the date as ISO, and the body as written", [posts[0].author, posts[0].at, posts[0].body], ["ana", "2026-09-01T10:00:00.000Z", "stuck at zero\n\nany ideas"]);
+  check("...and a date the page did not give is null, never invented", [posts[1].at, posts[1].author], [null, null]);
+  const search = searchEntries([{ href: "https://www.reddit.com/r/saas/comments/zz9/x/?ref=search", title: "x" }, { href: "https://www.reddit.com/r/saas/comments/zz9/x/", title: "x again" }, { href: "https://www.reddit.com/r/saas/", title: "not a post" }]);
+  check("a search page's rows are previews — an id off the link, no body, once each", search.map((e) => [e.id, e.preview, e.body]), [["t3_zz9", true, ""]]);
+  const cs = commentEntries([{ id: "t1_aaa", author: "me", depth: "0", permalink: "/r/x/comments/p1/slug/aaa/", body: "what I said", at: "2026-09-01T10:00:00Z" }, { id: "t5_sub", author: "x" }, { id: "t1_bbb", author: "[deleted]", body: "[removed]", permalink: "/r/x/comments/p1/slug/bbb/" }]);
+  check("a thread's rows become comment entries; a subreddit row is dropped", cs.map((e) => [e.id, e.kind, e.body]), [["t1_aaa", "comment", "what I said"], ["t1_bbb", "comment", "[removed]"]]);
+  check("what a permalink names is the platform's to say", [itemOf("https://www.reddit.com/r/x/comments/p1/slug/aaa/"), itemOf("https://www.reddit.com/r/x/comments/p1/slug/"), itemOf("https://www.reddit.com/r/x/comments/p1/comment/aaa/"), itemOf("https://example.com/x")],
+    [{ id: "t1_aaa", kind: "comment" }, { id: "t3_p1", kind: "post" }, { id: "t1_aaa", kind: "comment" }, null]);
+  check("a page's kind is read off its url", ["https://www.reddit.com/r/saas/new/", "https://www.reddit.com/r/saas/search/?q=x&restrict_sr=1", "https://www.reddit.com/r/saas/comments/abc/t/", "https://www.reddit.com/r/saas/comments/abc/t/ccc/", "https://www.reddit.com/user/ana/comments/"].map(kindOf),
+    ["listing", "search", "thread", "comment", "profile"]);
+  check("every spec is a selector and a field map — the extension runs it, the skill declares it", Object.values(SPECS).every((s) => typeof s.items === "string" && s.items && Object.values(s.fields).every((f) => /^(attr:[^@]+(@.+)?|text(:.+)?|href(:.+)?|tag)$/.test(f))), true);
+}
 
-const feed = `<feed>${entryXml("t1_aaa", CHROME)}
-<entry><id>t5_zzz</id><title>a subreddit</title><updated>2008-01-01T00:00:00+00:00</updated></entry></feed>`;
-
-const parsed = parseFeed(feed);
-// Reddit surrounds the author's words with its own chrome. Leaving it in means
-// every stored body ends in boilerplate and every hash is a hash of that.
-check("only what sits between SC_OFF/SC_ON is kept", parsed[0].body, "the words");
-// t5_ entries are subreddit records carrying FOUNDING dates. Left in, they put
-// the feed out of order and get checked as if somebody had said them.
-check("t5_ subreddit records are dropped", parsed.length, 1);
-check("the author's /u/ prefix is not part of the name", parsed[0].author, "me");
 // Comment entries carry no <published> at all; reading it dates every comment null.
-check("the date comes from <updated>", parsed[0].at, "2026-08-28T10:00:00+00:00");
 
 // String surgery that silently reads the wrong page is worse than a crash.
 check("a comment's thread is the prefix up to the post id",
@@ -215,12 +235,6 @@ check("...and so does the url", swept.url, "https://reddit.com/r/x/comments/p1/s
 check("a pasted /u/ prefix is not part of the username",
   JSON.parse(readFileSync(join(env.MQ_DIR, "account.json"), "utf8")).name, "tester");
 
-// The governor. Every command is a fresh process, so the gap can only live on
-// disk — and the failure it prevents is silent: reads still "work" while the
-// address collects 429s and every thread comes back unreadable.
-check("a request 30s after the last one still waits", waitFor(Date.now() - 30_000) > 0, true);
-check("a request after the gap does not", waitFor(Date.now() - ANON_GAP_MS - 1), 0);
-check("a clock that was never stamped does not block the first read", waitFor(0), 0);
 
 /* ------------------------------------------------------ phase 2 — refusals */
 
@@ -228,8 +242,9 @@ check("a clock that was never stamped does not block the first read", waitFor(0)
 // was 76% of everything ever read and sat in the 4.2% half; a search without
 // restrict_sr=1 silently becomes a site-wide search at 10%.
 check("the comment firehose is refused by shape", Boolean(refuse({ kind: "comments" })), true);
-check("...and by URL, however it is written", Boolean(refuse({ url: "https://www.reddit.com/r/x/comments/.rss?limit=100" })), true);
-check("an unscoped search is refused", Boolean(refuse({ url: "https://www.reddit.com/r/x/search/.rss?q=a&sort=new" })), true);
+check("...and by URL, however it is written", Boolean(refuse({ url: "https://www.reddit.com/r/x/comments/" })), true);
+check("an unscoped search is refused", Boolean(refuse({ url: "https://www.reddit.com/r/x/search/?q=a&sort=new" })), true);
+check("a site-wide search is refused", Boolean(refuse({ url: "https://www.reddit.com/search/?q=a" })), true);
 check("a scoped search is allowed", refuse({ url: scoped("smallbusiness", "how do I get clients") }), null);
 check("parody subs are caught by Reddit's own suffix", isParody("languagelearningjerk"), true);
 
@@ -470,7 +485,7 @@ const GET = async (p) => { const r = await fetch(base + p); return { status: r.s
 
 if (!(await up())) { console.log("FAIL  the dashboard did not start"); fail++; }
 else {
-  for (const p of ["/", "/waiting", "/queue", "/rooms", "/ready", "/sources", "/voice"]) {
+  for (const p of ["/", "/people", "/people?view=waiting", "/campaigns", "/you", "/standing", "/waiting", "/queue", "/rooms", "/ready", "/sources", "/voice"]) {
     check(`${p} renders`, (await GET(p)).status, 200);
   }
   check("an unknown path is a 404, not a stack trace", (await GET("/nope")).status, 404);
@@ -621,6 +636,14 @@ const memDone = { done: 4, total: 4, files: [
   { file: "icp.md", filled: true }, { file: "me.md", filled: true }] };
 
 check("a fresh dir asks who you are first", nextCards(snap())[0].id, "onboard.account");
+// A site the extension may not read outranks everything — the button Chrome
+// needs the click from rides on the card itself, not on a line under it.
+{
+  const g = nextCards(snap({ grants: ["https://www.reddit.com"] }))[0];
+  check("a site the extension may not read yet is the first card", [g.id, g.kind, g.primary.id, g.secondary.id, g.data.origin],
+    ["grant.https://www.reddit.com", "grant.ask", "allow", "later", "https://www.reddit.com"]);
+  check("...naming the host on the button", g.primary.label, "Allow www.reddit.com");
+}
 check("skipping the account moves to the url, not back to the account",
   nextCards(snap({ stash: { account_skipped: true } }))[0].id, "onboard.url");
 check("a url with no key on file asks for the key, with the site named",
@@ -721,78 +744,256 @@ else {
   check("...and a real one without a key is an error that names the fix",
     /key|not installed/.test((await agentReal.json()).error ?? ""), true);
 
-  /* The read lane, end to end over HTTP: a read blocks, a "browser" claims
-     it, answers with a feed, and the blocked read resolves with the body. */
-  const reading = fetch(baseC + "/api/relay/read", {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ url: "https://www.reddit.com/r/saas/new.rss" }),
-  });
+  /* No read lane any more (0.6.0): the deck names its project instead. */
+  check("the deck says which project it is, and lists the others", (await (await fetch(baseC + "/api/cards")).json()).project, { id: "default", name: "default", all: [{ id: "default", name: "default", current: true }] });
+  check("...and there is no background read lane to claim from", (await fetch(baseC + "/api/relay/jobs")).status, 404);
+
+  /* The control lane, end to end over HTTP: a lease blocks until a "browser"
+     answers with the tab it opened; a call carries THAT tab, never the
+     caller's; a click is refused by the grant screen before any browser hears
+     of it; release closes the tab. */
+  const cpost = (p, body) => fetch(baseC + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const cjobs = async () => (await (await fetch(baseC + "/api/control/jobs")).json()).jobs;
+  const leasing = cpost("/api/control/lease", { task: "smoke", url: "https://www.reddit.com/r/saas/" });
   await new Promise((r) => setTimeout(r, 150));
-  const claimed = (await (await fetch(baseC + "/api/relay/jobs")).json()).jobs;
-  check("a waiting read is claimable by a browser", claimed.length, 1);
-  check("...and the deck reports the lane as attached", (await (await fetch(baseC + "/api/cards")).json()).relay.attached, true);
-  await fetch(baseC + "/api/relay/answer", {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ id: claimed[0].id, status: 200, body: feed, finalUrl: claimed[0].url }),
-  });
-  const relayed = await (await reading).json();
-  check("the answered body reaches the caller", relayed.status, 200);
-  check("...verbatim", /t1_aaa/.test(relayed.body), true);
+  let cj = await cjobs();
+  check("a lease is handed to the browser as a tab to open, in the operator's own session", [cj.map((j) => j.tool), cj[0]?.input?.stranger], [["lease"], false]);
+  await cpost("/api/control/answer", { id: cj[0].id, tabId: 41, groupId: 7, windowId: 1 });
+  const lease = await (await leasing).json();
+  check("...and resolves with the tab the browser opened", lease.tabId, 41);
+  const foreign = await cpost("/api/control/act", { lease: lease.id, tool: "read_page", input: { tabId: 999 } });
+  check("a call may not name a tab the lease does not hold", foreign.status, 403);
+  const treeing = cpost("/api/control/act", { lease: lease.id, tool: "read_page", input: { filter: "interactive" } });
+  await new Promise((r) => setTimeout(r, 150));
+  cj = await cjobs();
+  check("a read carries the lease's own tab", cj[0]?.input?.tabId, 41);
+  check("...and the deck reports the lane attached, with the lease on it",
+    (await (await fetch(baseC + "/api/cards")).json()).control.leases[0]?.tabs, [41]);
+  await cpost("/api/control/answer", { id: cj[0].id, tree: 'button "Comment" [ref_3]', lines: 1 });
+  check("the tree reaches the caller", /ref_3/.test((await (await treeing).json()).tree), true);
+  const clicking = await cpost("/api/control/act", { lease: lease.id, tool: "computer", input: { action: "left_click", ref: "ref_3" } });
+  check("a click with read-only grants is refused before the browser hears of it", clicking.status, 403);
+  check("...naming the grant it lacks", /"click" grant/.test((await clicking.json()).error), true);
+  check("...and nothing was queued for the browser", (await cjobs()).length, 0);
+  const releasing = cpost("/api/control/release", { lease: lease.id });
+  await new Promise((r) => setTimeout(r, 150));
+  cj = await cjobs();
+  check("release closes the lease's tabs", cj[0]?.input?.tabIds, [41]);
+  await cpost("/api/control/answer", { id: cj[0].id, ok: true });
+  check("...and the lease is gone", (await (await releasing).json()).ok, true);
+  check("a call on a released lease is refused", (await cpost("/api/control/act", { lease: lease.id, tool: "read_page", input: {} })).status, 403);
 }
 srvC.kill();
 
-/* -------------------------------------------------------- the browser lane */
+/* ------------------------------------------------------------ the browser */
 
-// The broker: everything times out, nothing is fetched twice, and only a
-// platform's own rooms may ride the user's cookies.
-
-{
-  const b = relayBroker({ ttlMs: 60_000 });
-  check("the lane is https only", (await b.read("http://www.reddit.com/r/x/new.rss")).error, "relay reads https only");
-  check("the lane refuses a URL no platform recognises",
-    (await b.read("https://example.com/feed.rss")).error, "relay reads only a platform's own rooms");
-
-  const p = b.read("https://www.reddit.com/r/saas/new.rss");
-  const jobs = await b.claim();
-  check("a queued read is handed to exactly one claimer", jobs.length, 1);
-  check("...and never handed out twice", (await b.claim()).length, 0);
-  b.answer(jobs[0].id, { status: 200, body: "<feed></feed>", finalUrl: jobs[0].url });
-  check("the answer resolves the read", (await p).status, 200);
-  check("an answer for a job that is gone is late, not an error", b.answer("r999", { status: 200 }), false);
-
-  const fast = relayBroker({ ttlMs: 120 });
-  const dead = await fast.read("https://www.reddit.com/r/saas/new.rss");
-  check("a read nobody claims dies with its reason", /unanswered/.test(dead.error), true);
-
-  const tiny = relayBroker({ cap: 1 });
-  tiny.read("https://www.reddit.com/r/a/new.rss");
-  check("the queue has a ceiling", (await tiny.read("https://www.reddit.com/r/b/new.rss")).error, "relay queue is full");
-}
-
-// The relayed body goes through the SAME three-outcome logic as the anonymous
-// lane — a block page or a silent redirect is the same lie from either seat.
+// The ONE reading mechanism (0.6.0): a page in the operator's own Chrome,
+// through the control lane. A stub server plays the lane — it answers each
+// toolkit call the way the extension would for a page it "shows" — and the
+// reddit skill's readPage is driven through it end to end: rows → entries,
+// a silent redirect, a wall, a profile that does not exist, and a dark lane.
 {
   const { createServer } = await import("node:http");
-  const answers = [
-    { status: 200, body: feed, finalUrl: "https://www.reddit.com/r/x/new.rss" },
-    { status: 200, body: "<html>blocked</html>", finalUrl: "https://www.reddit.com/r/x/new.rss" },
-    { error: "no browser attached" },
-  ];
+  let page = null;        // what the "browser" shows: { url, title, rows: { post|comment|... }, text }
+  const calls = [];
   const stub = createServer((req, res) => {
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify(answers.shift()));
+    let body = "";
+    req.on("data", (c) => { body += c; });
+    req.on("end", () => {
+      const out = (o) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
+      const b = body ? JSON.parse(body) : {};
+      if (req.url === "/api/control/leases") return out({ attached: true, leases: [], grants: [] });
+      if (req.url === "/api/control/lease") { calls.push(["lease", b.url, b.stranger]); return out({ id: "L1", tabId: 41, url: page?.url ?? b.url, title: page?.title ?? "" }); }
+      if (req.url === "/api/control/release") { calls.push(["release"]); return out({ ok: true }); }
+      if (req.url === "/api/control/act") {
+        calls.push([b.tool, b.input?.spec?.items ?? b.input?.url ?? null]);
+        if (b.tool === "navigate") return out({ url: page?.url ?? b.input.url, title: page?.title ?? "", status: "complete" });
+        if (b.tool === "tabs_context") return out({ tabs: [{ tabId: 41, url: page?.url, title: page?.title, status: "complete" }] });
+        if (b.tool === "get_page_text") return out({ text: page?.text ?? "", url: page?.url, title: page?.title });
+        if (b.tool === "read_dom") { const rows = page?.rows?.[b.input.spec.items] ?? []; return out({ rows, total: rows.length, url: page?.url, title: page?.title }); }
+        return out({ error: `the stub does not do ${b.tool}` });
+      }
+      out({ error: "not found" });
+    });
   });
   await new Promise((r) => stub.listen(0, "127.0.0.1", r));
-  const stubBase = `http://127.0.0.1:${stub.address().port}`;
+  const base = `http://127.0.0.1:${stub.address().port}`;
 
-  const good = await readViaRelay(stubBase, "https://www.reddit.com/r/x/new.rss");
-  check("a relayed feed parses like an anonymous one", good.ok && good.entries.length, 1);
-  check("...and says which seat read it", good.via, "browser");
-  const blocked = await readViaRelay(stubBase, "https://www.reddit.com/r/x/new.rss");
-  check("a block page through the relay is still an error, never 'empty'", blocked.ok, false);
-  const dark = await readViaRelay(stubBase, "https://www.reddit.com/r/x/new.rss");
-  check("a dark lane is a failed read with the relay named", /^relay:/.test(dark.error), true);
+  page = { url: "https://www.reddit.com/r/saas/new/", title: "r/saas", rows: { "shreddit-post": [{ id: "t3_abc", title: "how do I get clients", author: "ana", permalink: "/r/saas/comments/abc/x/", at: "2026-09-01T10:00:00Z", body: "stuck" }] }, text: "" };
+  const b1 = browser(base, { task: "test" });
+  const listing = await readPage("https://www.reddit.com/r/saas/new/", b1);
+  check("a listing read in the browser comes back as entries", [listing.ok, listing.entries.map((e) => e.id), listing.redirected], [true, ["t3_abc"], false]);
+  check("...on a lease the verb opened, with the page's rows asked for by the skill's spec", [calls[0], calls.some((c) => c[0] === "read_dom" && c[1] === "shreddit-post")], [["lease", "https://www.reddit.com/r/saas/new/", false], true]);
+  await b1.close();
+  check("...and closed after", calls[calls.length - 1], ["release"]);
+
+  page = { url: "https://www.reddit.com/search/?q=nosuchroom", title: "search", rows: {}, text: "no results" };
+  const b2 = browser(base, { task: "test" });
+  const moved = await readPage("https://www.reddit.com/r/nosuchroom/new/", b2);
+  check("a room that does not exist is a silent redirect — caught by the final url, never 'nothing new'", [moved.ok, moved.redirected], [true, true]);
+  await b2.close();
+
+  page = { url: "https://www.reddit.com/r/private/new/", title: "r/private", rows: { "shreddit-blocking-modal, [data-testid='login-modal'], form[action*='login'], h1": [{ tag: "shreddit-blocking-modal", text: "You've been blocked by network security" }] }, text: "" };
+  const b3 = browser(base, { task: "test" });
+  const walled = await readPage("https://www.reddit.com/r/private/new/", b3);
+  check("a wall is an error with its words, never an empty read", [walled.ok, /wall/.test(walled.error), /blocked/.test(walled.error)], [false, true, true]);
+  await b3.close();
+
+  page = { url: "https://www.reddit.com/user/nobody/comments/", title: "reddit", rows: {}, text: "Sorry, nobody on Reddit goes by that name." };
+  const b4 = browser(base, { task: "test", stranger: true });
+  const gone = await readPage("https://www.reddit.com/user/nobody/comments/", b4);
+  check("a profile that does not render is the 404 finding, asked for from the stranger's seat", [gone.ok, gone.error, calls[calls.length - 1][0] === "get_page_text" || calls.some((c) => c[0] === "lease" && c[2] === true)], [false, "http_404", true]);
+  await b4.close();
+
+  page = { url: "https://www.reddit.com/r/saas/comments/abc/x/", title: "thread", rows: { "shreddit-post": [{ id: "t3_abc", title: "x", author: "ana", permalink: "/r/saas/comments/abc/x/", comments: "3" }], "shreddit-comment": [{ id: "t1_aaa", author: "me", depth: "0", permalink: "/r/saas/comments/abc/x/aaa/", body: "what I said" }] }, text: "" };
+  const b5 = browser(base, { task: "test", stranger: true });
+  const thread = await readPage("https://www.reddit.com/r/saas/comments/abc/x/", b5);
+  check("a thread read carries the post and its comments, and says when it did not see them all", [thread.ok, thread.entries.map((e) => e.id), thread.truncated], [true, ["t3_abc", "t1_aaa"], true]);
+  check("...so the verdict logic runs on it unchanged", classify({ id: "t1_aaa", kind: "comment", url: "https://www.reddit.com/r/saas/comments/abc/x/aaa/" }, thread).state, "visible");
+  await b5.close();
   stub.close();
+
+  // The lane that is not there: a failed read with the door named, in a
+  // second, not a minute-long wait for a browser that never comes.
+  const dark = browser("http://127.0.0.1:9", { task: "test" });
+  const t0 = Date.now();
+  const nothing = await dark.open("https://www.reddit.com/r/saas/new/");
+  check("a dark lane is a failed read that names what to do", [nothing.error, Date.now() - t0 < 6000], [NOT_ATTACHED, true]);
+}
+
+/* -------------------------------------------------------- the control lane */
+
+// The second protocol the extension speaks (PLAN.md 2026-09-03). Screened
+// twice: here by GRANT — the agent's tools line, parsed in the zero-dep heart
+// so this suite guards it without the brain — and in the page by LABEL
+// (extension/screen.js). No agent holds click or type in milestone 1.
+
+{
+  check("read_page is a read", familiesOf("read_page"), ["read"]);
+  check("a click is a click, by action", familiesOf("computer", { action: "left_click" }), ["click"]);
+  check("form_input is typing", familiesOf("form_input"), ["type"]);
+  check("a batch needs the union of its items",
+    familiesOf("batch", { actions: [{ name: "navigate", input: { url: "https://x" } }, { name: "computer", input: { action: "type", text: "a" } }] }), ["read", "type"]);
+  check("a batch with an unknown action is refused whole", familiesOf("batch", { actions: [{ name: "read_page" }, { name: "eval" }] }), null);
+  check("a batch inside a batch is refused", familiesOf("batch", { actions: [{ name: "batch", input: { actions: [] } }] }), null);
+  check("there is no eval in the toolkit", Object.keys(TOOLKIT).some((t) => /eval|javascript|script/.test(t)), false);
+  check("a tools line grants families, and nothing else", grantsOf("browser.read, ask_person, judge"), ["read"]);
+  check("read-only grants refuse a click, naming the grant",
+    permitted("computer", { action: "left_click", ref: "ref_1" }, ["read"]).why?.includes('"click" grant'), true);
+  check("...and a screenshot passes", permitted("computer", { action: "screenshot" }, ["read"]).ok, true);
+  check("an unknown action is not a toolkit call, whatever the grants", permitted("computer", { action: "eval" }, ["read", "click", "type"]).ok, false);
+
+  const b = controlBroker({ ttlMs: 60_000, paceMs: 120 });
+  check("a lease opens on http(s) only", (await b.lease({ task: "t", url: "file:///etc/passwd" })).error, "a lease opens on an http(s) url");
+  const leasing = b.lease({ task: "scout", url: "https://www.reddit.com/r/saas/" });
+  let jobs = await b.claim(1000);
+  check("a lease is a tab to open, handed to one claimer", jobs.map((j) => j.tool), ["lease"]);
+  check("...never twice", (await b.claim()).length, 0);
+  b.answer(jobs[0].id, { tabId: 12, groupId: 3, windowId: 1 });
+  const L = await leasing;
+  check("the lease holds the tab the browser opened", L.tabId, 12);
+  check("a caller may not name a tab it does not hold", (await b.act(L.id, "read_page", { tabId: 13 })).refused, true);
+  const clicking = await b.act(L.id, "computer", { action: "left_click", coordinate: [1, 1] }, { grants: ["read"] });
+  check("a click without the grant is refused here, and the browser never hears of it", [clicking.refused, b.pending()], [true, 0]);
+  check("typing needs its own grant", (await b.act(L.id, "form_input", { ref: "ref_1", value: "x" }, { grants: ["read", "click"] })).refused, true);
+  // Pacing: two navigations to one host are handed out paceMs apart.
+  const n1 = b.act(L.id, "navigate", { url: "https://www.reddit.com/r/a/" });
+  const n2 = b.act(L.id, "navigate", { url: "https://www.reddit.com/r/b/" });
+  const j1 = await b.claim(2000); const at1 = Date.now();
+  check("a navigation carries the lease's tab", j1[0]?.input.tabId, 12);
+  b.answer(j1[0].id, { url: "https://www.reddit.com/r/a/" });
+  const j2 = await b.claim(2000); const at2 = Date.now();
+  check("navigations to one host are spaced by the lane", at2 - at1 >= 100, true);
+  b.answer(j2[0].id, { url: "https://www.reddit.com/r/b/" });
+  check("both callers get their answers", [(await n1).url, (await n2).url].map((u) => u.slice(-3)), ["/a/", "/b/"]);
+  // The grant that is missing: the browser names the origin, the lane
+  // remembers, the panel asks — never a dialog from a worker nobody watches.
+  const reading = b.act(L.id, "read_page", {});
+  jobs = await b.claim(1000);
+  b.answer(jobs[0].id, { error: "not_granted", origin: "https://acme.dev" });
+  check("a site the extension may not read is named back", (await reading).grant, "https://acme.dev");
+  check("...and listed for the panel to ask", b.grantsNeeded(), ["https://acme.dev"]);
+  b.granted("https://acme.dev/*");
+  check("...until the operator grants it", b.grantsNeeded(), []);
+  // A script that hits the wall and releases still leaves the ask standing —
+  // the panel shows the button to whoever looks next, not only while a lease lives.
+  const reading2 = b.act(L.id, "read_page", {});
+  jobs = await b.claim(1000);
+  b.answer(jobs[0].id, { error: "not_granted", origin: "https://acme.dev" });
+  await reading2;
+  const releasing = b.release(L.id);
+  jobs = await b.claim(1000);
+  check("release closes exactly the lease's tabs", jobs[0]?.input.tabIds, [12]);
+  b.answer(jobs[0].id, { ok: true });
+  check("...and is idempotent", [(await releasing).ok, (await b.release(L.id)).ok], [true, true]);
+  check("the ask outlives the lease that hit the wall", b.grantsNeeded(), ["https://acme.dev"]);
+  b.granted("https://acme.dev");
+  check("...and clears once the operator grants it", b.grantsNeeded(), []);
+  check("a released lease refuses calls", (await b.act(L.id, "read_page", {})).refused, true);
+  const dead = controlBroker({ ttlMs: 100 });
+  check("a lease nobody claims dies with its reason", /unanswered/.test((await dead.lease({ task: "t", url: "https://x.y/" })).error), true);
+}
+
+/* ---------------------------------------------- findings from the browser */
+
+// The scout reads a search page in the operator's own browser and records
+// what it saw through `mq found` — the same table, the same refusals and the
+// same judging as a probe; only the lane differs, and the row says which.
+{
+  const boxF = mkdtempSync(join(tmpdir(), "mq-found-"));
+  const DF = join(boxF, ".mq");
+  execFileSync(process.execPath, [ES, "init"], { env: { ...process.env, MQ_DIR: DF }, stdio: "ignore" });
+  const found = (body) => { try { return execFileSync(process.execPath, [ES, "found"], { env: { ...process.env, MQ_DIR: DF }, encoding: "utf8", input: JSON.stringify(body), stdio: ["pipe", "pipe", "pipe"] }); } catch (e) { return `${e.stdout || ""}${e.stderr || ""}`; } };
+  const items = [
+    { url: "https://www.reddit.com/r/saas/comments/abc123/how_do_i_get_clients/", title: "how do I get clients", author: "u/ana", body: "stuck at zero" },
+    { url: "https://www.reddit.com/r/saas/comments/def456/anyone_else/?utm=x", title: "anyone else", author: "bo", body: "same" },
+    { url: "https://www.reddit.com/r/saas/", title: "not a post" },
+  ];
+  const out = found({ place: "saas", q: "how do I get clients", items });
+  check("a colleague's findings are recorded through the CLI, ids off the permalink", /2 new posts/.test(out), true);
+  check("...and a line without a post permalink is skipped, said so", /1 without a post permalink/.test(out), true);
+  const rows = readFileSync(join(DF, "found.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  check("the rows carry the platform's id, the room, and which lane read them", [rows[0].id, rows[0].place, rows[0].via, rows[0].author], ["t3_abc123", "saas", "browser", "ana"]);
+  check("...and wait on a verdict like any probe's", JSON.parse(readFileSync(join(DF, "pending.json"), "utf8")).length, 2);
+  check("the same page recorded twice adds nothing", /0 new posts.*2 already known/.test(found({ place: "saas", q: "how do I get clients", items })), true);
+  check("a parody room is refused, nothing recorded", /refused.*parody/.test(found({ place: "saasjerk", items })), true);
+  check("the room's rules line is opened for a human to answer", readFileSync(join(DF, "rooms", "saas.md"), "utf8").includes("promotion_allowed"), true);
+
+  const { discoverSkills: discover } = await import("../lib/skills.mjs");
+  const def = agentDefinition(discover(null).found.find((s) => s.id === "reddit"));
+  check("the reddit skill ships the scout as agent.md", [def.name, def.model], ["reddit-scout", "scout"]);
+  check("...read-only in the browser, with the engine's verbs by name",
+    [grantsOf(def.tools.join(",")), def.tools.includes("record_findings"), def.tools.includes("judge_pending"), def.tools.includes("write_draft")], [["read"], true, true, true]);
+  check("...and never click or type", def.tools.some((t) => /click|type/.test(t)), false);
+}
+
+// The insert screen IS the click screen, one layer down: every label
+// insert.js refuses to press, the control lane refuses too — plus the
+// composer openers a human-initiated insert is allowed to press.
+{
+  const insertSrc = readFileSync(join(here, "..", "extension", "insert.js"), "utf8");
+  const never = /const NEVER = \/\\b\(([^)]+)\)\\b\/i/.exec(insertSrc)?.[1].split("|") ?? [];
+  const { CLICK_SCREEN } = await import("../extension/screen.js");
+  const screen = new RegExp(CLICK_SCREEN, "i");
+  check("insert.js's NEVER list was found", never.length > 5, true);
+  check("every label the insert screen refuses, the click screen refuses", never.filter((w) => !screen.test(w)), []);
+  check("...and the composer openers too", ["Comment", "Reply", "Add a comment"].every((w) => screen.test(w)), true);
+  check("...while an ordinary control passes", screen.test("Open the thread"), false);
+}
+
+// The browser is a person's. The page-side code READS: it never fires a
+// synthetic event, sets a value, scrolls by script, or enables the CDP
+// domain sites test for — every scroll, click and key goes through Chrome's
+// own input pipeline (isTrusted), and that would break quietly if a
+// convenience crept back in.
+{
+  const src = ["control.js", "insert.js"].map((f) => readFileSync(join(here, "..", "extension", f), "utf8")).join("\n")
+    .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");   // code, not the comments that name what it avoids
+  const tells = ["dispatchEvent(", "execCommand(", "scrollIntoView(", "scrollBy(", ".click()", "Runtime.enable", ".value =", "setAttribute("];
+  check("the extension's page code writes nothing into the page", tells.filter((t) => src.includes(t)), []);
+  check("...every input event is the browser's own", ["Input.dispatchMouseEvent", "Input.dispatchKeyEvent", "mouseWheel", "Log.enable"].every((t) => src.includes(t)), true);
+  check("...and it never fetches a page itself", /fetch\((?!`\$\{base\}|`data:)/.test(src), false);
+  check("...and before any input it asks the page whether Chrome is drawing it, raising the window when not", src.includes("document.visibilityState") && src.includes("focused: true"), true);
 }
 
 /* -------------------------------------------------------- agent proposals */
@@ -825,6 +1026,72 @@ check("a proposal is visible during onboarding too",
 check("a proposal with a verb outside the law never renders",
   nextCards({ ...proposalSnap, stash: { ...proposalSnap.stash, agent_card: { question: "x", why: "y", verb: "rm -rf /" } } })
     .some((c) => c.kind === "agent.propose"), false);
+
+/* ------------------------------------------------- the question list, tasks */
+
+// ONE input primitive: a list of questions, dealt one card at a time, the
+// answers returned together. A worker's pause and the specialist's own
+// question are the same shape; the deck decides the order.
+
+{
+  const qs = [
+    { id: "second", question: "Read a second page?", choices: [{ id: "yes", label: "yes, this one" }, { id: "no", label: "no" }], field: { placeholder: "https://…" } },
+    { id: "why", question: "Why?", optional: true },
+  ];
+  const first = questionCards(qs, {}, { prefix: "task.ask.t1", kind: "task.ask", eyebrow: "reader · needs you" });
+  check("the first unanswered question is the card, under the prefix", [first.id, first.kind], ["task.ask.t1.second", "task.ask"]);
+  check("...with its choices AND its field when it asked for both", [first.choices.length, Boolean(first.field)], [2, true]);
+  check("...and its place in the list", first.progress, { step: 1, of: 2 });
+  const second = questionCards(qs, { second: "no" }, { prefix: "task.ask.t1" });
+  check("an answered question is not dealt again", second.id, "task.ask.t1.why");
+  check("a question with no choices gets a field, so it can be answered", Boolean(second.field), true);
+  check("an optional question can be skipped", second.secondary?.id, "skip");
+  check("a finished list deals nothing", questionCards(qs, { second: "no", why: null }, { prefix: "x" }), null);
+  check("a question with a bad id is dropped rather than dealt", questionCards([{ id: "no good", question: "?" }], {}, { prefix: "x" }), null);
+
+  const blocked = { id: "t1", title: "reader", status: "blocked", askedAt: "2026-09-03T10:00:00Z", questions: qs, answers: {}, shot: "2026-09-03T10:00:01Z", lease: { tabId: 44 } };
+  const older = { ...blocked, id: "t0", askedAt: "2026-09-03T09:00:00Z", shot: null, lease: null };
+  const withWork = snap({ ...onb, rooms: [{ place: "saas", state: "yes" }], queue: [qItem], tasks: [blocked] });
+  check("a worker waiting on a person outranks the queue", nextCards(withWork)[0].kind, "task.ask");
+  check("...oldest first, one at a time", nextCards(snap({ tasks: [blocked, older] })).filter((c) => c.kind === "task.ask").map((c) => c.id), ["task.ask.t0.second"]);
+  const card = nextCards(snap({ tasks: [blocked] }))[0];
+  check("the card carries the screenshot and the tab", [card.image, card.data.tabId, card.actions[0].id], ["/api/tasks/t1/screenshot", 44, "show"]);
+  const finished = { id: "t2", title: "scout", status: "done", finishedAt: "2026-09-03T11:00:00Z", result: "3 threads worth answering.\nAll in r/saas.", acked: false };
+  const doneDeck = nextCards(snap({ ...onb, rooms: [{ place: "saas", state: "yes" }], queue: [qItem], tasks: [finished] }));
+  check("a finished task's result is a card after the people, not before", doneDeck.map((c) => c.kind).slice(0, 2), ["work.reply", "task.done"]);
+  check("...leading with the count, one action", [doneDeck[1].question, doneDeck[1].primary.id], ["3 threads worth answering.", "ack"]);
+  check("...and once acknowledged it is gone", nextCards(snap({ tasks: [{ ...finished, acked: true }] })).some((c) => c.kind === "task.done"), false);
+  const failed = nextCards(snap({ tasks: [{ ...finished, status: "failed", error: "no key" }] })).find((c) => c.kind === "task.failed");
+  check("a failed task says why and offers a retry", [failed.help, failed.primary.id], ["no key", "retry"]);
+
+  // The specialist's proposals and notes ride second, like the verb card.
+  const prop = { question: "Search r/saas for people asking this?", why: "3 posts a day", task: { agent: "reddit", input: { url: "https://www.reddit.com/r/saas/" } } };
+  const withProp = nextCards(snap({ ...onb, rooms: [{ place: "saas", state: "yes" }], queue: [qItem], stash: { ...onb.stash, proposals: [prop] } }));
+  check("a task proposal rides second, behind the top action", [withProp[0].kind, withProp[1].kind], ["work.reply", "cmo.propose"]);
+  check("...naming the colleague it starts", /reddit colleague/.test(withProp[1].help), true);
+  check("a note takes that seat when there is no proposal",
+    nextCards(snap({ stash: { cmo_note: { text: "Two of the six were the same person." } } }))[1].kind, "cmo.note");
+  const ask = nextCards(snap({ stash: { cmo_ask: { id: "a1", questions: [{ id: "room", question: "Which room first?", choices: [{ id: "saas", label: "r/saas" }] }] } } }));
+  check("the specialist's own question is dealt before setup, never interrupting its thread", ask[0].id, "cmo.ask.room");
+}
+
+// The registry reads a colleague off agent.md — a manifest, not a seat it
+// runs — and the definition carries what the runtime screens against.
+{
+  const ringBox = mkdtempSync(join(tmpdir(), "mq-ring-"));
+  const folder = join(ringBox, "skills", "reader");
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, "SKILL.md"), "---\nname: reader\ndescription: reads\n---\n# reader\n");
+  writeFileSync(join(folder, "agent.md"), readFileSync(join(here, "..", "skills", "_template", "agent.md"), "utf8"));
+  const { found } = discoverSkills(null, [{ root: join(ringBox, "skills"), ring: "local" }]);
+  const def = agentDefinition(found[0]);
+  check("a folder with agent.md carries the colleague seat", Object.keys(found[0].seats), ["agent.md"]);
+  check("...read as a definition: name, tools, seat, prompt", [def.name, def.tools, def.model, def.prompt.length > 100], ["page-reader", ["browser.read", "ask_person"], "scout", true]);
+  check("...whose grants are read-only", grantsOf(def.tools.join(",")), ["read"]);
+  writeFileSync(join(folder, "agent.md"), "---\nname: x\n---\nno description");
+  check("a definition without a description is refused, not seated", agentDefinition(discoverSkills(null, [{ root: join(ringBox, "skills"), ring: "local" }]).found[0]), null);
+  check("the template folder itself is never discovered", discoverSkills(null).found.some((s) => s.id === "_template"), false);
+}
 
 /* ---------------------------------------------------------------- persona */
 
@@ -908,17 +1175,148 @@ check("a proposal with a verb outside the law never renders",
   srvS.kill();
 }
 
-// THE DOCTRINE, pinned: only the finding verbs may take the browser lane.
-// sync/check/back measure what a logged-out stranger sees, and a logged-in
-// read would answer that question wrongly while looking right. If this count
-// moves, somebody changed who is allowed to ride the user's session — that
-// must be a decision, not a drive-by.
+// THE DOCTRINE, pinned (0.6.0): the operator's browser is the only way
+// anything here reads a platform. No fetch of a page in the engine, none in
+// the skill, none in the extension — a page is read in a tab a person can
+// watch, or not at all. The visibility verbs ask for the stranger's seat,
+// and the finding verbs never do. If one of these moves, somebody added a
+// second way to read — that must be a decision, not a drive-by.
 {
-  const src = readFileSync(ES, "utf8");
-  check("exactly two call sites — tick and probe — may use the browser lane",
-    (src.match(/fetchAnon\([^)]*relay: true/g) ?? []).length, 2);
-  check("the visibility verbs pass no relay flag at all",
-    (src.match(/fetchAnon\((userFeed|threadFeed|commentFeed)[^)]*relay/g) ?? []).length, 0);
+  const cli = readFileSync(ES, "utf8");
+  check("the CLI fetches nothing but the hub (pull) — every platform read is a lease in the browser",
+    (cli.match(/\bfetch\(/g) ?? []).length, 1);
+  // sync, check, back — and the tick's return pass (0.7.0): four seats.
+  check("the visibility verbs take the stranger's seat; the finding verbs do not",
+    [(cli.match(/lane\(\{ stranger: true/g) ?? []).length, /cmds\.probe[\s\S]*?lane\(\{ task/.test(cli) && !/cmds\.probe[\s\S]*?lane\(\{ stranger: true[\s\S]*?cmds\.found/.test(cli)], [4, true]);
+  const skill = ["adapter.mjs", "pages.mjs", "shapes.mjs"].map((f) => readFileSync(join(here, "..", "skills", "reddit", f), "utf8")).join("\n");
+  check("the reddit skill makes no network call of its own", /\bfetch\(/.test(skill), false);
+  check("...and neither does the site scout", /\bfetch\(/.test(readFileSync(join(here, "..", "lib", "agents.mjs"), "utf8")), false);
+  check("the read lane is gone — no relay module, no relay pass in the extension",
+    [existsSync(join(here, "..", "lib", "relay.mjs")), existsSync(join(here, "..", "extension", "relay.js")), /relayPass/.test(readFileSync(join(here, "..", "extension", "sw.js"), "utf8"))], [false, false, false]);
+}
+
+/* ------------------------------------------------ projects and campaigns */
+
+// A project is a whole data directory; the root is the default one. What
+// crosses the line is short and pinned: the key and the seats, the people
+// already answered, the local ring. Everything else is the project's own.
+{
+  const boxP = mkdtempSync(join(tmpdir(), "mq-proj-"));
+  const RP = join(boxP, ".mq");
+  execFileSync(process.execPath, [ES, "init"], { env: { ...process.env, MQ_DIR: RP }, stdio: "ignore" });
+  writeFileSync(join(RP, "openrouter.key"), "sk-or-test\n");
+  writeFileSync(join(RP, "account.json"), JSON.stringify({ name: "shared_me", platform: "reddit" }));
+  appendFileSync(join(RP, "contacted.jsonl"), JSON.stringify({ author: "ana", id: "t3_a", at: "2026-09-01T00:00:00Z" }) + "\n");
+  writeFileSync(join(RP, "rule.md"), "# Fit rule\n\nOnly for the default project.\n");
+  const esP = (args, stdin) => { try { return execFileSync(process.execPath, [ES, ...args], { env: { ...process.env, MQ_DIR: RP }, input: stdin ?? "", encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }); } catch (e) { return `${e.stdout || ""}${e.stderr || ""}`; } };
+
+  check("a slug is letters, digits and hyphens; the layout's own names are refused", [projectSlug("The Other Product!"), projectSlug("default"), projectSlug("projects"), projectSlug("")], ["the-other-product", "", "", ""]);
+  check("the root is the default project, current until told otherwise", listProjects(RP).map((p) => [p.id, p.current, p.dir === RP]), [["default", true, true]]);
+  const made = createProject(RP, "The Other Product");
+  check("a new project is made complete under projects/<id>/ and switched to", [made.id, made.dir === join(RP, "projects", "the-other-product"), currentDir(RP) === made.dir, isChildProject(made.dir)], ["the-other-product", true, true, true]);
+  check("...with the memory seeds and the store files, and no contacted ledger of its own", [existsSync(join(made.dir, "rule.md")), existsSync(join(made.dir, "found.jsonl")), existsSync(join(made.dir, "rooms")), existsSync(join(made.dir, "contacted.jsonl"))], [true, true, true, false]);
+  check("...its rule.md is the seed, not the default project's", /Only for the default/.test(readFileSync(join(made.dir, "rule.md"), "utf8")), false);
+  check("...and it inherits the operator's account as a copy", JSON.parse(readFileSync(join(made.dir, "account.json"), "utf8")).name, "shared_me");
+  check("a duplicate name is refused", Boolean(createProject(RP, "the other product").error), true);
+  check("the machine's files resolve to the root from a child project", sharedDir(made.dir) === RP && sharedDir(RP) === RP, true);
+  const { readKey } = await import("../lib/models.mjs");
+  check("...so the key is shared", readKey(made.dir), "sk-or-test");
+  const { store: mkStore } = await import("../lib/store.mjs");
+  check("...and so is who was already answered — the same human never twice, in any project", mkStore(made.dir).contacted().has("ana"), true);
+  mkStore(made.dir).append("contacted.jsonl", { author: "bo", id: "t3_b", at: "2026-09-02T00:00:00Z" });
+  check("...written from a child, read at the root", mkStore(RP).contacted().has("bo"), true);
+  check("a bare verb acts on the current project", /the-other-product/.test(esP(["projects"]).split("\n").find((l) => l.startsWith("*")) ?? ""), true);
+  check("switching moves every surface's pointer", [useProject(RP, "default").id, currentDir(RP) === RP, /^\* default/.test(esP(["projects"]))], ["default", true, true]);
+  check("a project that does not exist is refused by name", Boolean(useProject(RP, "nope").error), true);
+  check("MQ_DIR pointed straight at a child project is its own answer — no registry inside one", currentDir(made.dir) === made.dir, true);
+}
+
+// A campaign is a direction, never a template: the file, its hash, and what
+// the writer and the judge are handed.
+{
+  const text = campaignFile({ name: 'Honest comments under "finding clients"', platform: "reddit", status: "active", mention: "disclosed", added: "2026-09-04T20:00:00Z",
+    idea: "Say plainly that most replies they see are generated, that commenting where buyers ask is itself the answer, and that you built a tool for exactly that — offer to try it on their project and ask for feedback.",
+    fit: "People asking where to find their first clients. Not agencies selling it.", never: "Never a link unless they ask." });
+  const c = parseCampaign(text, "honest-comments-under-finding-clients");
+  check("a campaign file round-trips: frontmatter and the three sections", [c.name, c.platform, c.status, c.mention, c.idea.startsWith("Say plainly"), c.fit.startsWith("People asking"), c.never], ['Honest comments under "finding clients"', "reddit", "active", "disclosed", true, true, "Never a link unless they ask."]);
+  check("an unknown mention or status falls back to the house rule — there is no undisclosed setting", [parseCampaign("---\nname: x\nmention: covert\nstatus: on\n---\n# The idea\nfoo").mention, parseCampaign("---\nname: x\nmention: covert\n---\n# The idea\nfoo").status], ["never", "active"]);
+  check("the hash follows the instructions, not the name", [campaignHash(c) === c.hash, campaignHash({ ...c, idea: c.idea + " more" }) === c.hash, campaignHash({ ...c, name: "other" }) === c.hash], [true, false, true]);
+  const block = writerBlock(c, { said: ["hey — most of what you see here is bots, honestly. i built a thing for exactly this", "plain second"] });
+  check("the writer gets the direction as a DIRECTION, the campaign's refusals, and what was already said under it", [/DIRECTION, never a script/.test(block), /Never a link/.test(block), /earlier 1/.test(block) && /earlier 2/.test(block), /eight identical words/.test(block)], [true, true, true, true]);
+  check("the judge gets one line, and only when the campaign narrows the fit", [/narrows the fit: People asking/.test(judgeLine(c)), judgeLine({ ...c, fit: "" })], [true, ""]);
+  check("a disclosed campaign lifts the opener's rule in the disclosed form only", [/SAY IT IS YOURS/.test(signalWritingRules({ intent: "leads", stage: "disclosed", pitch: "x" })), /SELLS NOTHING/.test(signalWritingRules({ intent: "leads", stage: "disclosed", pitch: "x" })), /SELLS NOTHING/.test(signalWritingRules({ intent: "leads", stage: "opener", pitch: "x" }))], [true, false, true]);
+  check("a draft off the deck is capped and slugged", [campaignDraft({ name: "  Big Idea  ", idea: "x".repeat(5000), mention: "covert", place: "r/saas" }).id, campaignDraft({ name: "Big Idea", idea: "x".repeat(5000), mention: "covert" }).idea.length, campaignDraft({ name: "Big Idea", idea: "x", mention: "covert", place: "r/saas" }).mention, campaignDraft({ name: "Big Idea", idea: "x", place: "r/saas" }).place], ["big-idea", 3000, "never", "saas"]);
+  check("the two mention rules are the whole menu", Object.keys(MENTIONS), ["never", "disclosed"]);
+
+  // Through the CLI: a finding under a campaign, judged under its hash,
+  // drafted under its direction with what was said before shown.
+  const boxK = mkdtempSync(join(tmpdir(), "mq-camp-"));
+  const DK = join(boxK, ".mq");
+  execFileSync(process.execPath, [ES, "init"], { env: { ...process.env, MQ_DIR: DK }, stdio: "ignore" });
+  const esK = (args, stdin) => { try { return execFileSync(process.execPath, [ES, ...args], { env: { ...process.env, MQ_DIR: DK }, input: stdin ?? "", encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }); } catch (e) { return `${e.stdout || ""}${e.stderr || ""}`; } };
+  const written = writeCampaign(DK, { name: "Honest comments", platform: "reddit", mention: "disclosed", idea: c.idea, fit: c.fit, never: c.never });
+  check("a campaign is written by a person's Save, under campaigns/<id>.md", [written.id, existsSync(join(DK, "campaigns", "honest-comments.md")), readCampaigns(DK).length], ["honest-comments", true, 1]);
+  check("...and a campaign with no idea is refused", Boolean(writeCampaign(DK, { name: "Empty" }).error), true);
+  check("the CLI lists it", /on  honest-comments/.test(esK(["campaigns"])), true);
+  const rec = esK(["found"], JSON.stringify({ place: "saas", q: "find clients", campaign: "honest-comments", items: [{ url: "https://www.reddit.com/r/saas/comments/c1/where_do_i_find_clients/", title: "where do I find clients", author: "u/cara", body: "launched last week, zero users" }] }));
+  check("a colleague's findings are recorded under the campaign", /1 new post recorded from r\/saas for "find clients" under honest-comments/.test(rec), true);
+  check("...a campaign that does not exist is said so, and the finding kept under the general fit", /no campaign "nope"/.test(esK(["found"], JSON.stringify({ place: "saas", campaign: "nope", items: [{ url: "https://www.reddit.com/r/saas/comments/c2/x/", title: "x" }] }))), true);
+  const rowsK = readFileSync(join(DK, "found.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  check("...the rows say which", [rowsK[0].campaign, rowsK[1].campaign], ["honest-comments", undefined]);
+  esK(["judge"], JSON.stringify([{ n: 1, fit: true, why: "asks" }, { n: 2, fit: true, why: "asks" }]));
+  const vK = readFileSync(join(DK, "verdicts.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  check("a verdict under a campaign carries the campaign's rubric hash beside rule.md's", [vK[0].campaign, vK[0].campaign_hash === written.hash, /^[0-9a-f]{8}$/.test(vK[0].rule), vK[1].campaign], ["honest-comments", true, true, undefined]);
+  writeFileSync(join(DK, "rooms", "saas.md"), "promotion_allowed: yes\n");
+  esK(["draft", "t3_c1", "--save"], "hey — most of what you see here is bots. i built a small tool for exactly this problem");
+  const material = esK(["draft", "t3_c1"]);
+  check("the writer's material names the campaign, its direction, and the disclosed rule", [/Campaign: Honest comments \(honest-comments, mention: disclosed\)/.test(material), /## The campaign/.test(material), /SAY IT IS YOURS/.test(material), /SELLS NOTHING/.test(material)], [true, true, true, false]);
+  const d2 = esK(["found"], JSON.stringify({ place: "saas", q: "find clients", campaign: "honest-comments", items: [{ url: "https://www.reddit.com/r/saas/comments/c3/first_users/", title: "first users", author: "u/dan", body: "how do I find people" }] }));
+  esK(["judge"], JSON.stringify([{ n: 1, fit: true, why: "asks" }]));
+  const material2 = esK(["draft", "t3_c3"]);
+  check("...and what was already said under the campaign, so 'in your own words' is checkable", /earlier 1 ---\nhey — most of what you see here is bots/.test(material2), true);
+  const saved = esK(["draft", "t3_c3", "--save"], "hey — most of what you see here is bots. i built a small tool for exactly this problem too");
+  check("a draft that repeats the earlier one is flagged on save — the template guard is the enforcement", /REPEATED PHRASING/.test(saved) && /never a template/.test(saved), true);
+  check("...and the saved draft carries the campaign", readFileSync(join(DK, "drafts.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l).campaign), ["honest-comments", "honest-comments"]);
+  check("watching under a campaign records it on the source", (() => { esK(["watch", "saas", "--q", "find clients", "--campaign", "honest-comments"]); return JSON.parse(readFileSync(join(DK, "sources.jsonl"), "utf8").trim().split("\n").pop()).campaign; })(), "honest-comments");
+  check("a paused campaign says so", [/off honest-comments/.test((esK(["campaign", "pause", "honest-comments"]), esK(["campaigns"]))), readCampaign(DK, "honest-comments").status], [true, "paused"]);
+}
+
+// The heart carries no platform word: labels come from the adapter, with
+// plain fallbacks, and the composer's words ride on the reply card.
+{
+  const L = labelsOf(first());
+  check("the platform's labels come from its adapter", [L.id, L.room("saas"), L.rulesUrl("saas"), /Reddit/.test(L.account.question)], ["reddit", "r/saas", "https://www.reddit.com/r/saas/about/rules", true]);
+  const G = labelsOf(null);
+  check("...and a platform with none still reads as English", [G.room("saas"), G.rulesUrl("saas"), G.account.question, G.submit], ["saas", null, "Which account is yours?", "the platform's own button"]);
+  check("the composer the Insert flow looks for is the platform's, off the url", composerOf("https://www.reddit.com/r/x/comments/1/t/").hosts, ["shreddit-composer", "comment-composer-host"]);
+  const generic = nextCards({ ...snap({ account: { name: "x" }, stash: allVoice, memory: memDone, sources: [{ place: "saas" }], rooms: [{ place: "saas", state: "unanswered" }] }) })[0];
+  check("a card without a platform names the room plainly", [generic.eyebrow, generic.links], ["saas", undefined]);
+  const labelled = nextCards({ ...snap({ platform: L, account: { name: "x" }, stash: allVoice, memory: memDone, sources: [{ place: "saas" }], rooms: [{ place: "saas", state: "unanswered" }] }) })[0];
+  check("...and with one, the platform's words and its rules page", [labelled.eyebrow, labelled.links[0].href], ["r/saas", "https://www.reddit.com/r/saas/about/rules"]);
+  const reply = nextCards(snap({ platform: L, account: { name: "x" }, stash: { ...allVoice, welcomed: true }, memory: memDone, sources: [{ place: "saas" }], rooms: [{ place: "saas", state: "allowed" }], queue: [{ ...qItem, campaign: "honest-comments", composer: composerOf(qItem.url) }] }))[0];
+  check("the reply card carries the composer, the platform's button, and the campaign", [reply.data.insert.opens.length > 0, reply.data.submit, /honest-comments/.test(reply.eyebrow)], [true, "Reddit's own Comment button", true]);
+  check("the heart's card module names no platform of its own", /reddit|subreddit/i.test(readFileSync(join(here, "..", "lib", "cards.mjs"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "")), false);
+}
+
+// The campaign walk-through on the deck: one card per thing to settle, a
+// field for the operator's own words on each, the file written by the last
+// Save — and a question with choices always takes a custom answer too.
+{
+  const draft = { name: "Honest comments", id: "honest-comments", idea: "say it plainly", fit: "", mention: "disclosed", place: "saas", q: "find clients", why: "because", done: [] };
+  const base = { account: { name: "x" }, stash: { ...allVoice, welcomed: true, campaign_draft: draft }, memory: memDone, sources: [{ place: "sideproject" }], rooms: [{ place: "sideproject", state: "allowed" }] };
+  const walk = (done) => nextCards(snap({ ...base, stash: { ...base.stash, campaign_draft: { ...draft, done } } }))[0];
+  check("the walk deals the idea first, seeded with the proposal, with a way out", [walk([]).id, walk([]).field.value, walk([]).secondary.id, walk([]).progress], ["campaign.idea", "say it plainly", "drop", { step: 1, of: 5 }]);
+  check("...then who it fits, the mention rule (proposed first), the room with the rooms it knows and a field, the phrase", [walk(["idea"]).id, walk(["idea", "fit"]).choices.map((c) => c.id), walk(["idea", "fit", "mention"]).choices.map((c) => c.id), Boolean(walk(["idea", "fit", "mention"]).field), walk(["idea", "fit", "mention", "room"]).id], ["campaign.fit", ["disclosed", "never"], ["saas", "sideproject"], true, "campaign.phrase"]);
+  check("...and outranks the queue and setup — the operator asked for it — but not a colleague waiting on them",
+    [nextCards(snap({ ...base, queue: [qItem] }))[0].id, nextCards(snap(base)).map((c) => c.id).indexOf("campaign.idea"), nextCards(snap({ ...base, tasks: [{ id: "t1", title: "scout", status: "blocked", askedAt: "2026-09-04T00:00:00Z", questions: [{ id: "q", question: "A wall?" }], answers: {} }] }))[0].kind],
+    ["campaign.idea", 0, "task.ask"]);
+  const q = questionCards([{ id: "which", question: "Which first?", choices: [{ id: "a", label: "A" }, { id: "b", label: "B" }] }], {}, { prefix: "cmo.ask" });
+  check("a question with choices always takes an answer in the operator's own words", [q.choices.length, q.field.placeholder], [2, "Or answer in your own words"]);
+  check("...unless the question says its choices are the whole answer", questionCards([{ id: "w", question: "?", choices: [{ id: "a", label: "A" }], field: false }], {}, { prefix: "x" }).field, undefined);
+  const probing = nextCards(snap({ ...base, stash: { ...allVoice, welcomed: true, probe: { place: "saas", q: "find clients", fired: true, campaign: "honest-comments" } }, probe: { running: true } }))[0];
+  check("a campaign's probe deals its cards on a project that already watches something", [probing.id, /honest-comments/.test(probing.eyebrow)], ["onboard.probing", true]);
+  const landed = nextCards(snap({ ...base, stash: { ...allVoice, welcomed: true, probe: { place: "saas", q: "find clients", fired: true, campaign: "honest-comments" } }, probe: { running: false, fitRate: 0.5 } }))[0];
+  check("...and the watch card names the campaign it will watch under", [landed.id, landed.primary.id, /honest-comments/.test(landed.eyebrow)], ["onboard.watch", "watch", true]);
 }
 
 /* -------------------------------------------------------------- the plans */
@@ -1023,7 +1421,8 @@ check("a proposal with a verb outside the law never renders",
   const D4 = join(box4, ".mq");
   execFileSync(process.execPath, [ES, "init"], { env: { ...process.env, MQ_DIR: D4 }, stdio: "ignore" });
   writeFileSync(join(D4, "account.json"), JSON.stringify({ name: "ghost_42", added: "2026-08-31T00:00:00Z" }));
-  appendFileSync(join(D4, "reads.jsonl"), JSON.stringify({ url: "https://www.reddit.com/user/ghost_42.rss?limit=100", at: "2026-09-01T14:33:51Z", ok: false, err: "http_404", n: 0 }) + "\n");
+  // The read ledger's key is the page the stranger's seat opened (0.6.0).
+  appendFileSync(join(D4, "reads.jsonl"), JSON.stringify({ url: "https://www.reddit.com/user/ghost_42/comments/", at: "2026-09-01T14:33:51Z", ok: false, err: "http_404", n: 0, via: "stranger" }) + "\n");
   const st = esFails2(["status"], D4);
   check("`status` after a 404 profile read reports the finding, not 'nothing stored'", /404 — logged out/.test(st) && !/nothing stored yet/.test(st), true);
   check("...with the appeal address and the date of the read", /reddit\.com\/appeals/.test(st) && /2026-09-01 14:33/.test(st), true);
@@ -1037,7 +1436,7 @@ check("a proposal with a verb outside the law never renders",
   if (!base4) { console.log("FAIL  the 404 dashboard did not start"); fail++; }
   else {
     const G4 = async (p) => { const r = await fetch(base4 + p); return { status: r.status, body: await r.text() }; };
-    const home = await G4("/");
+    const home = await G4("/standing");
     check("the Standing page says the profile does not render", /does not render/.test(home.body) && !/Nothing stored yet/.test(home.body), true);
     check("...and Ready says the same, not 'no standing measured'", /does not render/.test((await G4("/ready")).body), true);
     // Settings on each plan renders, and a plan switch is one POST.
@@ -1048,6 +1447,190 @@ check("a proposal with a verb outside the law never renders",
       /nothing is listening at http:\/\/127\.0\.0\.1:11434\/v1/.test((await G4("/settings")).body), true);
   }
   srv4.kill();
+}
+
+/* ------------------------------------------- rules before watch (2026-09-04) */
+
+// The done-when run found the deck's watch step looping: `mq watch` refuses
+// a room whose rules nobody recorded, the job said ok, the deck went back to
+// the room card. Now the probed room is on the rooms list — its rules card
+// is dealt before the watch card — the handler refuses an unanswered or
+// forbidden room in words, and the watch carries the probed phrase.
+{
+  const boxW = mkdtempSync(join(tmpdir(), "mq-watch-"));
+  const DWr = join(boxW, ".mq");
+  execFileSync(process.execPath, [ES, "init"], { env: { ...process.env, MQ_DIR: DWr }, stdio: "ignore" });
+  writeFileSync(join(DWr, "account.json"), JSON.stringify({ name: "watcher_7", added: "2026-09-04T00:00:00Z" }));
+  writeFileSync(join(DWr, "project.md"), "# What we sell\n\nA small tool that finds the people asking for what you built.\n");
+  writeFileSync(join(DWr, "icp.md"), "# Who it is for\n\nA builder who just launched and has no idea where the first users are.\n");
+  writeFileSync(join(DWr, "rule.md"), "# Fit rule\n\nYes when the author just launched and asks where to find users. No otherwise.\n");
+  writeFileSync(join(DWr, "cards.json"), JSON.stringify({ probe: { place: "testroom", q: "find clients", fired: true } }));
+  // Two probed posts, both judged fit: the floor the watch verb checks is cleared.
+  for (const id of ["t3_w1", "t3_w2"]) {
+    appendFileSync(join(DWr, "found.jsonl"), JSON.stringify({ id, place: "testroom", url: `https://www.reddit.com/r/testroom/comments/${id.slice(3)}/x/`, author: "a", title: "just launched, where are the users", body: "", probe: "testroom:find clients", at: "2026-09-04T00:00:00Z" }) + "\n");
+    appendFileSync(join(DWr, "verdicts.jsonl"), JSON.stringify({ id, fit: true, why: "asks where the users are", rule: "test", at: "2026-09-04T00:00:01Z" }) + "\n");
+  }
+  const srvW = spawn(process.execPath, [SERVE, "--port", "0"], { env: { ...process.env, MQ_DIR: DWr }, stdio: ["ignore", "pipe", "pipe"] });
+  const baseW = await new Promise((resolve) => {
+    let out = "";
+    const t = setTimeout(() => resolve(null), 8000);
+    srvW.stdout.on("data", (d) => { out += d; const m = out.match(/http:\/\/127\.0\.0\.1:(\d+)/); if (m) { clearTimeout(t); resolve(`http://127.0.0.1:${m[1]}`); } });
+  });
+  if (!baseW) { console.log("FAIL  the watch dashboard did not start"); fail++; }
+  else {
+    const actW = async (body) => { const r = await fetch(baseW + "/api/cards/act", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); return r.json(); };
+    const deckW = async () => (await (await fetch(baseW + "/api/cards")).json()).cards.map((c) => c.id);
+    check("the probed room's rules card is dealt before it is watched", (await deckW()).includes("room.rules.testroom"), true);
+    check("the watch card refuses, in words, while the rules are unanswered", /rules first/.test((await actW({ card: "onboard.watch", action: "watch" })).error ?? ""), true);
+    await actW({ card: "room.rules.testroom", action: "record", choice: "no" });
+    check("...and a room whose rules forbid it", /forbid/.test((await actW({ card: "onboard.watch", action: "watch" })).error ?? ""), true);
+    check("...writing no source either way", existsSync(join(DWr, "sources.jsonl")) ? readFileSync(join(DWr, "sources.jsonl"), "utf8").trim() : "", "");
+    await actW({ card: "room.rules.testroom", action: "record", choice: "yes" });
+    check("with the rules recorded the watch goes through", (await actW({ card: "onboard.watch", action: "watch" })).ok, true);
+    let src = "";
+    for (let i = 0; i < 40 && !src; i++) { await new Promise((r) => setTimeout(r, 250)); src = existsSync(join(DWr, "sources.jsonl")) ? readFileSync(join(DWr, "sources.jsonl"), "utf8").trim() : ""; }
+    check("...watched the way it was measured, phrase and all", /"q":"find clients"/.test(src) && /"place":"testroom"/.test(src), true);
+  }
+  srvW.kill();
+}
+
+/* --------------------------------------------------- the return (0.7.0) */
+
+// A conversation opens on "I posted it" with what actually went up, binds
+// to the operator's own comment when the profile is read, folds each return
+// read in, and deals a turn card BEFORE any new person. Tracking is the
+// engine's and deterministic; the specialist is reminded by the digest.
+{
+  const boxR = mkdtempSync(join(tmpdir(), "mq-return-"));
+  const DR = join(boxR, ".mq");
+  execFileSync(process.execPath, [ES, "init"], { env: { ...process.env, MQ_DIR: DR }, stdio: "ignore" });
+  const esR = (args, stdin) => { try { return execFileSync(process.execPath, [ES, ...args], { env: { ...process.env, MQ_DIR: DR }, input: stdin ?? "", encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }); } catch (e) { return `${e.stdout || ""}${e.stderr || ""}`; } };
+  writeFileSync(join(DR, "account.json"), JSON.stringify({ name: "Ret_Tester", added: "2026-09-06T00:00:00Z" }));
+  const SR = store(DR);
+  appendFileSync(join(DR, "found.jsonl"), JSON.stringify({ id: "t3_r1", place: "saas", url: "https://www.reddit.com/r/saas/comments/r1/where_are_the_users/", author: "cara", title: "where are the users", body: "launched last week, zero users", probe: "saas:find clients", campaign: "honest-comments", seen_at: "2026-09-06T01:00:00Z", comments: 14 }) + "\n");
+  appendFileSync(join(DR, "verdicts.jsonl"), JSON.stringify({ id: "t3_r1", fit: true, why: "asks", rule: "test", at: "2026-09-06T01:00:01Z" }) + "\n");
+  writeCampaign(DR, { name: "Honest comments", platform: "reddit", mention: "disclosed", idea: "say plainly that most answers here are generated", voice: "dry, short sentences" });
+  writeFileSync(join(DR, "rooms", "saas.md"), "promotion_allowed: yes\n");
+  check("a campaign may carry a voice of its own, and the writer is told it sits under the measured one", [readCampaign(DR, "honest-comments").voice, /How it sounds under this campaign/.test(writerBlock(readCampaign(DR, "honest-comments")))], ["dry, short sentences", true]);
+  esR(["draft", "t3_r1", "--save"], "most of what you see here is generated. i built a small tool for exactly this");
+  esR(["mark", "t3_r1", "sent", "--anyway"]);
+  const convs = () => conversationRows(SR);
+  check("'I posted it' opens a conversation with the draft as the first turn", [convs().get("t3_r1")?.state, convs().get("t3_r1")?.turns?.[0]?.by, /generated/.test(convs().get("t3_r1")?.turns?.[0]?.text ?? ""), convs().get("t3_r1")?.campaign], ["sent", "you", true, "honest-comments"]);
+  check("...and it is unbound until the profile is read", [unbound(SR).length, dueConversations(SR).length], [1, 0]);
+  // The operator's own comments, as sync stores them: one in the thread after
+  // the post, one older in the same thread.
+  // The opener was posted just now (the mark above), so the comment that
+  // binds is the one written after it — a minute from now on this clock.
+  appendFileSync(join(DR, "items.jsonl"), JSON.stringify({ id: "t1_mine1", kind: "comment", url: "https://www.reddit.com/r/saas/comments/r1/where_are_the_users/mine1/", author: "Ret_Tester", at: new Date(Date.now() + 60_000).toISOString(), body: "most of what you see here is generated", seen_at: "2026-09-06T03:00:00Z", source: "profile" }) + "\n");
+  appendFileSync(join(DR, "items.jsonl"), JSON.stringify({ id: "t1_old", kind: "comment", url: "https://www.reddit.com/r/saas/comments/r1/where_are_the_users/old/", author: "Ret_Tester", at: "2026-08-01T02:00:00Z", body: "an older comment in the same thread", seen_at: "2026-09-06T03:00:00Z", source: "profile" }) + "\n");
+  const bound = bindConversations(SR, { threadOf: (x) => threadOf(x) });
+  check("a profile read binds it to the comment in the same thread written after the post — not the older one", [bound, convs().get("t3_r1")?.comment_id, convs().get("t3_r1")?.state], [1, "t1_mine1", "quiet"]);
+  check("...and now it is due a look", dueConversations(SR).length, 1);
+  const focused = { ok: true, entries: [
+    { id: "t1_mine1", kind: "comment", author: "Ret_Tester", body: "most of what you see here is generated", at: "2026-09-06T02:00:00Z", url: "https://www.reddit.com/r/saas/comments/r1/where_are_the_users/mine1/" },
+    { id: "t1_theirs", kind: "comment", author: "cara", body: "wait, is that true? what tool?", at: "2026-09-06T05:00:00Z", url: "https://www.reddit.com/r/saas/comments/r1/where_are_the_users/theirs/" },
+  ] };
+  const c1 = conversation({ id: "t1_mine1", url: focused.entries[0].url }, focused, "ret_tester");
+  const r1 = recordReturn(SR, convs().get("t3_r1"), c1, { at: "2026-09-06T06:00:00Z" });
+  check("a reply folds in as their turn, waiting, and is fresh once", [r1.fresh, r1.row.state, r1.row.turns.length, r1.row.turns[1].by, r1.row.latest.author], [true, "waiting", 2, "them", "cara"]);
+  const r2 = recordReturn(SR, convs().get("t3_r1"), c1, { at: "2026-09-06T07:00:00Z" });
+  check("...the same reply read again is not fresh, not a second turn, and not due for twelve hours", [r2.fresh, r2.row.turns.length, dueConversations(SR, { now: Date.parse("2026-09-06T08:00:00Z") }).length, dueConversations(SR, { now: Date.parse("2026-09-06T20:00:00Z") }).length], [false, 2, 0, 1]);
+  check("waiting lists it, and the CLI prints it", [waitingRows(SR).map((c) => c.id), /u\/cara in r\/saas/.test(esR(["waiting"])), JSON.parse(esR(["waiting", "--json"]))[0].they_said], [["t3_r1"], true, "wait, is that true? what tool?"]);
+  const m2 = esR(["draft", "t3_r1"]);
+  check("the next draft is turn 2: the exchange, what they wrote back, the conversation rules — not the opener's", [/turn 2/.test(m2), /## The exchange so far/.test(m2), /answer THIS/.test(m2), /They wrote back, so this is a conversation/.test(m2), /SELLS NOTHING/.test(m2)], [true, true, true, true, false]);
+  esR(["draft", "t3_r1", "--save"], "yes — i built it, it's called x. happy to show you if you want");
+  const rowsD = readFileSync(join(DR, "drafts.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  check("...and the saved draft carries the turn", rowsD.map((d) => d.turn), [1, 2]);
+  const m3 = esR(["draft", "t3_r1", "--note", "too eager — answer the question, drop the offer"]);
+  check("a rewrite note reaches the writer with the rejected draft, above everything but the refusals", [/What the operator said about the last draft/.test(m3), /too eager/.test(m3), /--- rejected ---\nyes — i built it/.test(m3)], [true, true, true]);
+  recordTurn(SR, convs().get("t3_r1"), { text: "yes, i built it", at: "2026-09-06T09:00:00Z" });
+  check("the operator's answer is their second turn and the conversation is answered", [convs().get("t3_r1").state, yourTurns(convs().get("t3_r1"))], ["answered", 2]);
+  const dg = campaignDigest(SR, readCampaigns(DR));
+  const hc = dg.find((r) => r.id === "honest-comments");
+  check("the digest counts per campaign: found, fit, sent, replied, second turns, waiting, crowding", [hc.found, hc.fit, hc.sent, hc.replies, hc.second, hc.waiting, hc.crowd], [1, 1, 1, 1, 1, 0, 14]);
+  check("...and says it in words", /Honest comments \(honest-comments, active\): 1 found, 1 judged, 1 fit \(100%\), 1 sent, 1 replied, 1 reached a second turn, 0 waiting on you, crowding 14/.test(digestText(dg)), true);
+  check("a tick with nothing due still writes the day's digest into the specialist's inbox — once in twenty hours", (() => { esR(["tick"]); esR(["tick"]); const ev = readFileSync(join(DR, "inbox.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l)); return [ev.filter((e) => e.type === "day.digest").length, /waiting on you/.test(ev[0].title), Array.isArray(ev[0].campaigns)]; })(), [1, true, true]);
+  appendFileSync(join(DR, "found.jsonl"), JSON.stringify({ id: "t3_r2", place: "saas", url: "https://www.reddit.com/r/saas/comments/r2/x/", author: "dan", title: "x", body: "y", probe: "saas:find clients", seen_at: "2026-09-06T01:00:00Z", comments: 3, posted_at: "2026-09-06T00:30:00Z" }) + "\n");
+  writeFileSync(join(DR, "pending.json"), JSON.stringify([{ n: 1, id: "t3_r2", probe: "saas:find clients" }]));
+  check("pending carries the crowding number to the judge", JSON.parse(esR(["pending"]))[0].comments, 3);
+  closeConversation(SR, convs().get("t3_r1"));
+  check("let go is closed, and closed is neither waiting nor due", [convs().get("t3_r1").state, waitingRows(SR).length, dueConversations(SR).length], ["closed", 0, 0]);
+  check("a campaign can be paused, and paused is not active", [esR(["campaign", "pause", "honest-comments"]) && readCampaign(DR, "honest-comments").status, readCampaigns(DR).filter((c) => c.status === "active").length], ["paused", 0]);
+}
+
+// The deck: a reply waiting deals before a new person; Rewrite is on the
+// reply card and deals a note card; the specialist's status proposal and
+// the clock's card.
+{
+  const person = { id: "t3_q", place: "saas", url: "https://www.reddit.com/r/saas/comments/q/x/", author: "a", title: "t", body: "b", why: "asks", draft: { text: "a draft" }, readyState: "ready", blockedWhy: null };
+  const conv = { id: "t3_c", author: "cara", place: "saas", url: "https://www.reddit.com/r/saas/comments/r1/x/theirs/", campaign: "honest-comments", latest: { text: "what tool?\nand does it work", at: "2026-09-06T05:00:00Z", author: "cara" }, said: "most of it is generated", turn: 2, draft: null, composer: null };
+  const d1 = nextCards(snap({ hasModel: true, queue: [person], conversations: [conv] }));
+  check("somebody who wrote back outranks a new person, and the card offers to write the turn", [d1[0].id, d1[0].kind, d1[0].question, d1[0].primary.id, /You said: most of it is generated/.test(d1[0].help), /turn 2/.test(d1[0].eyebrow), d1[1].id], ["work.turn.t3_c", "work.turn", "what tool?", "draft", true, true, "work.reply.t3_q"]);
+  const d2 = nextCards(snap({ hasModel: true, conversations: [{ ...conv, draft: { text: "yes, i built it", flags: null } }] }));
+  check("...with a draft for this turn it is the control panel: the field, Insert, I posted it, Rewrite, Let it go", [d2[0].field.value, d2[0].primary.id, d2[0].actions.map((a) => a.id), d2[0].secondary.id, d2[0].data.client, d2[0].data.turn], ["yes, i built it", "insert", ["posted", "rewrite"], "skip", "insert", 2]);
+  const reply = nextCards(snap({ hasModel: true, queue: [person] })).find((c) => c.kind === "work.reply");
+  check("the reply card gained Rewrite", reply.actions.map((a) => a.id), ["posted", "rewrite"]);
+  const d3 = nextCards(snap({ hasModel: true, queue: [person], conversations: [conv], stash: { rewrite: { id: "t3_q", prior: "a draft", who: "u/a" } } }));
+  check("a rewrite the operator asked for deals first, with a field for the note and the rejected draft in view", [d3[0].id, d3[0].primary.id, d3[0].secondary.id, /a draft/.test(d3[0].help), d3[0].field.multiline], ["work.rewrite.t3_q", "rewrite", "keep", true, true]);
+  const d4 = nextCards(snap({ stash: { campaign_status_draft: { id: "hc", name: "Honest comments", status: "paused", why: "crowding went from 3 to 14 in a week" } } }));
+  check("the specialist's status proposal is one card: pause it, or leave it", [d4[0].id, d4[0].primary.label, d4[0].secondary.id, /crowding/.test(d4[0].help)], ["campaign.status", "Pause it", "leave", true]);
+  check("...and it is a suggestion: a person waiting and a person worth answering both deal before it", nextCards(snap({ hasModel: true, queue: [person], conversations: [conv], stash: { campaign_status_draft: { id: "hc", name: "Honest comments", status: "paused", why: "saturated" } } })).map((c) => c.id).slice(0, 3), ["work.turn.t3_c", "work.reply.t3_q", "campaign.status"]);
+  check("a person who wrote back outranks even a campaign walk; the walk still outranks the queue", nextCards(snap({ hasModel: true, queue: [person], conversations: [conv], stash: { campaign_draft: { name: "The real read", id: "the-real-read", idea: "one true observation", mention: "disclosed", place: "saas", q: "feedback", why: "the gap", done: [] } } })).map((c) => c.id).slice(0, 3), ["work.turn.t3_c", "campaign.idea", "work.reply.t3_q"]);
+  // Onboarded: an account, the files, a source, the voice habits answered.
+  const ready = { account: { name: "x" }, itemCount: 3, sources: [{ id: "s", place: "saas" }], rooms: [{ place: "saas", state: "allowed" }], stash: { voice_done: voiceQuestions(null).map((q) => q.key), welcomed: true }, memory: { done: 4, total: 4, files: [{ file: "rule.md", filled: true }, { file: "project.md", filled: true }, { file: "icp.md", filled: true }, { file: "me.md", filled: true }] } };
+  const d5 = nextCards(snap({ ...ready, due: { sources: 2, conversations: 1, unbound: 1, running: false } }));
+  check("the clock's card: what is due, computed, with the profile read named when a posted reply is unbound", [d5[0].id, d5[0].question, /2 watched rooms and 1 conversation to look at/.test(d5[0].help), /1 posted reply not yet found on your profile/.test(d5[0].help), d5[0].primary.id], ["work.due", "3 reads are due.", true, true, "tick"]);
+  check("...not while a read runs, not while snoozed, not when nothing is due", [nextCards(snap({ ...ready, due: { sources: 2, conversations: 0, unbound: 0, running: true } }))[0].id, nextCards(snap({ ...ready, due: { sources: 2, conversations: 0, unbound: 0, running: false }, stash: { ...ready.stash, due_later: new Date().toISOString() } }))[0].id, nextCards(snap({ ...ready, due: { sources: 0, conversations: 0, unbound: 0, running: false } }))[0].id], ["work.quiet", "work.quiet", "work.quiet"]);
+}
+
+// Through the server: "I posted it" from the panel opens the conversation
+// with the words as edited; Rewrite deals the note; the four pages render
+// with the return on them.
+{
+  const boxV = mkdtempSync(join(tmpdir(), "mq-today-"));
+  const DV = join(boxV, ".mq");
+  execFileSync(process.execPath, [ES, "init"], { env: { ...process.env, MQ_DIR: DV }, stdio: "ignore" });
+  writeFileSync(join(DV, "account.json"), JSON.stringify({ name: "today_7", added: "2026-09-06T00:00:00Z" }));
+  writeFileSync(join(DV, "rooms", "saas.md"), "promotion_allowed: yes\n");
+  appendFileSync(join(DV, "found.jsonl"), JSON.stringify({ id: "t3_v1", place: "saas", url: "https://www.reddit.com/r/saas/comments/v1/x/", author: "vera", title: "where are the users", body: "zero users", probe: "saas:find clients", seen_at: "2026-09-06T01:00:00Z", comments: 2 }) + "\n");
+  appendFileSync(join(DV, "verdicts.jsonl"), JSON.stringify({ id: "t3_v1", fit: true, why: "asks", rule: "test", at: "2026-09-06T01:00:01Z" }) + "\n");
+  appendFileSync(join(DV, "drafts.jsonl"), JSON.stringify({ id: "t3_v1", url: "https://www.reddit.com/r/saas/comments/v1/x/", text: "the machine's draft", at: "2026-09-06T01:30:00Z", turn: 1, flags: {} }) + "\n");
+  const SV = store(DV);
+  const srvV = spawn(process.execPath, [SERVE, "--port", "0"], { env: { ...process.env, MQ_DIR: DV }, stdio: ["ignore", "pipe", "pipe"] });
+  const baseV = await new Promise((resolve) => {
+    let out = "";
+    const t = setTimeout(() => resolve(null), 8000);
+    srvV.stdout.on("data", (d) => { out += d; const m = out.match(/http:\/\/127\.0\.0\.1:(\d+)/); if (m) { clearTimeout(t); resolve(`http://127.0.0.1:${m[1]}`); } });
+  });
+  if (!baseV) { console.log("FAIL  the today dashboard did not start"); fail++; }
+  else {
+    const actV = async (body) => { const r = await fetch(baseV + "/api/cards/act", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); return r.json(); };
+    const GV = async (p) => { const r = await fetch(baseV + p); return { status: r.status, body: await r.text() }; };
+    const deckV = async () => (await (await fetch(baseV + "/api/cards")).json()).cards;
+    check("the reply card is dealt with Rewrite on it", (await deckV())[0].actions.map((a) => a.id), ["posted", "rewrite"]);
+    await actV({ card: "work.reply.t3_v1", action: "rewrite", text: "the machine's draft" });
+    check("Rewrite deals the note card, and Keep clears it", [(await deckV())[0].id, (await actV({ card: "work.rewrite.t3_v1", action: "keep" })).ok, (await deckV())[0].id], ["work.rewrite.t3_v1", true, "work.reply.t3_v1"]);
+    check("...and a rewrite with no note is refused in words", /say what should change/.test((await (async () => { await actV({ card: "work.reply.t3_v1", action: "rewrite" }); return actV({ card: "work.rewrite.t3_v1", action: "rewrite", text: "" }); })()).error ?? ""), true);
+    await actV({ card: "work.reply.t3_v1", action: "posted", text: "my own words, edited on the card" });
+    const cv = conversationRows(SV).get("t3_v1");
+    check("'I posted it' from the panel opens the conversation with the words as edited, not the machine's draft", [cv?.state, cv?.turns?.[0]?.text, cv?.turns?.[0]?.via], ["sent", "my own words, edited on the card", "panel"]);
+    // Somebody wrote back: seed the bound, waiting row the return pass would write.
+    SV.append("conversations.jsonl", { ...cv, comment_id: "t1_v1mine", state: "waiting", checked_at: "2026-09-06T06:00:00Z", latest: { author: "vera", text: "which tool?", at: "2026-09-06T05:00:00Z", url: "https://www.reddit.com/r/saas/comments/v1/x/vera/" }, turns: [...cv.turns, { by: "them", author: "vera", text: "which tool?", at: "2026-09-06T05:00:00Z", url: "https://www.reddit.com/r/saas/comments/v1/x/vera/" }] });
+    const turn = (await deckV())[0];
+    check("the turn card is dealt, with their reply and the operator's own words", [turn.id, turn.question, /You said: my own words, edited on the card/.test(turn.help), turn.data.url], ["work.turn.t3_v1", "which tool?", true, "https://www.reddit.com/r/saas/comments/v1/x/vera/"]);
+    const today = await GV("/");
+    check("Today shows the next card, who is waiting, what is due and the queue", [today.status, /<h1>Today<\/h1>/.test(today.body), /Waiting for you/.test(today.body), /u\/vera/.test(today.body), /which tool\?/.test(today.body), /read is due|reads are due|Nothing is due/.test(today.body), /Open the panel/.test(today.body)], [200, true, true, true, true, true, true]);
+    check("the nav is four questions", [/>Today<\/a>/.test(today.body), />People<\/a>/.test(today.body), />Campaigns<\/a>/.test(today.body), />You<\/a>/.test(today.body), />Prospects<\/a>/.test(today.body), />Tasks<\/a>/.test(today.body)], [true, true, true, true, false, false]);
+    const people = await GV("/people?view=waiting");
+    check("People has a Waiting for you tab that lists them", [people.status, /u\/vera/.test(people.body), /you said: my own words/.test(people.body)], [200, true, true]);
+    const you = await GV("/you");
+    check("You is a hub: the account, the voice, what it knows, the models, and the advanced doors", [you.status, /today_7/.test(you.body), /What it knows about you/.test(you.body), /Advanced/.test(you.body), /href="\/tasks"/.test(you.body)], [200, true, true, true, true]);
+    check("the older pages still answer, under their question", [(await GV("/standing")).status, (await GV("/tasks")).status, (await GV("/sources")).status, /class="on" href="\/you"/.test((await GV("/settings")).body), /class="on" href="\/people"/.test((await GV("/queue")).body)], [200, 200, 200, true, true]);
+    await actV({ card: "work.turn.t3_v1", action: "posted", text: "it is called x" });
+    const cv2 = conversationRows(SV).get("t3_v1");
+    check("'I posted it' on the turn records the operator's words as their next turn", [cv2.state, cv2.turns.length, cv2.turns[2].text, (await deckV())[0].id !== "work.turn.t3_v1"], ["answered", 3, "it is called x", true]);
+  }
+  srvV.kill();
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

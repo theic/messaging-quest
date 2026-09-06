@@ -11,9 +11,12 @@ skills/<id>/
                  (door: lib/platform.mjs)
   page.mjs       optional seat: a DASHBOARD SCREEN
                  (door: bin/serve.mjs)
-  agent.mjs      optional seat: a SUBAGENT for the strategist
+  agent.mjs      optional seat: a SUBAGENT for the strategist, inside a turn
                  (door: agent/strategist.mjs — the one place that owns
                  the LangChain runtime; your module stays bare Node)
+  agent.md       optional seat: a COLLEAGUE — a background worker on its
+                 own thread, in a tab of the operator's own browser
+                 (door: agent/tasks.mjs). Markdown: frontmatter and a prompt.
 ```
 
 A folder with only a `SKILL.md` is **knowledge** — always active, never in
@@ -72,9 +75,9 @@ everything here does — by a working skill using it.
 | --- | --- |
 | `id` | short stable identifier, `"reddit"` |
 | `name` | what to call it in front of a person, `"Reddit"` |
-| `gapMs` | how long the engine must hold between reads. **The platform's measured number, not a politeness guess** — see the header of `reddit/feed.mjs` for what measuring one looks like |
-| `read(url)` | one fetch. Returns `{ok:false, error}` or `{ok:true, entries, redirected, truncated, ...}` — three outcomes, never two. A feed that could not be read is not a feed that said nothing, and collapsing those is the one bug this codebase keeps a diary about |
-| `sourceUrl({place, q})` | the URL for a watched source — a room's new posts, or a phrase scoped to that room |
+| `gapMs` | what the engine shows as the platform's pace between page turns. The control lane holds the real gap (6 s plus up to 80 % more, per host), so this is a number a person reads, not a governor |
+| `read(url, { browse })` | one PAGE, in the operator's own browser — the only reading mechanism there is (0.6.0). `browse` is the engine's browser on a leased tab (`lib/browse.mjs`): `open`, `goto`, `extract(spec)`, `text`, `where`, `scroll`, `close`. Returns `{ok:false, error}` or `{ok:true, entries, redirected, finalUrl, truncated, subtitle}` — three outcomes, never two. A page that could not be read is not a page that said nothing, and collapsing those is the one bug this codebase keeps a diary about. No `fetch` anywhere in a skill: a test fails the build on one |
+| `sourceUrl({place, q})` | the page a person opens for a watched source — a room's new posts, or a phrase scoped to that room |
 | `refuse(src)` | reason-string or null: the shapes of reading this platform refuses, with the measurement that says why. An adapter with an empty refusal list is claiming every shape on its platform is worth a read — say that out loud in SKILL.md if you mean it |
 | `roomOf(url)` | which community a URL belongs to, or null |
 | `roomLabel(place)` | `"r/smallbusiness"`, `"~lobsters"`, whatever the platform's people actually write |
@@ -83,21 +86,41 @@ Entries returned by `read` are `{id, kind: "post"|"comment", url, author,
 title, body, at}` with a **platform-prefixed, stable** `id` — first-write-wins
 storage means an id collision is silent data loss.
 
+**How a page is read.** The extension runs `read_dom` — a declared spec,
+`{items: <selector>, limit, fields: {name: how}}`, where `how` is
+`attr:<name>`, `attr:<name>@<selector>`, `text:<selector>`,
+`href:<selector>`, `text`, `href`, `tag`, and `a|b` takes the first that
+answers — through every shadow root, reading only. The skill declares the
+shapes it measured, with dates (`reddit/pages.mjs`); the extension executes
+them; no platform code ever runs in a page. Rows come back to the skill,
+which turns them into entries. A shape the platform changes is a read that
+comes back empty — say so as an error, never as "nothing new".
+
 Optional, and simply absent elsewhere:
 
 - `rulesUrl(place)`, `parody(place)` — where a human reads the room's rules,
   and communities that are jokes about the communities they name.
-- the **own-visibility set**: `userFeed(name)`, `threadFeed(url)`,
-  `commentFeed(url)`, `threadOf(item)` — what `sync`/`check`/`back` need to
-  read *your* words the way a stranger sees them. A platform without these
-  cannot run those verbs, and the engine says so rather than guessing.
-- `readViaRelay(base, url)` — the same read through the operator's own
-  browser (`lib/relay.mjs` is the broker; the extension is the reader). The
-  engine offers it to **finding** reads only, when the anonymous lane is
-  refused; the visibility verbs never take it, because logged-out *is* the
-  measurement. A relayed body must go through the same outcome logic as an
-  anonymous one — the day the two seats judge a body differently is the day
-  one of them starts lying.
+- `idOf(url)`, `itemOf(url)` — a post's stable id off its permalink, and
+  what a permalink names (`{id, kind}`), so a colleague cannot invent an id
+  and `mq add` checks the right thing.
+- `readPost(url, { browse })` and `bodiesPerRead` — a page that previews
+  posts without their bodies (Reddit's search does) is followed by a read of
+  each new post's own page, up to that many per read.
+- `labels` — what the deck and the dashboard say when they mean this
+  platform: `account {question, help, placeholder}`, `room {question, help,
+  placeholder}`, `phrase {placeholder}`, `rules`, `submit` ("Reddit's own
+  Comment button"), `appeals`. The heart's cards carry no platform word of
+  their own; a platform that declares none still reads as plain English.
+- `composer` — `{opens, replies, hosts}`: the labels that open a composer,
+  the labels on a reply box, the custom elements that host one. Rides on the
+  reply card to the extension's Insert flow; the words that may never be
+  pressed are the extension's own list, not a platform's.
+- the **own-visibility set**: `userPage(name)`, `threadPage(url)`,
+  `commentPage(url)`, `threadOf(item)` — the pages `sync`/`check`/`back`
+  open to read *your* words the way a stranger sees them, in an **Incognito**
+  tab (the lease asks for the stranger's seat; the extension needs "Allow in
+  Incognito" once). A platform without these cannot run those verbs, and the
+  engine says so rather than guessing.
 
 ## The page seat (a dashboard screen)
 
@@ -141,6 +164,51 @@ subagent and can delegate to it mid-conversation. Everything it does inherits
 the house law: it drafts, it proposes, it never submits — there is no code in
 this repo that posts, so there is nothing for a tool to reach.
 
+## The colleague seat (a background worker, in markdown)
+
+`agent.md` is the agent seat for work that runs in the BACKGROUND — on its
+own thread, in a tab the runtime leased in the operator's own Chrome, started
+by the operator's click on a card the CMO proposed:
+
+```markdown
+---
+name: reddit-scout
+description: When the CMO should propose this colleague, in one sentence it reads.
+tools: browser.read, ask_person, record_findings, judge_pending, write_draft
+model: scout
+---
+
+The prompt. Plain sentences: what to read, when to stop and ask, what never.
+```
+
+- `tools` names what the runtime seats and screens: the browser families
+  `browser.read` / `browser.click` / `browser.type` (Claude-in-Chrome's
+  toolkit — `navigate`, `read_page`, `read_dom`, `find`, `get_page_text`,
+  `computer`, `batch` … — on the leased tab, checked against this line
+  before the extension hears of it), `ask_person` (the question list: one or
+  many questions, dealt as cards on the deck — each with a field for the
+  operator's own words — answered together, the thread paused meanwhile),
+  and the engine's verbs by name (`queue`, `pending`, `judge`,
+  `draft_material`, `save_draft`, `rooms`, `campaigns`, `waiting`, `read_memory`, and
+  for scouts `record_findings`, `judge_pending`, `write_draft`). A task
+  started under a campaign carries its id in the brief, and
+  `record_findings` passes it on, so the judge and the writer apply the
+  campaign's direction. **No colleague is granted click or type in milestone
+  1**, and the extension refuses a click on any control labelled post,
+  comment, reply, send or submit even if one were.
+- `model` is a SEAT — `scout`, `judge` or `writer` — never a model id. The
+  seats in `lib/models.mjs` decide what runs it; there is no second way.
+- The body is the prompt. The folder's `SKILL.md` is inlined into it too, so
+  the colleague learns the platform's facts and refusals from the same bytes
+  everyone else does.
+
+Both rings, same slot rules as every seat. `agent.mjs` stays for a colleague
+that needs tools written in code. `skills/_template/agent.md` is a colleague
+that reads one page and asks before a second, so the pause can be tried on
+purpose; `skills/reddit/agent.md` is the scout. The dashboard's **Tasks**
+page lists every colleague the registry resolved and lets you start one by
+hand.
+
 ## What a SKILL.md is for
 
 The prose half is not decoration. The judge and the writer are told the norms
@@ -159,6 +227,13 @@ door (`lib/platform.mjs`), the page door (`bin/serve.mjs`), the agent door
 (`agent/strategist.mjs`). A skill may import from `lib/`. If your skill needs
 a core change, that is a contract gap: open it as one, don't reach around the
 seam.
+
+**A skill reads a platform in the operator's browser, or not at all.** There
+is no fetch in a skill and none in the engine: a page is a real tab a person
+can watch, leased through the control lane, read in the isolated world,
+closed after. The visibility verbs read from the stranger's seat (Incognito);
+the finding verbs from the operator's own session. A skill that needs a
+background request has a contract gap to argue, not a lane to add.
 
 **A skill ships its refusals or it ships nothing.** The refusals are not a
 compliance garnish, they are the product's position: an SEO skill refuses
