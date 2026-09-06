@@ -1,6 +1,8 @@
 /* The panel and its card. One column, nothing decorative: the card is the
-   whole interface, so everything on it is either the question, the answer,
-   or the button.
+   whole interface on the Next tab, so everything on it is either the
+   question, the answer, or the button. From 0.8.0 three more tabs sit
+   beside it (Campaigns, Rooms, Settings) — lists and small forms in the
+   same paper, so the panel stands on its own.
 
    The look is play.messaging.quest's, read off its computed styles on
    2026-09-01 — the same tokens the dashboard uses in lib/ui.mjs, so the deck
@@ -44,6 +46,9 @@
 }
 
 * { box-sizing: border-box; margin: 0; }
+/* The tabs and the forms toggle with the hidden attribute; a display rule
+   below must never win over it (it did: the views stacked). */
+[hidden] { display: none !important; }
 
 body {
   background: var(--page) radial-gradient(var(--dot) 1px, transparent 1.4px) 0 0 / 7px 7px;
@@ -54,7 +59,39 @@ body {
   flex-direction: column;
 }
 
-main { flex: 1; padding: 14px 14px 8px; display: flex; flex-direction: column; gap: 10px; }
+main { flex: 1; padding: 12px 14px 8px; display: flex; flex-direction: column; gap: 10px; }
+main > section { display: flex; flex-direction: column; gap: 10px; }
+
+/* --------------------------------------------------------------- header */
+
+.es-top { background: var(--paper); border-bottom: 2px solid var(--ink); padding: 8px 14px 0; position: sticky; top: 0; z-index: 2; }
+.es-top-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.es-project { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--dim); font: 11px var(--mono); }
+.es-project select { min-width: 0; max-width: 200px; color: var(--ink); background: var(--panel); border: 1.5px solid var(--line); font: 12px var(--sans); padding: 3px 6px; }
+.es-top-link { color: var(--dim); font: 11px var(--mono); text-decoration: underline; text-underline-offset: 3px; white-space: nowrap; }
+
+.es-tabs { display: flex; gap: 2px; }
+.es-tabs button {
+  flex: 1;
+  background: transparent;
+  color: var(--dim);
+  border: 0;
+  border-bottom: 3px solid transparent;
+  padding: 8px 4px 7px;
+  font: 700 12.5px/1 var(--sans);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+.es-tabs button:hover { color: var(--ink); }
+.es-tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--lime); }
+.es-badge { background: var(--lime); color: #1d1c15; font: 700 10px/1 var(--mono); padding: 3px 5px; border: 1px solid #1d1c15; min-width: 16px; text-align: center; }
+
+.es-focus { display: flex; align-items: center; }
+.es-focus-label { display: flex; align-items: center; gap: 6px; color: var(--dim); font: 11px var(--mono); }
+.es-focus select { color: var(--ink); background: var(--panel); border: 1.5px solid var(--line); font: 12px var(--sans); padding: 3px 6px; max-width: 240px; }
 
 /* ------------------------------------------------------------------ card */
 
@@ -94,6 +131,26 @@ main { flex: 1; padding: 14px 14px 8px; display: flex; flex-direction: column; g
 .es-choice-label { font-weight: 700; }
 .es-choice-specimen { color: var(--dim); font-size: 12.5px; font-style: italic; }
 .es-choice-note { color: var(--dim); font-size: 12px; }
+
+/* The three drafts (0.8.0): a strip of tabs over the field. */
+.es-tabs-strip { display: flex; gap: 0; border-bottom: 1.5px solid var(--ink); margin-bottom: -6px; }
+.es-tab {
+  background: transparent;
+  color: var(--dim);
+  border: 1.5px solid transparent;
+  border-bottom: 0;
+  padding: 7px 11px 6px;
+  font: 700 12.5px/1 var(--sans);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: -1.5px;
+}
+.es-tab:hover { color: var(--ink); }
+.es-tab[aria-selected="true"] { background: var(--panel); color: var(--ink); border-color: var(--ink); border-bottom: 1.5px solid var(--panel); }
+.es-tab-dot { color: var(--coral); font-size: 14px; line-height: 0; }
+.es-warn { color: var(--coral); font-size: 12.5px; }
 
 /* The growing field: the wrapper's ::after holds the same text in the same
    grid cell, so the cell is as tall as the text wraps and the box never hides
@@ -148,9 +205,65 @@ main { flex: 1; padding: 14px 14px 8px; display: flex; flex-direction: column; g
 .es-progress span { flex: 1; height: 4px; background: var(--line-2); }
 .es-progress span.on { background: var(--lime); outline: 1px solid var(--ink); }
 
+/* ------------------------------------------------------------- the tabs */
+
+.es-sec { display: flex; flex-direction: column; gap: 8px; }
+.es-sec-title { font: 800 16px/1.25 var(--disp); letter-spacing: -0.015em; }
+.es-sub { color: var(--dim); font-size: 12.5px; }
+.es-note { color: var(--dim); font-size: 11.5px; }
+.es-idea { font-size: 13px; color: var(--ink2); white-space: pre-line; }
+
+.es-item {
+  background: var(--paper);
+  border: 1.5px solid var(--ink);
+  box-shadow: 3px 3px 0 0 var(--shadow);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.es-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.es-row input, .es-row select { flex: 1; min-width: 120px; }
+.es-item-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.es-tag { font: 10.5px var(--mono); color: var(--dim); border: 1px solid var(--line-2); padding: 2px 6px; }
+.es-tag.ok { color: var(--lime-ink); border-color: var(--lime-ink); }
+.es-tag.sig { color: var(--coral); border-color: var(--coral); }
+.es-tag.dim { color: var(--dim); }
+
+.es-small, .es-plan {
+  font: 700 12px/1 var(--sans);
+  padding: 7px 10px;
+  cursor: pointer;
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 0 2px 0 0 var(--ink);
+}
+.es-small:active, .es-plan:active { transform: translateY(1px); box-shadow: 0 1px 0 0 var(--ink); }
+.es-small.es-primary { box-shadow: 0 2px 0 0 #1d1c15 !important; }
+.es-on { background: var(--lime); color: #1d1c15; border-color: #1d1c15; }
+.es-linkish { background: none; border: 0; padding: 0; color: var(--lime-ink); font: inherit; font-size: 12.5px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; text-align: left; }
+.es-plans { display: flex; gap: 6px; }
+.es-plans .es-plan { flex: 1; }
+
+.es-form { display: flex; flex-direction: column; gap: 8px; }
+.es-fieldof { display: flex; flex-direction: column; gap: 3px; }
+.es-fieldof-label { color: var(--dim); font-size: 11.5px; }
+main input[type="text"], main input[type="password"], main input[type="url"], main textarea, main select {
+  width: 100%;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1.5px solid var(--ink);
+  padding: 8px 10px;
+  font: 13px/1.4 var(--sans);
+}
+main textarea { resize: vertical; }
+main input:focus, main textarea:focus, main select:focus { outline: none; box-shadow: 3px 3px 0 0 var(--ink); }
+
 /* ----------------------------------------------------------------- chrome */
 
 .es-jobs { color: var(--dim); font: 11px var(--mono); min-height: 16px; }
+.es-jobs:empty { display: none; }
 .es-error { color: var(--coral); font-size: 12.5px; white-space: pre-wrap; }
 
 .es-said {
@@ -164,7 +277,7 @@ main { flex: 1; padding: 14px 14px 8px; display: flex; flex-direction: column; g
 }
 .es-said b { color: var(--ink); }
 
-footer { padding: 10px 14px; border-top: 2px solid var(--ink); background: var(--paper); display: flex; gap: 8px; }
+footer { padding: 10px 14px; border-top: 2px solid var(--ink); background: var(--paper); display: flex; gap: 8px; position: sticky; bottom: 0; }
 footer input {
   flex: 1;
   background: var(--panel);
@@ -184,10 +297,6 @@ footer button {
   box-shadow: 0 2px 0 0 var(--ink);
 }
 footer button:active { transform: translateY(1px); box-shadow: 0 1px 0 0 var(--ink); }
-
-.es-server { color: var(--dim); font: 11px var(--mono); padding: 4px 14px 10px; }
-.es-server a { color: var(--dim); }
-.es-server select { color: var(--ink); background: var(--panel); border: 1.5px solid var(--line); font: 11px var(--mono); padding: 2px 4px; }
 
 @keyframes es-pulse { 50% { opacity: 0.4; } }
 .es-waiting .es-primary { animation: es-pulse 1.6s ease-in-out infinite; pointer-events: none; }

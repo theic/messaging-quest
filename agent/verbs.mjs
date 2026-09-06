@@ -151,10 +151,10 @@ export const VERBS = {
     const prompt = await es(dir, ["draft", id]);
     if (!/voice|reply|draft/i.test(prompt) || /^no such|not in the queue|usage:/im.test(prompt)) return prompt;
     const { draftReply } = await import("../lib/agents.mjs");
-    const { options, no_fit } = await draftReply(dir, prompt, {});
-    if (!options.length) return no_fit ? `the writer declined: ${no_fit}` : "nothing came back from the writer";
-    const saved = await es(dir, ["draft", id, "--save"], options[0].text);
-    return `saved the first of ${options.length} option${options.length === 1 ? "" : "s"} for ${id} — it is on the operator's card now; they post it.\n\n${options[0].text}\n\n— the refusals said: ${saved}`;
+    const { drafts, no_fit } = await draftReply(dir, prompt, {});
+    if (!drafts.length) return no_fit ? `the writer declined: ${no_fit}` : "nothing came back from the writer";
+    const saved = await es(dir, ["draft", id, "--save"], JSON.stringify({ drafts }));
+    return `saved ${drafts.length} draft${drafts.length === 1 ? "" : "s"} (${drafts.map((d) => d.style).join(", ")}) for ${id} — they are the tabs on the operator's card now; they pick one and post it.\n\n${drafts.map((d) => `--- ${d.style} ---\n${d.text}`).join("\n\n")}\n\n— the refusals said: ${saved}`;
   }, {
     name: "write_draft",
     description: "Have the engine's WRITER seat draft the reply to one queued person (an id from queue), from the same material `mq draft` assembles — their words, the operator's measured voice, the room's risks, what me.md supports, and the campaign's direction with what was already said under it — then save it through the CLI, which runs the refusals (the eight-word repeat guard included). The draft lands on the operator's card; THEY post it. You never write the reply yourself.",
