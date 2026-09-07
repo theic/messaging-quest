@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Messaging Quest",
-  "version": "0.7.0",
-  "description": "Your marketing specialist, one card at a time: who to answer, what to say, in your voice. You press Post. It never does.",
+  "version": "0.8.0",
+  "description": "Your marketing colleague, one card at a time: who to answer, three ways to say it in your voice, who wrote back. You press Post. It never does.",
   "permissions": ["sidePanel", "storage", "alarms", "scripting", "clipboardWrite", "tabs", "tabGroups", "debugger"],
   "incognito": "spanning",
   "host_permissions": ["http://127.0.0.1/*"],

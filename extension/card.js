@@ -1,19 +1,23 @@
 // The card renderer. Ported from the predecessor's panel (messaging-quest,
 // extension/sidepanel/card.js) with the extensions this product's deck needs:
 // an actions row beyond two buttons (the reply card is a control panel), links
-// that open elsewhere without writing anything, and a disabled button that
-// says WHY it is disabled — the gate's reason is the product, so it is never
-// just greyed out.
+// that open elsewhere without writing anything, a disabled button that says
+// WHY it is disabled — the gate's reason is the product, so it is never just
+// greyed out — and, from 0.8.0, TABS: the three drafts the writer always
+// writes, each with its own edits, the field showing the one selected, the
+// answer saying which one the button was pressed from.
 //
 // Built with createElement rather than a template string: every label on a
 // card is server-supplied text, some of it originally written by strangers on
 // Reddit, and the one thing a panel must never do is parse it as markup.
 //
-// The panel has no render loop, so the card holds its selection and field text
-// internally and hands back a finished answer when a button is pressed:
-//   onAnswer({ action, choice, choices, text })
+// The panel has no render loop, so the card holds its selection, its tab and
+// its field text internally and hands back a finished answer when a button
+// is pressed:
+//   onAnswer({ action, choice, choices, text, tab })
 // where `action` is the pressed button's ID (never its slot — the server
-// dispatches on ids like "watch" and "posted", not on "primary").
+// dispatches on ids like "watch" and "posted", not on "primary") and `tab`
+// is the id of the draft on screen, when the card had tabs.
 
 export function renderCard(host, card, onAnswer) {
   const picked = [];
@@ -75,8 +79,52 @@ export function renderCard(host, card, onAnswer) {
     article.append(list);
   }
 
+  // The tabs (0.8.0): one per draft. Each keeps the operator's edits to it,
+  // so switching back and forth loses nothing; the field below shows the
+  // selected one, and its flags are said in words under the field.
+  const tabs = Array.isArray(card.tabs) ? card.tabs.filter((t) => t && t.id) : [];
+  let tab = tabs[0]?.id ?? null;
+  const edits = new Map(tabs.map((t) => [t.id, String(t.value ?? "")]));
+  if (tabs.length && card.field) text = edits.get(tab) ?? text;
+  let field = null, grow = null, warn = null, tabButtons = [];
+
+  const showWarnings = () => {
+    if (!warn) return;
+    const t = tabs.find((x) => x.id === tab);
+    const words = t?.warnings?.length ? t.warnings : [];
+    warn.textContent = words.length ? `Check before posting: ${words.join(" · ")}.` : "";
+    warn.hidden = !words.length;
+  };
+
+  const select = (id) => {
+    if (id === tab || !edits.has(id)) return;
+    edits.set(tab, text);
+    tab = id;
+    text = edits.get(id) ?? "";
+    if (field) { field.value = text; grow?.setAttribute("data-value", text); }
+    for (const [tid, b] of tabButtons) b.setAttribute("aria-selected", String(tid === id));
+    showWarnings();
+  };
+
+  if (tabs.length > 1) {
+    const strip = el("div", "es-tabs-strip");
+    strip.setAttribute("role", "tablist");
+    strip.setAttribute("aria-label", "drafts");
+    for (const t of tabs) {
+      const b = el("button", "es-tab", t.label || t.id);
+      b.type = "button";
+      b.setAttribute("role", "tab");
+      b.setAttribute("aria-selected", String(t.id === tab));
+      if (t.warnings?.length) b.append(el("span", "es-tab-dot", "•"));
+      b.addEventListener("click", () => select(t.id));
+      strip.append(b);
+      tabButtons.push([t.id, b]);
+    }
+    article.append(strip);
+  }
+
   const answer = (action) =>
-    onAnswer({ action, choice: picked.length ? picked[picked.length - 1] : null, choices: [...picked], text });
+    onAnswer({ action, choice: picked.length ? picked[picked.length - 1] : null, choices: [...picked], text, tab });
 
   if (card.field) {
     // Always a textarea inside the growing wrapper: the CSS sizes the box to
@@ -84,9 +132,9 @@ export function renderCard(host, card, onAnswer) {
     // scrollbar — the predecessor learned that on a 167-character pitch shown
     // in a one-line input. `multiline` only decides what Enter does. `secret`
     // is for the key card: the value must not sit readable on a shared screen.
-    const grow = el("div", "es-grow");
+    grow = el("div", "es-grow");
     grow.setAttribute("data-value", text);
-    const field = el("textarea", "es-field");
+    field = el("textarea", "es-field");
     field.rows = 1;
     field.placeholder = card.field.placeholder || "";
     field.value = text;
@@ -105,6 +153,13 @@ export function renderCard(host, card, onAnswer) {
     }
     grow.append(field);
     article.append(grow);
+  }
+
+  if (tabs.length) {
+    warn = el("p", "es-warn");
+    warn.hidden = true;
+    article.append(warn);
+    showWarnings();
   }
 
   if (card.links?.length) {

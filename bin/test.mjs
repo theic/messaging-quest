@@ -1332,10 +1332,10 @@ check("a proposal with a verb outside the law never renders",
   for (const k of Object.keys(envWas)) delete process.env[k];
   const boxM = mkdtempSync(join(tmpdir(), "mq-models-"));
 
-  check("the plan is paid until somebody says otherwise", plan(boxM), "paid");
-  check("...and a seat on it needs a key", (() => { try { seat(boxM, "judge"); return "no throw"; } catch (e) { return /no OpenRouter key/.test(e.message); } })(), true);
+  check("the plan is free until somebody says otherwise (0.8.0 — it was paid)", plan(boxM), "free");
+  check("...and a seat on it needs a key, and the refusal says where a free one comes from", (() => { try { seat(boxM, "judge"); return "no throw"; } catch (e) { return /no OpenRouter key/.test(e.message) && /openrouter\.ai\/keys/.test(e.message); } })(), true);
   writeFileSync(join(boxM, "models.json"), JSON.stringify({ judge: "qwen/qwen3.7-flash" }));
-  check("a flat models.json — the old shape — still names the paid picks", chosen(boxM).judge, "qwen/qwen3.7-flash");
+  check("a flat models.json — the old shape — still names the paid picks", chosen(boxM, "paid").judge, "qwen/qwen3.7-flash");
   setPlan(boxM, "free");
   check("switching to free keeps the paid pick where it was", chosen(boxM, "paid").judge, "qwen/qwen3.7-flash");
   check("...and the free plan starts from its own measured default", chosen(boxM).judge, "poolside/laguna-s-2.1:free");
@@ -1373,7 +1373,7 @@ check("a proposal with a verb outside the law never renders",
     req.on("end", () => {
       seenReqs.push({ auth: req.headers.authorization ?? null, body: JSON.parse(b) });
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify(reply));
+      res.end(JSON.stringify(typeof reply === "function" ? reply(seenReqs.length) : reply));
     });
   });
   await new Promise((r) => stubM.listen(0, "127.0.0.1", r));
@@ -1394,6 +1394,31 @@ check("a proposal with a verb outside the law never renders",
   check("a conforming JSON object inside a prose answer is the answer", got.data.verdicts[0].n, 1);
   check("...and one call was enough", seenReqs.length, 4);
   check("prose with no conforming object is not salvaged", salvage("the answer is {\"verdicts\": \"none\"}", V2), null);
+
+  // The writer, held to three (0.8.0). Two come back: the third is asked
+  // for once, with the two in front of it; the round is three in the fixed
+  // order, the first answer per style kept, the unknown style dropped.
+  const { draftReply, mendNewlines } = await import("../lib/agents.mjs");
+  // A free model's line breaks arriving as a bare "n" (measured 2026-09-06)
+  // are put back — only in a text with no newline and at least two seams.
+  check("a writer's lost newlines are mended; prose with a real newline, or one odd seam, is left alone",
+    [mendNewlines("Hey.  nI'd start by telling friends.nAsk if they need a site or know someone who doesnThat's a first step"), mendNewlines("Hey.|nI'd start with a free audit.|nClose one of them."), mendNewlines("Hey roosrock.|I'd use a service account.|Avoids the storage trap."), mendNewlines("first step.\nAsk them"), mendNewlines("Ask LinkedInThey answer"), mendNewlines("plain text, no seam")],
+    ["Hey.\nI'd start by telling friends.\nAsk if they need a site or know someone who does\nThat's a first step", "Hey.\nI'd start with a free audit.\nClose one of them.", "Hey roosrock.\nI'd use a service account.\nAvoids the storage trap.", "first step.\nAsk them", "Ask LinkedInThey answer", "plain text, no seam"]);
+  const toolCall = (args) => ({ choices: [{ message: { role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "drafts", arguments: JSON.stringify(args) } }] } }], usage: {} });
+  const before = seenReqs.length;
+  reply = (n) => (n - before === 1
+    ? toolCall({ drafts: [{ style: "ask", text: "A" }, { style: "straight", text: "S" }, { style: "straight", text: "S again" }, { style: "bold", text: "?" }, { style: "deeper", text: "   " }] })
+    : toolCall({ drafts: [{ style: "deeper", text: "D" }] }));
+  const got3 = await draftReply(boxM, "the material", {});
+  check("two of three come back: the writer is asked once more for the missing one, and the round is three in order", [got3.drafts.map((d) => [d.style, d.text]), got3.no_fit, seenReqs.length - before], [[["straight", "S"], ["deeper", "D"], ["ask", "A"]], null, 2]);
+  check("...and the second ask shows it what it already wrote, and names the missing style", (() => { const m = seenReqs[seenReqs.length - 1].body.messages; return [/Written so far/.test(m[2].content), /deeper draft/.test(m[3].content), m[0].content === seenReqs[before].body.messages[0].content]; })(), [true, true, true]);
+  reply = toolCall({ drafts: [], no_fit: "nothing honest to say without naming it" });
+  const nf = await draftReply(boxM, "m", {});
+  check("no drafts with a reason is the writer declining, not a failure", [nf.drafts, nf.no_fit], [[], "nothing honest to say without naming it"]);
+  const b2 = seenReqs.length;
+  reply = () => toolCall({ drafts: [{ style: "straight", text: "only this" }] });
+  const one = await draftReply(boxM, "m", {});
+  check("a writer that keeps sending one is asked once more and no more — what came back is kept, never padded", [one.drafts.map((d) => d.style), seenReqs.length - b2], [["straight"], 2]);
   stubM.close();
   for (const [k, v] of Object.entries(envWas)) if (v !== undefined) process.env[k] = v;
 }
@@ -1542,7 +1567,7 @@ check("a proposal with a verb outside the law never renders",
   const rowsD = readFileSync(join(DR, "drafts.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
   check("...and the saved draft carries the turn", rowsD.map((d) => d.turn), [1, 2]);
   const m3 = esR(["draft", "t3_r1", "--note", "too eager — answer the question, drop the offer"]);
-  check("a rewrite note reaches the writer with the rejected draft, above everything but the refusals", [/What the operator said about the last draft/.test(m3), /too eager/.test(m3), /--- rejected ---\nyes — i built it/.test(m3)], [true, true, true]);
+  check("a rewrite note reaches the writer with the rejected draft, above everything but the refusals", [/What the operator said about the last round/.test(m3), /too eager/.test(m3), /--- rejected ---\nyes — i built it/.test(m3)], [true, true, true]);
   recordTurn(SR, convs().get("t3_r1"), { text: "yes, i built it", at: "2026-09-06T09:00:00Z" });
   check("the operator's answer is their second turn and the conversation is answered", [convs().get("t3_r1").state, yourTurns(convs().get("t3_r1"))], ["answered", 2]);
   const dg = campaignDigest(SR, readCampaigns(DR));
@@ -1631,6 +1656,124 @@ check("a proposal with a verb outside the law never renders",
     check("'I posted it' on the turn records the operator's words as their next turn", [cv2.state, cv2.turns.length, cv2.turns[2].text, (await deckV())[0].id !== "work.turn.t3_v1"], ["answered", 3, "it is called x", true]);
   }
   srvV.kill();
+}
+
+/* --------------------------------- three drafts, and the panel's tabs (0.8.0) */
+
+// The writer always writes three, one per named style; the card shows them
+// as tabs; a note on one writes all three again; free is the default; and
+// the panel stands on its own — campaigns, rooms and settings as tabs with
+// one state route and one act route behind them.
+{
+  const { STYLES, draftsBlock, styleOf, styleLabel, YOURS } = await import("../lib/writing.mjs");
+  const { DEFAULT_PLAN, FREE_MODELS, KEY_URL } = await import("../lib/models.mjs");
+  check("three styles, by name, in a fixed order — and each says what the reply DOES, not how it sounds", [STYLES.map((s) => s.id), STYLES.every((s) => s.what.length > 40 && !/\btone\b/i.test(s.what))], [["straight", "deeper", "ask"], true]);
+  const blk = draftsBlock({ ceiling: 600 });
+  check("the writer's block names all three, the ceiling, and three every time", [/straight — Straight/.test(blk), /deeper — Deeper/.test(blk), /ask — Ask back/.test(blk), /under 600 characters/.test(blk), /THREE replies/.test(blk), /up to/i.test(blk)], [true, true, true, true, true, false]);
+  const blk2 = draftsBlock({ ceiling: 900, note: "shorter", prior: "the old one", style: "deeper" });
+  check("...and on a rewrite carries the note, which draft it was about, the rejected text, and that all three come back", [/What the operator said about the last round/.test(blk2), /shorter/.test(blk2), /DEEPER draft/.test(blk2), /--- rejected ---\nthe old one\n--- end ---/.test(blk2), /Write all three again/.test(blk2)], [true, true, true, true, true]);
+  check("a style is known whatever its case; an unknown one is nobody's; a pasted draft is the operator's own", [styleOf("STRAIGHT")?.id, styleOf("bold"), styleLabel("yours"), YOURS.id], ["straight", null, "Yours", "yours"]);
+  check("free is the default plan, a free key has a named page, and the free menu holds only what OpenRouter still serves", [DEFAULT_PLAN, /openrouter\.ai\/keys/.test(KEY_URL), "z-ai/glm-5.2:free" in FREE_MODELS], ["free", true, false]);
+
+  /* Through the CLI: a round of three saves as one row. */
+  const boxT = mkdtempSync(join(tmpdir(), "mq-three-"));
+  const DT = join(boxT, ".mq");
+  execFileSync(process.execPath, [ES, "init"], { env: { ...process.env, MQ_DIR: DT }, stdio: "ignore" });
+  const esT = (args, stdin) => { try { return execFileSync(process.execPath, [ES, ...args], { env: { ...process.env, MQ_DIR: DT }, input: stdin ?? "", encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }); } catch (e) { return `${e.stdout || ""}${e.stderr || ""}`; } };
+  writeCampaign(DT, { name: "Launch posts", platform: "reddit", mention: "never", idea: "one true observation about what they built" });
+  appendFileSync(join(DT, "found.jsonl"), [
+    JSON.stringify({ id: "t3_a", place: "saas", url: "https://www.reddit.com/r/saas/comments/a/x/", author: "ana", title: "launched, zero users", body: "we launched and nothing", probe: "saas:launch", campaign: "launch-posts", seen_at: "2026-09-06T01:00:00Z" }),
+    JSON.stringify({ id: "t3_b", place: "saas", url: "https://www.reddit.com/r/saas/comments/b/x/", author: "bo", title: "same", body: "same here", probe: "saas:launch", campaign: "launch-posts", seen_at: "2026-09-06T01:00:00Z" }),
+  ].join("\n") + "\n");
+  const mat = esT(["draft", "t3_a"]);
+  check("the material asks for three drafts, one per style, every time — never 'up to'", [/## Three drafts, one per style — every time/.test(mat), /straight — Straight/.test(mat), /up to three/i.test(mat)], [true, true, false]);
+  const three = { drafts: [
+    { style: "straight", text: "put the landing page in front of ten people before you touch the code again. what did the last one say?" },
+    { style: "deeper", text: "zero users after a launch usually means the page answers a question nobody typed. i used it at my last job and it was fine. pick the one sentence they search and rewrite the title to it." },
+    { style: "ask", text: "what were you expecting to happen on day one, signups or feedback?" },
+  ] };
+  const saved = esT(["draft", "t3_a", "--save"], JSON.stringify(three));
+  const rowsT = () => readFileSync(join(DT, "drafts.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  check("a round of three saves as one row: the tabs, the first doubled as text for older readers, round 1", [rowsT().length, rowsT()[0].drafts.map((d) => d.style), rowsT()[0].text === three.drafts[0].text, rowsT()[0].round, /3 drafts saved/.test(saved)], [1, ["straight", "deeper", "ask"], true, 1, true]);
+  check("...the refusals run over each, and flag the one that claims a history — not the others", [rowsT()[0].drafts.map((d) => d.flags.claims), /\[Deeper\]/.test(saved), /CLAIMS ABOUT YOU/.test(saved)], [[0, 1, 0], true, true]);
+  const noteT = esT(["draft", "t3_a", "--note", "too long", "--style", "deeper"]);
+  check("a note names the draft it was about and quotes that tab as rejected", [/too long/.test(noteT), /DEEPER draft/.test(noteT), /--- rejected ---\nzero users after a launch/.test(noteT)], [true, true, true]);
+  const other = esT(["draft", "t3_b"]);
+  check("under a campaign, every tab of a round already written counts as 'already said'", [/--- earlier 1 ---/.test(other), /--- earlier 3 ---/.test(other), /what were you expecting/.test(other)], [true, true, true]);
+  const rep = esT(["draft", "t3_b", "--save"], JSON.stringify({ drafts: [{ style: "straight", text: "what were you expecting to happen on day one, signups or feedback? same question here." }, { style: "deeper", text: "d" }, { style: "ask", text: "a" }] }));
+  check("the repeat guard reads every tab of everybody else's rounds", [/REPEATED PHRASING/.test(rep), rowsT().find((r) => r.id === "t3_b").drafts[0].flags.repeat >= 8], [true, true]);
+  const flat = esT(["draft", "t3_a", "--save"], "my own words, typed by hand");
+  check("plain text saves as the operator's own, and is the next round", [rowsT()[2].drafts.map((d) => d.style), rowsT()[2].round, /^draft saved/.test(flat)], [["yours"], 2, true]);
+  esT(["draft", "t3_a", "--save"], JSON.stringify({ drafts: [{ style: "bold", text: "x" }, { style: "ask", text: "  " }, { style: "straight", text: "first" }, { style: "straight", text: "second" }], note: "shorter", style: "deeper" }));
+  check("an unknown style is the operator's, a blank is dropped, a duplicate keeps the first, and the note rides on the row", [rowsT()[3].drafts.map((d) => [d.style, d.text]), rowsT()[3].note, rowsT()[3].style, rowsT()[3].round], [[["yours", "x"], ["straight", "first"]], "shorter", "deeper", 3]);
+  check("text that merely starts with a brace is text", (() => { esT(["draft", "t3_a", "--save"], "{ not json at all"); const d = rowsT()[4].drafts[0]; return [d.style, d.text]; })(), ["yours", "{ not json at all"]);
+  check("a JSON round with nothing in it is refused", /no draft with any text/.test(esT(["draft", "t3_a", "--save"], JSON.stringify({ drafts: [{ style: "ask", text: "" }] }))), true);
+  check("the MCP and the runtime's save still take plain text", /draft saved/.test(esT(["draft", "t3_b", "--save"], "plain, from an assistant")), true);
+
+  /* The deck: tabs on the card, the note card naming the tab, a walk from a name. */
+  const person = { id: "t3_q", place: "saas", url: "https://www.reddit.com/r/saas/comments/q/x/", author: "a", title: "t", body: "b", why: "asks", readyState: "ready", blockedWhy: null, draft: { round: 2, drafts: [{ style: "straight", text: "S", flags: { claims: 0 } }, { style: "deeper", text: "D", flags: { claims: 1, tells: 2 } }, { style: "ask", text: "A", flags: {} }] } };
+  const cardT = nextCards(snap({ hasModel: true, queue: [person] }))[0];
+  check("the reply card carries the three as tabs, the first in the field, the flags in words on the tab they belong to", [cardT.tabs.map((t) => [t.id, t.label]), cardT.field.value, cardT.tabs[1].warnings, cardT.tabs[0].warnings, cardT.data.round], [[["straight", "Straight"], ["deeper", "Deeper"], ["ask", "Ask back"]], "S", ["1 claim about your history — check against me.md", "2 template phrases"], [], 2]);
+  const oldT = nextCards(snap({ hasModel: true, queue: [{ ...person, draft: { text: "one old draft", flags: null } }] }))[0];
+  check("a draft saved before 0.8.0 is one tab, the operator's own", [oldT.tabs.map((t) => t.label), oldT.field.value], [["Yours"], "one old draft"]);
+  const rwT = nextCards(snap({ hasModel: true, queue: [person], stash: { rewrite: { id: "t3_q", prior: "D edited", style: "deeper", who: "u/a" } } }))[0];
+  check("the note card says which draft the note is about, and that all three come back", [/Deeper/.test(rwT.eyebrow), /D edited/.test(rwT.help), rwT.primary.label], [true, true, "Rewrite all three"]);
+  check("the campaign walk deals on a name alone — the idea is the first card, empty", (() => { const c = nextCards(snap({ stash: { campaign_draft: { name: "Launch posts", id: "launch-posts", by: "you", done: [] } } }))[0]; return [c.id, c.field.value]; })(), ["campaign.idea", ""]);
+  const onbT = { account: { name: "x" }, stash: { ...allVoice, welcomed: true }, memory: memDone, sources: [{ id: "s", place: "saas" }], rooms: [{ place: "saas", state: "allowed" }], itemCount: 3 };
+  check("a room tried from the panel deals its cards once the project is onboarded", nextCards(snap({ ...onbT, stash: { ...onbT.stash, probe: { place: "founder", q: "x", fired: true } }, probe: { running: false, last: { read: 5 }, fitRate: 0.4 } }))[0].id, "onboard.watch");
+  check("Watch pressed and not landed yet is a wait, never the room question again", [nextCards(snap({ ...onbT, sources: [], stash: { ...onbT.stash, probe: { place: "founder", q: "x", fired: true, watching: true } }, probe: { running: false, last: { read: 5 }, fitRate: 0.4 } }))[0].id, nextCards(snap({ ...onbT, stash: { ...onbT.stash, probe: { place: "founder", q: "x", fired: true, watching: true } } }))[0].question], ["onboard.watching", "Watching founder."]);
+  check("a focused deck says so when it is quiet", /under “launch-posts”/.test(nextCards(snap({ ...onbT, focus: "launch-posts" }))[0].question), true);
+
+  /* Through the server: the panel's state and its buttons, and the tabs. */
+  const boxP = mkdtempSync(join(tmpdir(), "mq-panel-"));
+  const DP = join(boxP, ".mq");
+  const { OPENROUTER_API_KEY: _k, MQ_PLAN: _p, ...envP } = process.env;
+  execFileSync(process.execPath, [ES, "init"], { env: { ...envP, MQ_DIR: DP }, stdio: "ignore" });
+  writeFileSync(join(DP, "account.json"), JSON.stringify({ name: "panel_8", added: "2026-09-06T00:00:00Z" }));
+  writeFileSync(join(DP, "rooms", "saas.md"), "promotion_allowed: yes\n");
+  writeCampaign(DP, { name: "Launch posts", platform: "reddit", mention: "never", idea: "one true observation" });
+  appendFileSync(join(DP, "found.jsonl"), JSON.stringify({ id: "t3_p1", place: "saas", url: "https://www.reddit.com/r/saas/comments/p1/x/", author: "pia", title: "launched", body: "zero users", probe: "saas:launch", seen_at: "2026-09-06T01:00:00Z", comments: 2 }) + "\n");
+  appendFileSync(join(DP, "verdicts.jsonl"), JSON.stringify({ id: "t3_p1", fit: true, why: "asks", rule: "test", at: "2026-09-06T01:00:01Z" }) + "\n");
+  appendFileSync(join(DP, "drafts.jsonl"), JSON.stringify({ id: "t3_p1", url: "https://www.reddit.com/r/saas/comments/p1/x/", at: "2026-09-06T01:30:00Z", turn: 1, round: 1, drafts: [{ style: "straight", text: "S1", flags: {} }, { style: "deeper", text: "D1", flags: {} }, { style: "ask", text: "A1", flags: {} }], text: "S1", flags: {} }) + "\n");
+  const SP = store(DP);
+  const srvP = spawn(process.execPath, [SERVE, "--port", "0"], { env: { ...envP, MQ_DIR: DP }, stdio: ["ignore", "pipe", "pipe"] });
+  const baseP = await new Promise((resolve) => {
+    let out = "";
+    const t = setTimeout(() => resolve(null), 8000);
+    srvP.stdout.on("data", (d) => { out += d; const m = out.match(/http:\/\/127\.0\.0\.1:(\d+)/); if (m) { clearTimeout(t); resolve(`http://127.0.0.1:${m[1]}`); } });
+  });
+  if (!baseP) { console.log("FAIL  the panel server did not start"); fail++; }
+  else {
+    const GP = async (p) => { const r = await fetch(baseP + p); return { status: r.status, json: await r.json().catch(() => null) }; };
+    const PP = async (p, body, type = "application/json") => { const r = await fetch(baseP + p, { method: "POST", headers: { "content-type": type }, body: JSON.stringify(body) }); return { status: r.status, json: await r.json().catch(() => null) }; };
+    const stP = async () => (await GP("/api/panel")).json;
+    const deckP = async () => (await GP("/api/cards")).json.cards;
+    const st0 = await stP();
+    check("the panel's state: free by default, no key yet and where one comes from, the campaign with its numbers, the seats on free models", [st0.settings.plan, st0.settings.key.set, /openrouter\.ai\/keys/.test(st0.settings.key.url), st0.campaigns.map((c) => c.id), st0.campaigns[0].numbers.found, st0.settings.roles.map((r) => r.key), st0.settings.roles.every((r) => /:free$/.test(r.model)), st0.general.found, st0.account, st0.focus], ["free", false, true, ["launch-posts"], 0, ["judge", "scout", "writer"], true, 1, "panel_8", null]);
+    check("a panel act that is not JSON is refused; one the panel cannot do is named", [(await PP("/api/panel/act", { do: "tick" }, "text/plain")).status, (await PP("/api/panel/act", { do: "explode" })).json.error], [400, "not a thing the panel can do: explode"]);
+    check("the key is checked before it is kept, and can be removed", [(await PP("/api/panel/act", { do: "settings.key", key: "hunter2" })).status, (await PP("/api/panel/act", { do: "settings.key", key: "sk-or-test-key" })).status, (await stP()).settings.key.set, (await PP("/api/panel/act", { do: "settings.key", key: "" })).status, (await stP()).settings.key.set], [400, 200, true, 200, false]);
+    check("a seat takes only its plan's menu; the plan switches, refuses a made-up one, and switches back", [(await PP("/api/panel/act", { do: "settings.model", role: "judge", model: "moonshotai/kimi-k3" })).status, (await PP("/api/panel/act", { do: "settings.model", role: "judge", model: "inclusionai/ling-3.0-flash-fin:free" })).status, (await stP()).settings.roles[0].model, (await PP("/api/panel/act", { do: "settings.plan", plan: "paid" })).status, (await stP()).settings.plan, (await PP("/api/panel/act", { do: "settings.plan", plan: "gold" })).status, (await PP("/api/panel/act", { do: "settings.plan", plan: "free" })).status], [400, 200, "inclusionai/ling-3.0-flash-fin:free", 200, "paid", 400, 200]);
+    check("the deck focuses on a campaign, on nobody's, on everything — and refuses a campaign that is not there", [(await PP("/api/panel/act", { do: "campaign.focus", id: "launch-posts" })).status, (await deckP()).some((c) => c.id === "work.reply.t3_p1"), (await stP()).focus, (await PP("/api/panel/act", { do: "campaign.focus", id: "none" })).status, (await deckP())[0].id, (await PP("/api/panel/act", { do: "campaign.focus", id: "" })).status, (await stP()).focus, (await PP("/api/panel/act", { do: "campaign.focus", id: "nope" })).status], [200, false, "launch-posts", 200, "work.reply.t3_p1", 200, null, 400]);
+    await PP("/api/panel/act", { do: "campaign.focus", id: "launch-posts" });
+    check("pausing the focused campaign pauses it and lets the focus go; resume brings it back", [(await PP("/api/panel/act", { do: "campaign.status", id: "launch-posts", status: "paused" })).status, readCampaign(DP, "launch-posts").status, (await stP()).focus, (await PP("/api/panel/act", { do: "campaign.status", id: "launch-posts", status: "active" })).status, (await PP("/api/panel/act", { do: "campaign.status", id: "launch-posts", status: "gone" })).status], [200, "paused", null, 200, 400]);
+    check("a campaign is edited from the panel: the voice and the mention, the idea untouched", [(await PP("/api/panel/act", { do: "campaign.save", id: "launch-posts", voice: "dry", mention: "disclosed" })).status, readCampaign(DP, "launch-posts").voice, readCampaign(DP, "launch-posts").mention, readCampaign(DP, "launch-posts").idea, (await PP("/api/panel/act", { do: "campaign.save", id: "nope", voice: "x" })).status], [200, "dry", "disclosed", "one true observation", 400]);
+    check("a new campaign from the panel needs a name, refuses a name already taken, and starts the walk on the deck", [(await PP("/api/panel/act", { do: "campaign.new", name: "" })).status, (await PP("/api/panel/act", { do: "campaign.new", name: "Launch posts" })).status, (await PP("/api/panel/act", { do: "campaign.new", name: "Roast me threads" })).status, (await deckP())[0].id, /Roast me threads/.test((await deckP())[0].eyebrow), (await deckP())[0].field.value], [400, 400, 200, "campaign.idea", true, ""]);
+    await PP("/api/cards/act", { card: "campaign.idea", action: "drop" });
+    check("a room needs a name before it is probed, under a campaign or not; a source has to be watched to be stopped", [(await PP("/api/panel/act", { do: "campaign.probe", id: "launch-posts", place: "" })).status, (await PP("/api/panel/act", { do: "probe", place: "" })).status, (await PP("/api/panel/act", { do: "unwatch", id: "saas:new" })).status, (await PP("/api/panel/act", { do: "account", name: "" })).status], [400, 400, 400, 400]);
+    check("a room's rules are recorded from the panel", [(await PP("/api/panel/act", { do: "room.rules", place: "founder", answer: "yes" })).status, SP.roomState("founder").state !== "unanswered", (await PP("/api/panel/act", { do: "room.rules", place: "founder", answer: "maybe" })).status], [200, true, 400]);
+    check("a project is made and switched from the panel, and switched back", [(await PP("/api/panel/act", { do: "project.new", name: "Other thing" })).status, (await GP("/api/cards")).json.project.id, (await PP("/api/panel/act", { do: "project.use", id: "default" })).status, (await GP("/api/cards")).json.project.id], [200, "other-thing", 200, "default"]);
+    const top = (await deckP())[0];
+    check("the reply card from the store carries the tabs", [top.id, top.tabs.map((t) => t.id), top.field.value], ["work.reply.t3_p1", ["straight", "deeper", "ask"], "S1"]);
+    await PP("/api/cards/act", { card: "work.reply.t3_p1", action: "rewrite", text: "D1 edited", tab: "deeper" });
+    const rwP = (await deckP())[0];
+    check("Rewrite from the second tab: the note card knows which draft, with the words as edited", [rwP.id, /Deeper/.test(rwP.eyebrow), /D1 edited/.test(rwP.help)], ["work.rewrite.t3_p1", true, true]);
+    await PP("/api/cards/act", { card: "work.rewrite.t3_p1", action: "keep" });
+    await PP("/api/cards/act", { card: "work.reply.t3_p1", action: "posted", text: "", tab: "ask" });
+    const cp = conversationRows(SP).get("t3_p1");
+    check("'I posted it' from the third tab records that tab's words, and which style went up, on the conversation and the mark", [cp.turns[0].text, cp.turns[0].style, SP.marks().get("t3_p1").style], ["A1", "ask", "ask"]);
+    check("the panel's files are served, tabs and all", [/es-tabs/.test(await (await fetch(baseP + "/panel/")).text()), /es-tabs-strip/.test(await (await fetch(baseP + "/panel/card.css")).text()), /api\/panel/.test(await (await fetch(baseP + "/panel/sidepanel.js")).text())], [true, true, true]);
+  }
+  srvP.kill();
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

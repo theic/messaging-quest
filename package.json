@@ -1,7 +1,7 @@
 {
   "name": "messaging-quest",
-  "version": "0.7.0",
-  "description": "Your marketing specialist, one card at a time: find out what Reddit actually did to the comments you wrote, and answer the people asking for what you sell. You press Post; it never does.",
+  "version": "0.8.0",
+  "description": "A marketing colleague in your browser: finds the people asking for what you sell, drafts the reply three ways in your own voice, tracks who wrote back. Free models, your own Chrome, nothing hosted. You press Post; it never does.",
   "keywords": [
     "reddit",
     "shadowban",

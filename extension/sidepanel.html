@@ -6,18 +6,34 @@
   <link rel="stylesheet" href="card.css">
 </head>
 <body>
+  <header class="es-top">
+    <div class="es-top-row">
+      <label class="es-project"><span class="es-project-word">project</span><select id="project" aria-label="project"></select></label>
+      <a id="dash" class="es-top-link" href="#" target="_blank" rel="noreferrer noopener">Dashboard ↗</a>
+    </div>
+    <nav class="es-tabs" aria-label="panel">
+      <button type="button" data-view="deck" aria-selected="true">Next<span class="es-badge" id="badge-deck" hidden></span></button>
+      <button type="button" data-view="campaigns" aria-selected="false">Campaigns<span class="es-badge" id="badge-campaigns" hidden></span></button>
+      <button type="button" data-view="rooms" aria-selected="false">Rooms<span class="es-badge" id="badge-rooms" hidden></span></button>
+      <button type="button" data-view="settings" aria-selected="false">Settings<span class="es-badge" id="badge-settings" hidden></span></button>
+    </nav>
+  </header>
   <main>
-    <div id="jobs" class="es-jobs"></div>
-    <div id="card"></div>
-    <div id="error" class="es-error" hidden></div>
-    <div id="answer" class="es-said" hidden></div>
+    <section id="view-deck">
+      <div id="focus-line" class="es-focus" hidden></div>
+      <div id="jobs" class="es-jobs"></div>
+      <div id="card"></div>
+      <div id="error" class="es-error" hidden></div>
+      <div id="answer" class="es-said" hidden></div>
+    </section>
+    <section id="view-campaigns" hidden></section>
+    <section id="view-rooms" hidden></section>
+    <section id="view-settings" hidden></section>
   </main>
   <footer>
     <input id="ask" placeholder="Ask your specialist…" autocomplete="off">
     <button id="send" type="button">Ask</button>
   </footer>
-  <div class="es-server" id="project-line"></div>
-  <div class="es-server" id="server-line"></div>
   <script type="module" src="sidepanel.js"></script>
 </body>
 </html>

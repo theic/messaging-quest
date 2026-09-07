@@ -29,11 +29,12 @@ import { history, STATES } from "../lib/verdict.mjs";
 import { standing, readiness, burst, mix, PER_ROOM_24H, OVERALL_24H, CQS_NOTE } from "../lib/ready.mjs";
 import { roomFile } from "../lib/rules.mjs";
 import { mergeVoice, voiceRules, voiceSummary, applyVoiceAnswers, VOICE_UNSURE } from "../lib/voice.mjs";
-import { nextCards, readStash, patchStash, proposable, onboarded } from "../lib/cards.mjs";
+import { nextCards, readStash, patchStash, proposable, onboarded, draftTabs } from "../lib/cards.mjs";
+import { styleOf } from "../lib/writing.mjs";
 import { controlBroker } from "../lib/control.mjs";
 import { jobStore } from "../lib/jobs.mjs";
 import { MEMORY, readMemory, readOne, writeMemory, seedMissing, memoryProgress } from "../lib/memory.mjs";
-import { PLANS, ROLES, LOCAL_URL, plan, setPlan, chosen, choose, localConfig, setLocal, probeLocal, modelInfo, alternatesFor,
+import { PLANS, ROLES, LOCAL_URL, KEY_URL, plan, setPlan, chosen, choose, localConfig, setLocal, probeLocal, modelInfo, alternatesFor,
   readKey, writeKey, hasKey, hasModel, keySource, judgeEstimate, money } from "../lib/models.mjs";
 import { page, esc, empty, runBtn, tag, steps, setupBanner, APP_JS, CSP } from "../lib/ui.mjs";
 import { tokens, issueToken, revokeToken } from "../lib/feed.mjs";
@@ -487,12 +488,11 @@ ${ready.state === "not ready" ? `<div class="note"><b>${esc(ready.why)}</b></div
   <p class="sub" style="font-size:13px;margin:12px 0 0">judged fit: ${esc(it.why || "—")}</p>
 </div>
 <div class="card">
-  <h2 style="margin-top:0">${draft ? "Your draft" : "No draft yet"}</h2>
-  ${draft ? `<div class="said">${esc(draft.text)}</div>
-    ${(draft.flags?.repeat ?? 0) >= 8 ? `<div class="note" style="margin-top:14px"><b>Repeated phrasing:</b> ${draft.flags.repeat} identical consecutive words you have used before.</div>` : ""}
-    ${(draft.flags?.claims ?? 0) ? `<div class="note" style="margin-top:14px"><b>${draft.flags.claims} claim(s) about your history</b> — each is either true or it is the thing that ends the account.</div>` : ""}
-    ${(draft.flags?.links ?? 0) ? `<div class="note" style="margin-top:14px"><b>Invented link.</b> Not present in the thread we read.</div>` : ""}
-    ${(draft.flags?.tells ?? 0) ? `<div class="note" style="margin-top:14px"><b>Reads like a template.</b> ${draft.flags.tells} phrase${draft.flags.tells === 1 ? "" : "s"} nobody types to one person — <code>mq draft ${esc(it.id)} --save</code> names them.</div>` : ""}`
+  <h2 style="margin-top:0">${draft ? `Your drafts${(draft.round ?? 1) > 1 ? ` · round ${draft.round}` : ""}` : "No draft yet"}</h2>
+  ${draft ? `${draft.note ? `<p class="sub" style="font-size:13px">Written after your note: &ldquo;${esc(draft.note)}&rdquo;</p>` : ""}
+    ${draftTabs(draft).map((tb) => `<div class="meta" style="margin-top:12px">${esc(tb.label)}</div><div class="said">${esc(tb.value)}</div>
+    ${tb.warnings.length ? `<div class="note" style="margin-top:8px">${tb.warnings.map((w) => `<b>${esc(w)}</b>`).join(" · ")} — each is either true or it is the thing that ends the account; <code>mq draft ${esc(it.id)} --save</code> names them.</div>` : ""}`).join("")}
+    <p class="sub" style="font-size:13px;margin:12px 0 0">Three drafts, one per style — pick and edit on the panel, or comment on one there and all three are written again.</p>`
     : hasModel(P())
       ? `<p class="sub">Nothing written for this one yet.</p>
          <div class="actions">${runBtn("draft", "Write a draft", { args: [it.id], primary: true })}</div>`
@@ -822,7 +822,7 @@ by shape: 4,074 reads for 173 leads in the corpus, 23.5 reads each.</p>
 <div class="actions" style="margin-top:0">${runBtn("tick", "Read what is due", { primary: true })}</div>
 ${srcs.map((s) => { const r = reads.get(s.id); return `<div class="card">
 <div class="row" style="border:0;padding:0"><b>${esc(s.id)}</b>
-<span class="sub" style="font-size:13px">${found.filter((f) => f.probe === s.id).length} found</span></div>
+<span class="sub" style="font-size:13px">${found.filter((f) => String(f.probe ?? "").toLowerCase() === s.id).length} found</span></div>
 <p class="sub" style="margin:8px 0 0;font-size:13px">${r ? (r.ok ? `last read ${fmt(r.at)} · ${esc(ago(r.at))}` : `<span class="no">error: ${esc(r.err ?? "")}</span>`) : "never read"} · every ${s.cadence_min}m</p>
 <div class="actions" style="margin-top:12px">${runBtn("unwatch", "Stop watching", { args: [s.id], small: true, confirm: `Stop watching ${s.id}? What it already found is untouched.` })}</div>
 </div>`; }).join("")}
@@ -959,7 +959,7 @@ ${Object.values(PLANS).map((q) => `<div class="card" style="margin:0${q.key === 
 <h2 style="margin-top:24px">${p === "local" ? "Your server" : "OpenRouter"}</h2>
 <p class="sub">${p === "local"
     ? "Any OpenAI-compatible server on this machine or your network. No key unless it wants one."
-    : `${p === "free" ? "The free variants need a key too — making one costs nothing." : "Your key, on your machine, for your bill."} There is nothing to install; the key is the only requirement.`}</p>
+    : `${p === "free" ? `The free models need a key too — a free one, no card, nothing ever charged: <a href="${KEY_URL}" rel="noreferrer noopener" target="_blank">openrouter.ai/keys</a>.` : "Your key, on your machine, for your bill."} There is nothing to install; the key is the only requirement.`}</p>
 ${p === "local" ? localCard : keyCard}
 
 <h2>Models</h2>
@@ -1287,17 +1287,19 @@ const startAgentic = (verb, args) => {
       // Everything after the id rides through: "--note <text>" is the
       // operator's critique of the last draft (the rewrite card).
       const prompt = await capture("draft", [id, ...args.slice(1)]);
-      if (/--note/.test(args.join(" "))) ctl.log("with the operator's note on the last draft");
+      const note = args.includes("--note") ? String(args[args.indexOf("--note") + 1] ?? "") : "";
+      const style = args.includes("--style") ? String(args[args.indexOf("--style") + 1] ?? "") : "";
+      if (note) ctl.log(`with the operator's note on the last round${style ? ` (the ${style} draft)` : ""}`);
       const { draftReply } = await import("../lib/agents.mjs");
-      const { options, no_fit } = await draftReply(P(), prompt, ctl);
-      if (!options.length) { ctl.log(no_fit ? `the writer declined: ${no_fit}` : "nothing came back"); return; }
-      ctl.log(`\n${options.length} option${options.length === 1 ? "" : "s"}:`);
-      for (const o of options) ctl.log(`\n— ${o.move}\n${o.text}`);
-      // The first is saved so it lands on the card; the rest are in this log.
-      // Saving runs the two refusals, which is the only reason to go through
-      // the CLI rather than appending a draft row here.
-      ctl.log(`\nsaving the first, and running the refusals over it`);
-      await runEs("draft", [id, "--save"], { stdin: options[0].text, ctl });
+      const { drafts, no_fit } = await draftReply(P(), prompt, ctl);
+      if (!drafts.length) { ctl.log(no_fit ? `the writer declined: ${no_fit}` : "nothing came back"); return; }
+      ctl.log(`\n${drafts.length} draft${drafts.length === 1 ? "" : "s"}:`);
+      for (const d of drafts) ctl.log(`\n— ${d.style}\n${d.text}`);
+      // All three are saved as one round, so they land on the card as tabs.
+      // Saving runs the refusals over each, which is the only reason to go
+      // through the CLI rather than appending a draft row here.
+      ctl.log(`\nsaving the round, and running the refusals over each`);
+      await runEs("draft", [id, "--save"], { stdin: JSON.stringify({ drafts, ...(note ? { note, style } : {}) }), ctl });
     }, { label: AGENTIC.draft });
   }
   return { error: `${verb} is not a thing this can run` };
@@ -1535,7 +1537,15 @@ const startScout = (siteUrl) => {
 };
 
 function cardSnapshot() {
-  const stash = readStash(P());
+  let stash = readStash(P());
+  // A watch the operator pressed: the probe is cleared once its source is
+  // on the list, and un-marked if the watch job ended without writing one
+  // (a refusal — the watch card comes back and the job log says why).
+  if (stash.probe?.watching) {
+    const landed = S.sources().some((s) => s.place === stash.probe.place && (s.q ?? null) === (stash.probe.q ?? null));
+    if (landed) stash = patchStash(P(), { probe: null });
+    else if (!J.busy("watch")) stash = patchStash(P(), { probe: { ...stash.probe, watching: false } });
+  }
   const scoutJob = stash.scoutJob ? J.get(stash.scoutJob) : null;
   const scout = scoutJob
     ? {
@@ -1568,10 +1578,15 @@ function cardSnapshot() {
   }
 
   // The queue with everything the reply card needs to be a control panel.
+  // Under a FOCUS (0.8.0, the panel's campaign picker) only the people who
+  // came in under that campaign — or under none — are dealt; the rest wait
+  // where they were. The pending count and the judge stay global.
+  const focus = stash.campaign_focus ?? null;
+  const inFocus = (row) => (focus === null ? true : focus === "none" ? !row.campaign : row.campaign === focus);
   const drafts = S.drafts();
   const stand = standing([...S.items().values()], S.checksById());
   const sent = S.sentLog();
-  const queue = queueRows().map((it) => {
+  const queue = queueRows().filter(inFocus).map((it) => {
     const draft = drafts.filter((d) => d.id === it.id).pop() ?? null;
     const blocked = burst(sent, it.place);
     const ready = readiness(stand.get(it.place) ?? { place: it.place, comments: 0, visible: 0 }, S.roomState(it.place));
@@ -1584,7 +1599,7 @@ function cardSnapshot() {
 
   // The return (0.7.0): conversations waiting on the operator, oldest
   // first, each with the draft written for THIS turn if there is one.
-  const conversations = waitingRows(S).map((c) => {
+  const conversations = waitingRows(S).filter(inFocus).map((c) => {
     const turn = yourTurns(c) + 1;
     const draft = drafts.filter((d) => d.id === c.id && (d.turn ?? 1) === turn).pop() ?? null;
     const said = (c.turns ?? []).filter((t) => t.by === "you").pop()?.text ?? "";
@@ -1602,6 +1617,7 @@ function cardSnapshot() {
 
   return {
     stash,
+    focus,
     conversations,
     due,
     platform: LB(),
@@ -1638,11 +1654,15 @@ function cardSnapshot() {
  * Returns {ok} or {error}; the client re-fetches the deck either way, because
  * the deck is the truth about what comes next.
  */
-async function actCard({ card, action, choice, choices, text }) {
+async function actCard({ card, action, choice, choices, text, tab }) {
   const id = String(card ?? "");
   const act = String(action ?? "");
   const t = String(text ?? "").trim();
   const picked = String(choice ?? "");
+  // Which of the three drafts the button was pressed from (0.8.0) — the
+  // card's tab. Unknown is null; nothing below needs it to be known.
+  const style = styleOf(tab)?.id ?? null;
+  const tabText = (row) => (style && (row?.drafts ?? []).find((d) => d.style === style)?.text) || row?.text || "";
   const many = Array.isArray(choices) ? choices.map(String).filter(Boolean) : [];
   const spawn = (verb, args = []) => { J.spawn(verb, args, { label: SPAWNABLE[verb] }); return { ok: true }; };
   /** One question's answer, as the asker gets it back: a choice id, the list
@@ -1825,7 +1845,10 @@ async function actCard({ card, action, choice, choices, text }) {
       const state = S.roomState(place).state;
       if (state === "unanswered") return { error: `Record ${LB().room(place)}'s rules first — that card is on the deck.` };
       if (state === "banned") return { error: `${LB().room(place)}'s rules forbid it, as you recorded — nothing here will draft for it. Try another room.` };
-      patchStash(P(), { probe: null });
+      // The probe stays on the stash, marked, until the watch job lands
+      // (cardSnapshot clears it once the source exists): clearing it here
+      // dealt "which room?" again for the second the job took (0.8.0).
+      patchStash(P(), { probe: { ...probe, watching: true } });
       // Watched the way it was measured: the phrase that cleared the floor —
       // and under the campaign it was probed for.
       return spawn("watch", [place, ...(probe.q ? ["--q", probe.q] : []), ...(probe.campaign ? ["--campaign", probe.campaign] : [])]);
@@ -1879,12 +1902,13 @@ async function actCard({ card, action, choice, choices, text }) {
       // be able to record a send the governor already said no to.
       const blocked = burst(S.sentLog(), it.place);
       if (blocked) return { error: blocked.why };
-      S.append("marks.jsonl", { id: itemId, mark: "sent", at: new Date().toISOString(), via: "panel" });
+      S.append("marks.jsonl", { id: itemId, mark: "sent", at: new Date().toISOString(), via: "panel", ...(style ? { style } : {}) });
       if (it.author) S.append("contacted.jsonl", { author: it.author, id: itemId, at: new Date().toISOString() });
       // The conversation opens here, with what actually went up — the
-      // card's field as edited, or the draft when the panel sent nothing.
+      // card's field as edited, or the tab's draft when the panel sent
+      // nothing — and which of the three it was.
       const last = S.drafts().filter((d) => d.id === itemId).pop();
-      openConversation(S, it, { text: t || last?.text || "", via: "panel" });
+      openConversation(S, it, { text: t || tabText(last), via: "panel", style });
       return { ok: true };
     }
     if (act === "skip") {
@@ -1894,7 +1918,7 @@ async function actCard({ card, action, choice, choices, text }) {
     if (act === "draft") { startAgentic("draft", [itemId]); return { ok: true }; }
     if (act === "rewrite") {
       const last = S.drafts().filter((d) => d.id === itemId).pop();
-      patchStash(P(), { rewrite: { id: itemId, prior: t || last?.text || "", who: it.author ? `u/${it.author}` : null } });
+      patchStash(P(), { rewrite: { id: itemId, prior: t || tabText(last), style, who: it.author ? `u/${it.author}` : null } });
       return { ok: true };
     }
     return { ok: true }; // "insert" is client-side; nothing to record until "posted"
@@ -1910,7 +1934,7 @@ async function actCard({ card, action, choice, choices, text }) {
     if (act === "posted") {
       const turn = yourTurns(conv) + 1;
       const last = S.drafts().filter((d) => d.id === itemId && (d.turn ?? 1) === turn).pop();
-      recordTurn(S, conv, { text: t || last?.text || "", via: "panel" });
+      recordTurn(S, conv, { text: t || tabText(last), via: "panel", style });
       return { ok: true };
     }
     if (act === "skip") { closeConversation(S, conv); return { ok: true }; }
@@ -1918,19 +1942,21 @@ async function actCard({ card, action, choice, choices, text }) {
     if (act === "rewrite") {
       const turn = yourTurns(conv) + 1;
       const last = S.drafts().filter((d) => d.id === itemId && (d.turn ?? 1) === turn).pop();
-      patchStash(P(), { rewrite: { id: itemId, prior: t || last?.text || "", who: conv.latest?.author ? `u/${conv.latest.author}` : null } });
+      patchStash(P(), { rewrite: { id: itemId, prior: t || tabText(last), style, who: conv.latest?.author ? `u/${conv.latest.author}` : null } });
       return { ok: true };
     }
     return { ok: true };
   }
 
-  /* The note for the writer: the rejected draft and what should change. */
+  /* The note for the writer: the rejected draft, which of the three it was,
+     and what should change. All three come back written again. */
   if (id.startsWith("work.rewrite.")) {
     const itemId = id.slice("work.rewrite.".length);
+    const r = readStash(P()).rewrite ?? {};
     patchStash(P(), { rewrite: null });
     if (act !== "rewrite") return { ok: true };
-    if (!t) return { error: "say what should change, or keep the draft" };
-    startAgentic("draft", [itemId, "--note", t.slice(0, 600)]);
+    if (!t) return { error: "say what should change, or keep the drafts" };
+    startAgentic("draft", [itemId, "--note", t.slice(0, 600), ...(r.style ? ["--style", r.style] : [])]);
     return { ok: true };
   }
 
@@ -1992,6 +2018,164 @@ const controlSummary = () => ({
   grants: CONTROL.grantsNeeded(),
 });
 
+/* -------------------------------------------------------------- the panel */
+
+// The panel is self-contained from 0.8.0: beside the deck it has the
+// campaigns, the rooms and the settings as tabs of its own, so switching a
+// project or a campaign, trying another room, or changing the seats never
+// needs the dashboard. One GET says what those tabs show; one POST is every
+// button on them. JSON-only, same CSRF boundary as the deck's two routes.
+
+const roomId = (v) => String(v ?? "").trim().replace(/^\/?r\//i, "").replace(/[^\w-]/g, "").slice(0, 40);
+
+/** What the panel's tabs show: campaigns with numbers and sources, what is
+ *  watched and whether it is due, the rooms and their rules, the seats. */
+function panelState() {
+  const dir = P();
+  const stash = readStash(dir);
+  const camps = readCampaigns(dir);
+  const dg = campaignDigest(S, camps);
+  const numbersOf = (id) => { const r = dg.find((x) => x.id === id); return r ? { found: r.found, judged: r.judged, fit: r.fit, fitRate: r.fitRate, sent: r.sent, replies: r.replies, second: r.second, waiting: r.waiting, crowd: r.crowd } : null; };
+  const srcs = S.sources();
+  const reads = new Map(S.readJsonl("reads.jsonl").filter((r) => r.source).map((r) => [r.source, r]));
+  const found = [...S.found().values()];
+  const L = LB();
+  const p = plan(dir);
+  const picks = chosen(dir, p);
+  const probed = [...new Set(S.readJsonl("probes.jsonl").map((r) => r.place).filter(Boolean))];
+  const rooms = [...new Set([...srcs.map((s) => s.place), ...probed, ...(stash.probe?.place ? [stash.probe.place] : [])])]
+    .map((place) => ({ place, label: L.room(place), state: S.roomState(place).state, rulesUrl: L.rulesUrl(place), watched: srcs.some((s) => s.place === place) }));
+  const local = localConfig(dir);
+  return {
+    project: projectSummary(),
+    account: acct()?.name ?? null,
+    // The count only — the files' bodies are the dashboard's to show.
+    setup: (({ done, total }) => ({ done, total }))(memoryProgress(dir)),
+    focus: stash.campaign_focus ?? null,
+    campaigns: camps.map((c) => ({
+      id: c.id, name: c.name, status: c.status, mention: c.mention, idea: c.idea, fit: c.fit, never: c.never, voice: c.voice ?? "", hash: c.hash,
+      numbers: numbersOf(c.id), sources: srcs.filter((s) => s.campaign === c.id).map((s) => s.id),
+    })),
+    general: numbersOf(null),
+    mentions: Object.entries(MENTIONS).map(([id, m]) => ({ id, label: m.label, note: m.note })),
+    sources: srcs.map((s) => {
+      const r = reads.get(s.id);
+      return {
+        id: s.id, place: s.place, label: L.room(s.place), q: s.q ?? null, campaign: s.campaign ?? null, cadence_min: s.cadence_min,
+        // The source id is lowercased by `watch`; the probe's tag kept the
+        // phrase as typed. Same read, so the count compares them as one.
+        found: found.filter((f) => String(f.probe ?? "").toLowerCase() === s.id).length,
+        last: r ? { at: r.at, ok: Boolean(r.ok), err: r.err ?? null } : null,
+        due: !r || Date.now() - Date.parse(r.at) >= s.cadence_min * 60_000,
+      };
+    }),
+    rooms,
+    probe: stash.probe ?? null,
+    pending: S.pending().length,
+    waiting: waitingRows(S).length,
+    running: J.running().map((j) => ({ verb: j.verb, label: j.label })),
+    settings: {
+      plan: p,
+      plans: Object.values(PLANS).map((q) => ({ key: q.key, title: q.title, what: q.what, needsKey: q.needsKey })),
+      key: { set: hasKey(dir), source: keySource(dir), url: KEY_URL },
+      roles: Object.values(ROLES).map((r) => { const info = modelInfo(p, picks[r.key]); return { key: r.key, title: r.title, what: r.what, model: picks[r.key], label: info.label, note: info.note }; }),
+      menu: p === "local" ? Object.values(PLANS.local.menu).map((m) => ({ id: m.id, label: m.label, note: m.note })) : Object.values(PLANS[p].menu).map((m) => ({ id: m.id, label: m.label, note: m.note })),
+      local: { baseUrl: local.baseUrl, key: Boolean(local.key) },
+      server: SELF(),
+      platform: { id: first()?.id ?? null, name: L.name },
+    },
+  };
+}
+
+/** Every button on the panel's tabs. `do` names it; the rest is its input.
+ *  Returns {ok} or {error} — the panel re-reads the state either way. */
+async function panelAct(body = {}) {
+  const dir = P();
+  const act = String(body.do ?? "");
+  const s = (v, n = 200) => String(v ?? "").trim().slice(0, n);
+  const spawnOnce = (verb, args = []) => { const r = J.spawn(verb, args, { label: SPAWNABLE[verb] }); return r?.error ? { error: `${SPAWNABLE[verb] ?? verb} is already running` } : { ok: true }; };
+  switch (act) {
+    case "campaign.status": {
+      const r = setCampaignStatus(dir, s(body.id, 40), s(body.status, 10));
+      if (r.error) return r;
+      INBOX({ type: "campaign.status", title: `“${r.name}” (${r.id}) is now ${r.status} — set on the panel`, campaign: r.id, status: r.status });
+      if (readStash(dir).campaign_focus === r.id && r.status !== "active") patchStash(dir, { campaign_focus: null });
+      return { ok: true };
+    }
+    case "campaign.save": {
+      const prior = readCampaign(dir, s(body.id, 40));
+      if (!prior) return { error: "no such campaign" };
+      const r = writeCampaign(dir, {
+        ...prior,
+        idea: body.idea === undefined ? prior.idea : s(body.idea, 3000),
+        fit: body.fit === undefined ? prior.fit : s(body.fit, 1200),
+        never: body.never === undefined ? prior.never : s(body.never, 1200),
+        voice: body.voice === undefined ? prior.voice : s(body.voice, 600),
+        mention: MENTIONS[body.mention] ? body.mention : prior.mention,
+      });
+      return r.error ? r : { ok: true };
+    }
+    case "campaign.new": {
+      const d = campaignDraft({ name: body.name, idea: body.idea, platform: first()?.id ?? null });
+      if (!d.name || !d.id) return { error: "a campaign needs a name" };
+      if (readCampaign(dir, d.id)) return { error: `a campaign “${d.id}” already exists — edit it instead` };
+      // Onto the deck: the same five cards the specialist's proposal walks
+      // through, the idea asked first when it was not given.
+      patchStash(dir, { campaign_draft: { ...d, by: "you", done: [] } });
+      return { ok: true };
+    }
+    case "campaign.focus": {
+      const id = s(body.id, 40);
+      if (id && id !== "none" && !readCampaign(dir, id)) return { error: "no such campaign" };
+      patchStash(dir, { campaign_focus: id || null });
+      return { ok: true };
+    }
+    case "campaign.probe": {
+      const c = readCampaign(dir, s(body.id, 40));
+      if (!c) return { error: "no such campaign" };
+      const place = roomId(body.place);
+      if (!place) return { error: "name a room" };
+      const q = s(body.q, 120) || null;
+      patchStash(dir, { probe: { place, q, fired: true, campaign: c.id } });
+      return spawnOnce("probe", [place, ...(q ? ["--q", q] : []), "--campaign", c.id]);
+    }
+    case "probe": {
+      const place = roomId(body.place);
+      if (!place) return { error: "name a room" };
+      const q = s(body.q, 120) || null;
+      patchStash(dir, { probe: { place, q, fired: true } });
+      return spawnOnce("probe", q ? [place, "--q", q] : [place]);
+    }
+    case "room.rules": {
+      const place = roomId(body.place);
+      const answer = body.answer === "yes" ? "yes" : body.answer === "no" ? "no" : null;
+      if (!place || !answer) return { error: "which room, and does it allow it — yes or no" };
+      const existing = existsSync(S.roomPath(place)) ? readFileSync(S.roomPath(place), "utf8") : roomFile(place, null, { label: LB().room(place), rulesUrl: LB().rulesUrl(place) });
+      S.writeRoom(place, existing.replace(/^promotion_allowed:.*$/mi, `promotion_allowed: ${answer}`));
+      return { ok: true };
+    }
+    case "unwatch": {
+      const id = s(body.id, 80).toLowerCase();
+      if (!S.sources().some((x) => x.id === id)) return { error: "that source is not watched" };
+      return spawnOnce("unwatch", [id]);
+    }
+    case "tick": return spawnOnce("tick");
+    case "sync": return spawnOnce("sync");
+    case "judge": { const r = startAgentic("judge", []); return r?.error ? r : { ok: true }; }
+    case "settings.plan": { try { setPlan(dir, s(body.plan, 10)); return { ok: true }; } catch (e) { return { error: e.message }; } }
+    case "settings.key": {
+      if (keySource(dir) === "env") return { error: "the key comes from OPENROUTER_API_KEY in this server's environment — change it there" };
+      try { writeKey(dir, s(body.key, 300)); return { ok: true }; } catch (e) { return { error: e.message }; }
+    }
+    case "settings.model": { try { choose(dir, s(body.role, 10), s(body.model, 120)); return { ok: true }; } catch (e) { return { error: e.message }; } }
+    case "settings.local": { try { setLocal(dir, { baseUrl: s(body.baseUrl, 200), ...(body.key !== undefined ? { key: s(body.key, 300) } : {}) }); return { ok: true }; } catch (e) { return { error: e.message }; } }
+    case "account": { const name = s(body.name, 60).replace(/^u\//, ""); if (!name) return { error: "no username" }; return spawnOnce("me", [name]); }
+    case "project.use": return switchProject({ action: "use", id: body.id });
+    case "project.new": return switchProject({ action: "new", name: body.name });
+    default: return { error: `not a thing the panel can do: ${act || "(nothing)"}` };
+  }
+}
+
 /** Read a JSON body, refusing anything that is not declared as one. The
  *  declaration is the CSRF boundary: a cross-origin page cannot send
  *  application/json without a preflight, and nothing here answers preflights. */
@@ -2031,6 +2215,17 @@ const server = createServer((req, res) => {
   if (url.pathname === "/api/projects" && req.method === "POST") {
     return jsonBody(req)
       .then((body) => { const out = switchProject(body ?? {}); res.writeHead(out.error ? 400 : 200, JSON_HEAD).end(JSON.stringify(out)); })
+      .catch((e) => res.writeHead(400, JSON_HEAD).end(JSON.stringify({ error: e.message })));
+  }
+
+  /* The panel's own tabs (0.8.0): campaigns, rooms, settings — and their buttons. */
+  if (url.pathname === "/api/panel" && req.method === "GET") {
+    try { return res.writeHead(200, JSON_HEAD).end(JSON.stringify(panelState())); }
+    catch (e) { console.error(e); return res.writeHead(500, JSON_HEAD).end(JSON.stringify({ error: e.message })); }
+  }
+  if (url.pathname === "/api/panel/act" && req.method === "POST") {
+    return jsonBody(req)
+      .then(async (body) => { const out = await panelAct(body ?? {}); res.writeHead(out.error ? 400 : 200, JSON_HEAD).end(JSON.stringify(out)); })
       .catch((e) => res.writeHead(400, JSON_HEAD).end(JSON.stringify({ error: e.message })));
   }
 
@@ -2279,7 +2474,7 @@ export function serve(port = PORT) {
         ? `models: the local plan — ${localConfig(P()).baseUrl}; nothing is billed and nothing leaves this machine.`
         : hasKey(P())
           ? `models: the ${p} plan on OpenRouter — the scout, judge and writer are available.`
-          : `no OpenRouter key — add one at /settings (the free plan needs one too), or pick Local there to run a model on this machine.`);
+          : `no OpenRouter key yet — a free one (${KEY_URL}, no card) goes on the panel's Settings tab or /settings; or pick Local there to run a model on this machine.`);
       console.log(`ctrl-c to stop.`);
       resolve(server);
       // The brain, if installed, after the port: the deck answers now, the

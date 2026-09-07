@@ -43,7 +43,7 @@ import { readCampaigns, readCampaign, setCampaignStatus, writerBlock } from "../
 import { listProjects, createProject, useProject, currentDir } from "../lib/projects.mjs";
 import { seedMissing } from "../lib/memory.mjs";
 import { measureVoice, mergeVoice, voiceRules, voiceSummary, lengthCeiling, MIN_SAMPLE_CHARS } from "../lib/voice.mjs";
-import { signalWritingRules, communityRisks } from "../lib/writing.mjs";
+import { signalWritingRules, communityRisks, draftsBlock, styleOf, styleLabel, YOURS } from "../lib/writing.mjs";
 import { repeats, claims, inventedLinks, tells, RUN_LIMIT } from "../lib/guards.mjs";
 import { standing, readiness, burst, mix, CQS_NOTE, PER_ROOM_24H, OVERALL_24H } from "../lib/ready.mjs";
 
@@ -797,7 +797,7 @@ cmds.sources = () => {
   const seen = [...found().values()];
   for (const s of all) {
     const r = lr.get(s.id);
-    console.log(`${s.id.padEnd(34)} ${String(seen.filter((f) => f.probe === s.id).length).padStart(4)} found   ${!r ? "never read" : r.ok ? `read ${r.at.slice(0, 16).replace("T", " ")}` : `ERROR ${r.err ?? ""}`}${s.campaign ? `   campaign ${s.campaign}` : ""}`);
+    console.log(`${s.id.padEnd(34)} ${String(seen.filter((f) => String(f.probe ?? "").toLowerCase() === s.id).length).padStart(4)} found   ${!r ? "never read" : r.ok ? `read ${r.at.slice(0, 16).replace("T", " ")}` : `ERROR ${r.err ?? ""}`}${s.campaign ? `   campaign ${s.campaign}` : ""}`);
   }
 };
 
@@ -1086,6 +1086,9 @@ cmds.draft = (args, stdin) => {
   const stage = turn > 1 ? "conversation" : c?.mention === "disclosed" ? "disclosed" : "opener";
   const me = meFile().trim();
   const note = args.includes("--note") ? String(args[args.indexOf("--note") + 1] ?? "").trim() : "";
+  // Which of the three the operator was looking at when they wrote the note
+  // (0.8.0) — the tab on the card. Unknown is fine; the note still applies.
+  const noteStyle = args.includes("--style") ? String(args[args.indexOf("--style") + 1] ?? "") : "";
   console.log(turn > 1 ? `# Answer this person — turn ${turn}\n` : `# Answer this person\n`);
   console.log(`${it.author ?? "?"} in ${L().room(it.place)} — ${it.url}${c ? `\nCampaign: ${c.name} (${c.id}, mention: ${c.mention})` : ""}\n`);
   console.log(`## What they said\n\n${it.title ? `**${it.title}**\n\n` : ""}${(it.body || "").slice(0, 1600)}\n`);
@@ -1100,76 +1103,119 @@ cmds.draft = (args, stdin) => {
     pitch: firstLine(me) || "(nothing in me.md yet — write it, or this is guesswork)",
     problem: null, style: null, styleNotes: null, voice: fp,
   }).trim());
-  if (note) {
-    const prior = readJsonl("drafts.jsonl").filter((d) => d.id === id && (d.turn ?? 1) === turn).pop();
-    console.log(`\n## What the operator said about the last draft — this outranks everything above except the refusals\n\n${note}\n`);
-    if (prior) console.log(`The draft they were looking at:\n\n--- rejected ---\n${prior.text}\n--- end ---\n\nWrite a different reply that does what the note asks. Do not lightly edit the rejected one.`);
-  }
   const risks = communityRisks(it.url, P().id, stage === "conversation" ? "conversation" : "opener");
   if (risks.length) { console.log(`\n## Where you are writing\n`); for (const r of risks) console.log(`- ${r}`); }
   if (c) {
-    const said = readJsonl("drafts.jsonl").filter((d) => d.campaign === c.id && d.id !== it.id).map((d) => d.text);
+    // Everything already written under the campaign to OTHER people — every
+    // draft of every round, so "in your own words" is checkable against all
+    // of it, not just the tab that was posted.
+    const said = readJsonl("drafts.jsonl").filter((d) => d.campaign === c.id && d.id !== it.id).flatMap((d) => draftTexts(d));
     console.log(`\n## The campaign\n\n${writerBlock(c, { said })}`);
   }
 
-  // §15 keeps this block: named axes of difference, labels the writer chooses,
-  // and one option being a correct answer.
-  console.log(`\n## Three options, differing by MOVE\n`);
-  console.log(`Three ways of saying one sentence is a worse product than one good reply, and you can tell instantly.`);
-  console.log(`Different approaches means: answering the literal question versus answering what is behind it;`);
-  console.log(`leading with the specific detail versus leading with the shared experience; solving it outright`);
-  console.log(`versus pointing them at whoever already solved it. If there is only ONE honest thing to say here,`);
-  console.log(`write one — that is a correct answer and a better one than padding.`);
-  console.log(`\nEach option carries a SHORT NAME you write, one or two words, naming what actually differs:`);
-  console.log(`"direct", "story first", "just the link", "asks back". Never "option 2".`);
-  console.log(`\nUnder ${lengthCeiling(fp)} characters.`);
+  // The three styles by name (0.8.0, lib/writing.mjs STYLES) — and, on a
+  // rewrite, the operator's note with the draft they were looking at.
+  let prior = null;
+  if (note) {
+    const last = readJsonl("drafts.jsonl").filter((d) => d.id === id && (d.turn ?? 1) === turn).pop();
+    const which = last ? (last.drafts ?? []).find((d) => d.style === String(noteStyle).toLowerCase()) : null;
+    prior = which?.text ?? last?.text ?? null;
+  }
+  console.log(`\n${draftsBlock({ ceiling: lengthCeiling(fp), note, prior, style: noteStyle })}`);
   if (me) console.log(`\n## What you can honestly say about yourself\n\n${me.slice(0, 1200)}`);
   else console.log(`\n## me.md is empty\n\nWrite ${DIR}/me.md — what you have actually built. Every first-person claim gets checked against it.`);
-  console.log(`\n---\nWhen you have a draft:  mq draft ${id} --save < reply.txt`);
+  console.log(`\n---\nWhen you have a draft:  mq draft ${id} --save < reply.txt     (or the three as JSON: {"drafts":[{"style":"straight","text":"…"},…]})`);
 };
+
+/** Every text a draft row holds: the three of a round, or the one of an
+ *  older row. */
+const draftTexts = (d) => (Array.isArray(d?.drafts) && d.drafts.length ? d.drafts.map((x) => x.text) : [d?.text]).filter((t) => String(t ?? "").trim());
 
 const firstLine = (s) => String(s).split("\n").map((l) => l.trim()).find((l) => l && !l.startsWith("#")) ?? "";
 
 /** The two hard refusals, plus the one the store already had. Nothing is
  *  rejected outright — you are the one sending it — but nothing is quiet
  *  either. */
+/**
+ * stdin is either the three drafts as JSON — {"drafts":[{"style","text"},…],
+ * "note"?, "style"?} — or one reply as plain text, which is recorded as the
+ * operator's own ("yours"). One row per ROUND: the drafts with a flag count
+ * each, and `text`/`flags` doubling the first so every older reader (the
+ * dashboard's person page, the conversation opener) still finds a draft.
+ */
+const parseDraftInput = (stdin) => {
+  const raw = String(stdin ?? "").trim();
+  if (!raw) die("no draft text on stdin");
+  if (raw.startsWith("{")) {
+    let j = null;
+    try { j = JSON.parse(raw); } catch { j = null; }
+    if (j && Array.isArray(j.drafts)) {
+      const seen = new Set();
+      const drafts = j.drafts
+        .map((d) => ({ style: styleOf(d?.style)?.id ?? YOURS.id, text: String(d?.text ?? "").replace(/\r\n/g, "\n").trim() }))
+        .filter((d) => d.text && !seen.has(d.style) && seen.add(d.style));
+      if (!drafts.length) die("the JSON on stdin holds no draft with any text");
+      return { drafts, note: String(j.note ?? "").trim().slice(0, 600) || null, style: styleOf(j.style)?.id ?? null };
+    }
+  }
+  return { drafts: [{ style: YOURS.id, text: raw }], note: null, style: null };
+};
+
 const saveDraft = (it, text, fp, { turn = 1 } = {}) => {
-  const body = String(text ?? "").trim();
-  if (!body) die("no draft text on stdin");
-  // Everything you have drafted for SOMEBODY ELSE. Revisions of this same item
-  // are excluded deliberately: rewriting one reply is not repeating yourself,
-  // and flagging it would train you to ignore the warning that matters.
-  const priors = readJsonl("drafts.jsonl").filter((d) => d.id !== it.id).map((d) => ({ id: d.id, text: d.text }));
+  const { drafts, note, style } = parseDraftInput(text);
+  // Everything you have drafted for SOMEBODY ELSE — every tab of every round.
+  // Revisions of this same item are excluded deliberately: rewriting one
+  // reply is not repeating yourself, and flagging it would train you to
+  // ignore the warning that matters.
+  const priors = readJsonl("drafts.jsonl").filter((d) => d.id !== it.id).flatMap((d) => draftTexts(d).map((t) => ({ id: d.id, text: t })));
+  const round = readJsonl("drafts.jsonl").filter((d) => d.id === it.id && (d.turn ?? 1) === turn).length + 1;
 
-  const rep = repeats(body, priors);
-  const said = claims(body);
-  const links = inventedLinks(body, `${it.body} ${it.url}`);
-  const tell = tells(body, fp);
-  append("drafts.jsonl", { id: it.id, url: it.url, text: body, at: now(), turn, ...(it.campaign ? { campaign: it.campaign } : {}), flags: { repeat: rep?.length ?? 0, claims: said.length, links: links.length, tells: tell.length } });
-  console.log(`draft saved for ${it.id}${turn > 1 ? ` (turn ${turn})` : ""}\n`);
+  const checked = drafts.map((d) => {
+    const rep = repeats(d.text, priors);
+    const said = claims(d.text);
+    const links = inventedLinks(d.text, `${it.body} ${it.url}`);
+    const tell = tells(d.text, fp);
+    return { ...d, flags: { repeat: rep?.length ?? 0, claims: said.length, links: links.length, tells: tell.length }, rep, said, links, tell };
+  });
+  const row = {
+    id: it.id, url: it.url, at: now(), turn, round,
+    ...(it.campaign ? { campaign: it.campaign } : {}),
+    ...(note ? { note, ...(style ? { style } : {}) } : {}),
+    drafts: checked.map(({ style: s, text: t, flags }) => ({ style: s, text: t, flags })),
+    text: checked[0].text, flags: checked[0].flags,
+  };
+  append("drafts.jsonl", row);
+  console.log(`${checked.length === 1 ? "draft" : `${checked.length} drafts`} saved for ${it.id}${turn > 1 ? ` (turn ${turn})` : ""}${round > 1 ? ` — round ${round}` : ""}\n`);
 
-  if (rep) {
-    console.log(`!! REPEATED PHRASING — ${rep.length} identical consecutive words you have used before:`);
-    console.log(`   "${rep.phrase}"`);
-    console.log(`   Reddit names "the same or similar comments across communities" as reportable spam — and a campaign is a direction, never a template.`);
-    console.log(`   The corpus this was measured on shared a 26-word run while its duplicate check reported clean.\n`);
+  let clean = true;
+  for (const d of checked) {
+    const { rep, said, links, tell } = d;
+    if (!rep && !links.length && !said.length && !tell.length) continue;
+    clean = false;
+    if (checked.length > 1) console.log(`[${styleLabel(d.style)}]`);
+    if (rep) {
+      console.log(`!! REPEATED PHRASING — ${rep.length} identical consecutive words you have used before:`);
+      console.log(`   "${rep.phrase}"`);
+      console.log(`   Reddit names "the same or similar comments across communities" as reportable spam — and a campaign is a direction, never a template.`);
+      console.log(`   The corpus this was measured on shared a 26-word run while its duplicate check reported clean.\n`);
+    }
+    if (links.length) {
+      console.log(`!! INVENTED LINK — not present in the thread we read:`);
+      for (const u of links) console.log(`   ${u}`);
+      console.log(`   Delete it. It is a checkable false statement under your own name.\n`);
+    }
+    if (said.length) {
+      console.log(`?? CLAIMS ABOUT YOU — each is either true or it is the thing that ends the account:`);
+      for (const c of said) console.log(`   "${c.sentence}"`);
+      console.log(`   Check each against ${DIR}/me.md. A competitor posted "at my last job i used <product>"`);
+      console.log(`   into a clinical thread under a real name. Nobody had ever had that job.\n`);
+    }
+    if (tell.length) {
+      console.log(`?? READS LIKE A TEMPLATE — ${tell.length} phrase${tell.length === 1 ? "" : "s"} nobody types to one person: ${tell.map((t) => `"${t}"`).join(", ")}`);
+      console.log(`   Rewrite those sentences in your own words. They are what makes a comment read as generated.\n`);
+    }
   }
-  if (links.length) {
-    console.log(`!! INVENTED LINK — not present in the thread we read:`);
-    for (const u of links) console.log(`   ${u}`);
-    console.log(`   Delete it. It is a checkable false statement under your own name.\n`);
-  }
-  if (said.length) {
-    console.log(`?? CLAIMS ABOUT YOU — each is either true or it is the thing that ends the account:`);
-    for (const c of said) console.log(`   "${c.sentence}"`);
-    console.log(`   Check each against ${DIR}/me.md. A competitor posted "at my last job i used <product>"`);
-    console.log(`   into a clinical thread under a real name. Nobody had ever had that job.\n`);
-  }
-  if (tell.length) {
-    console.log(`?? READS LIKE A TEMPLATE — ${tell.length} phrase${tell.length === 1 ? "" : "s"} nobody types to one person: ${tell.map((t) => `"${t}"`).join(", ")}`);
-    console.log(`   Rewrite those sentences in your own words. They are what makes a comment read as generated.\n`);
-  }
-  if (!rep && !links.length && !said.length && !tell.length) console.log(`No repeated phrasing, no invented links, no claims about your history, no template phrases.`);
+  if (clean) console.log(`No repeated phrasing, no invented links, no claims about your history, no template phrases.`);
   console.log(`You send it yourself, from your own account. Nothing here posts.`);
 };
 
@@ -1328,8 +1374,9 @@ find — other people, and the rooms it refuses to look in
 
   ready [<sub>]           where you stand, room by room, and your mix
   voice                   how you write, measured from your own comments
-  draft <id>              the material for answering one person
-  draft <id> --save       save a reply and run the refusals over it
+  draft <id>              the material for answering one person — three drafts, one per style
+  draft <id> --save       save a reply (text) or a round of three ({"drafts":[…]}) and run the refusals over each
+  draft <id> --note "…" --style <straight|deeper|ask>   the material for a rewrite, with your note on the last round
 
 campaigns and projects
 

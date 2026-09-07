@@ -431,6 +431,44 @@ the campaign in the browser, 7 judged and 4 fit, the room watched under it,
 and a draft that disclosed once, linked nothing, offered and asked — with the
 claims guard firing because me.md was empty.
 
+**Three drafts, four tabs, free by default (2026-09-06, 0.8.0).** Before
+the tool is shared with people who did not build it, three things were
+decided at once. First, THE WRITER WRITES THREE, ALWAYS. It used to be
+asked for "up to three options differing by move" and allowed to send one;
+the server kept the first and the other two lived in a job log nobody
+opened. The three moves are now named once (lib/writing.mjs STYLES:
+straight, deeper, ask back — what the reply DOES for the person, never a
+tone; the measured voice and a campaign's `## Voice` own the tone), the
+writer is told to write one of each, a round that comes back short is asked
+once more for what is missing with the good ones in front of it, and a
+round saves as ONE row with the three as `drafts` and the first doubled as
+`text` so every older reader still finds a draft. The card shows them as
+tabs; each tab keeps its own edits; the button says which tab it was
+pressed from, and that style is written on the mark and on the
+conversation's turn — so what people actually choose is on the ledger. A
+note on any tab (Rewrite) goes to the writer with that draft as the
+rejected one and ALL THREE come back written again, the one commented on
+most of all: iteration by comment, like a chat product, without ever
+touching the field's contents behind the operator's back. The guards run
+over every tab; the repeat guard reads every tab of everybody else's
+rounds. Second, THE PANEL STANDS ON ITS OWN. One card and an ask box was
+minimalism that hurt: nobody could tell how to switch a project or a
+campaign, change a seat, or try another room without finding the
+dashboard. The panel now has four tabs — Next (the deck, with a campaign
+FOCUS above the card), Campaigns (numbers, focus, pause, done, edit, a
+room to search under one, a new one from a name alone), Rooms (what is
+watched and when it was read, rules to record, a room to try), Settings
+(plan, key, seats, account, projects, this browser's Incognito standing) —
+on one state route (`/api/panel`) and one act route (`/api/panel/act`,
+JSON-only like the deck's). The deck stays the point: every tab's button
+that starts work lands back on Next. Third, FREE IS THE DEFAULT. The plan
+is `free` on a fresh install, the key card says a free key with no card
+and links to where one is made, and the free menu was re-read against
+OpenRouter's own list on 2026-09-06 (GLM 5.2's free variant is gone, so it
+is gone from the menu). The README was cut to the idea in three paragraphs,
+a picture (docs/how-it-works.svg), and a three-step install; the long form
+moved whole to docs/reference.md.
+
 **The return (2026-09-06).** The strategy the operator started with —
 find the threads where people ask how to get clients and answer them —
 saturated in a week: each such post gets a dozen generated answers on day
@@ -627,6 +665,53 @@ Reddit stays the only scout built.
   broker refusal, debugger screenshot and release passed live; reads waited
   on the reddit.com grant. The grant ask now outlives the lease that hit
   the wall (it vanished with the smoke test's tab before).
+- 0.8.0 (2026-09-06), built — three drafts, four tabs, free by default.
+  `lib/writing.mjs` STYLES + draftsBlock (straight, deeper, ask back — the
+  same block in `mq draft` and the on-page prompt); `lib/agents.mjs`
+  draftReply → {drafts, no_fit}, three held to shape with a second ask for
+  what is missing; `mq draft --save` takes a JSON round or plain text
+  ("yours"), one row per round with `drafts`, `round`, `note`, `style`,
+  per-draft flags; `--note … --style <id>`; the guards read every tab. The
+  deck: `tabs` on the reply and turn cards (lib/cards.mjs draftTabs, flags
+  in words per tab), the note card naming the tab, the walk from a name
+  alone, probe cards for a room tried from the panel, the quiet card under
+  a focus. The server: `tab` on an act, `style` on marks and turns,
+  campaign focus in the snapshot, `/api/panel` + `/api/panel/act`, the
+  person page showing all three. The panel: card.js tabs with per-tab
+  edits; sidepanel.html/js the four tabs, the project picker in the header,
+  the focus line, badges; card.css for all of it. Free by default
+  (lib/models.mjs DEFAULT_PLAN, KEY_URL, PLANS ordered free first, GLM 5.2
+  free dropped), the key card and Settings say so. README cut to three
+  paragraphs + docs/how-it-works.svg + install; the long form in
+  docs/reference.md. Tests: the styles and the block, the writer held to
+  three on a stub, the CLI round (flags per tab, the note, the repeat guard
+  across tabs, the odd inputs), the deck's tabs, the panel's routes and
+  every button's refusal, a project made and switched from the panel.
+  THE FRESH-USER RUN (2026-09-06, a moved-aside .mq, the free plan, the
+  operator's own Chrome): the account, the site, nine voice answers, the
+  three files, r/smallbusiness probed for "how do I get clients" (7 read,
+  judged 3 fit in 29s on the free judge), rules recorded, the first person
+  drafted three ways by the free writer (80s), tabs switched with edits
+  kept, Rewrite from the Deeper tab with a note (a shorter round in 25s),
+  Insert → confirm → "I posted it" from the Ask back tab (the mark and the
+  conversation carry `ask`), the room watched, the welcome, the CMO's first
+  proposal within a minute, a campaign walked from a name on the Campaigns
+  tab and its room probed under it (7 read, 5 fit), the focus, pause/edit,
+  the Rooms tab's two-step stop, the Settings refusals and plan switch, a
+  project made and switched back. What it found and what was fixed: the
+  scout, refused on the site (no grant yet), wandered to example.com and a
+  Google search and proposed three files from nothing — it is now held to
+  the site's own host and refuses to propose when no page of it opened;
+  the free writer's line breaks arrived as "n", "|n" and "|" across three
+  rounds — the seam is mended on the writer's output (never on a person's
+  words); Watch pressed dealt the room question for the second the job took
+  — the probe now stays on the stash marked `watching` and deals a wait; a
+  source's found-count compared the lowercased id to the probe's tag as
+  typed; the panel's sections stacked because a display rule beat the
+  hidden attribute. Not verified here: Chrome's own grant prompt for a new
+  site (a person's click), the stranger's seat (Incognito not allowed on
+  this machine), and the extension's own side panel (the served panel is
+  the same files).
 - 0.7.0 (2026-09-06), built — the return, and four questions.
   `lib/conversations.mjs` (conversations.jsonl: open on "I posted it" with
   the words as edited; bind on sync; recordReturn from the stranger's seat;

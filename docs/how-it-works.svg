@@ -1,0 +1,157 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 520" width="960" height="520" font-family="Atkinson Hyperlegible, Segoe UI, system-ui, -apple-system, sans-serif" font-size="14">
+  <title>How Messaging Quest works</title>
+  <desc>You and the side panel on the left; the engine on your machine in the middle; your own Chrome reading Reddit and the free models on the right. Only you press Comment.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1d1c15"/>
+    </marker>
+    <pattern id="dots" width="7" height="7" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1" fill="rgba(29,28,21,0.09)"/>
+    </pattern>
+  </defs>
+
+  <rect width="960" height="520" fill="#e9e2cd"/>
+  <rect width="960" height="520" fill="url(#dots)"/>
+
+  <!-- YOU + the panel -->
+  <g>
+    <text x="52" y="40" font-size="11" fill="#5d7a00" letter-spacing="2" font-weight="700">YOU · THE SIDE PANEL</text>
+    <rect x="40" y="52" width="250" height="330" fill="#fbf7e8" stroke="#1d1c15" stroke-width="1.5"/>
+    <rect x="40" y="52" width="250" height="6" fill="#c9ff2e"/>
+    <rect x="45" y="57" width="250" height="330" fill="none" stroke="rgba(29,28,21,0.16)" stroke-width="4" transform="translate(4,4)" opacity="0.5"/>
+    <!-- tabs of the panel -->
+    <g font-size="10.5" font-weight="700">
+      <text x="56" y="80" fill="#1d1c15">Next</text>
+      <rect x="54" y="84" width="30" height="3" fill="#c9ff2e"/>
+      <text x="100" y="80" fill="#5c594c">Campaigns</text>
+      <text x="176" y="80" fill="#5c594c">Rooms</text>
+      <text x="228" y="80" fill="#5c594c">Settings</text>
+    </g>
+    <!-- the card -->
+    <rect x="54" y="98" width="222" height="250" fill="#fffdf2" stroke="#1d1c15" stroke-width="1.5"/>
+    <rect x="54" y="98" width="222" height="5" fill="#c9ff2e"/>
+    <text x="64" y="120" font-size="9" fill="#5d7a00" font-weight="700" letter-spacing="1">R/SMALLBUSINESS · U/ANA · READY</text>
+    <text x="64" y="140" font-size="13" font-weight="800" fill="#1d1c15">how do I get my first clients?</text>
+    <text x="64" y="158" font-size="10.5" fill="#5c594c">judged fit: asks directly, no agency</text>
+    <!-- three tabs -->
+    <g font-size="10.5" font-weight="700">
+      <rect x="64" y="172" width="58" height="20" fill="#fffdf2" stroke="#1d1c15" stroke-width="1.2"/>
+      <text x="72" y="186" fill="#1d1c15">Straight</text>
+      <text x="134" y="186" fill="#5c594c">Deeper</text>
+      <text x="190" y="186" fill="#5c594c">Ask back</text>
+      <line x1="64" y1="192" x2="266" y2="192" stroke="#1d1c15" stroke-width="1.2"/>
+    </g>
+    <rect x="64" y="198" width="202" height="86" fill="#fbf7e8" stroke="#1d1c15" stroke-width="1.2"/>
+    <g font-size="10" fill="#39362a">
+      <text x="72" y="214">skip the cold emails for a month.</text>
+      <text x="72" y="228">answer ten questions a week where</text>
+      <text x="72" y="242">your people already ask — two got</text>
+      <text x="72" y="256">me clients before any ad did.</text>
+      <text x="72" y="272">what are you selling, exactly?</text>
+    </g>
+    <text x="64" y="300" font-size="9.5" fill="#b3391f">Check before posting: 1 claim about your history</text>
+    <!-- buttons -->
+    <g font-size="9.5" font-weight="700">
+      <rect x="64" y="312" width="52" height="22" fill="#fbf7e8" stroke="#1d1c15" stroke-width="1.5"/>
+      <text x="71" y="327" fill="#1d1c15">Rewrite</text>
+      <rect x="122" y="312" width="62" height="22" fill="#fbf7e8" stroke="#1d1c15" stroke-width="1.5"/>
+      <text x="128" y="327" fill="#1d1c15">I posted it</text>
+      <rect x="190" y="312" width="76" height="22" fill="#c9ff2e" stroke="#1d1c15" stroke-width="1.5"/>
+      <text x="203" y="327" fill="#1d1c15">Insert ↗</text>
+    </g>
+    <text x="54" y="368" font-size="10.5" fill="#5c594c">Ask your specialist…</text>
+    <rect x="54" y="355" width="222" height="20" fill="none" stroke="rgba(29,28,21,0.34)" stroke-width="1"/>
+  </g>
+
+  <!-- ENGINE -->
+  <g>
+    <text x="352" y="40" font-size="11" fill="#5d7a00" letter-spacing="2" font-weight="700">YOUR MACHINE · 127.0.0.1:8787</text>
+    <rect x="340" y="52" width="290" height="330" fill="#fbf7e8" stroke="#1d1c15" stroke-width="1.5"/>
+    <rect x="340" y="52" width="290" height="6" fill="#c9ff2e"/>
+    <text x="356" y="84" font-size="14" font-weight="800" fill="#1d1c15">The engine — zero dependencies</text>
+
+    <rect x="356" y="98" width="258" height="46" fill="#fffdf2" stroke="#1d1c15" stroke-width="1.2"/>
+    <text x="366" y="116" font-size="12" font-weight="700" fill="#1d1c15">The deck</text>
+    <text x="366" y="133" font-size="10.5" fill="#5c594c">state → the one next action, deterministically</text>
+
+    <rect x="356" y="152" width="258" height="62" fill="#fffdf2" stroke="#1d1c15" stroke-width="1.2"/>
+    <text x="366" y="170" font-size="12" font-weight="700" fill="#1d1c15">The store · .mq/</text>
+    <text x="366" y="187" font-size="10.5" fill="#5c594c">append-only JSONL you can cat; five markdown</text>
+    <text x="366" y="203" font-size="10.5" fill="#5c594c">files you own: what you sell, who fits, the rule, me</text>
+
+    <rect x="356" y="222" width="82" height="52" fill="#fffdf2" stroke="#1d1c15" stroke-width="1.2"/>
+    <text x="366" y="240" font-size="12" font-weight="700" fill="#1d1c15">Scout</text>
+    <text x="366" y="256" font-size="10" fill="#5c594c">reads your</text>
+    <text x="366" y="268" font-size="10" fill="#5c594c">site once</text>
+    <rect x="444" y="222" width="82" height="52" fill="#fffdf2" stroke="#1d1c15" stroke-width="1.2"/>
+    <text x="454" y="240" font-size="12" font-weight="700" fill="#1d1c15">Judge</text>
+    <text x="454" y="256" font-size="10" fill="#5c594c">fit or not,</text>
+    <text x="454" y="268" font-size="10" fill="#5c594c">per post</text>
+    <rect x="532" y="222" width="82" height="52" fill="#fffdf2" stroke="#1d1c15" stroke-width="1.2"/>
+    <text x="542" y="240" font-size="12" font-weight="700" fill="#1d1c15">Writer</text>
+    <text x="542" y="256" font-size="10" fill="#5c594c">three drafts,</text>
+    <text x="542" y="268" font-size="10" fill="#5c594c">your voice</text>
+
+    <rect x="356" y="284" width="258" height="46" fill="#fffdf2" stroke="#1d1c15" stroke-width="1.2"/>
+    <text x="366" y="302" font-size="12" font-weight="700" fill="#1d1c15">The guards</text>
+    <text x="366" y="319" font-size="10.5" fill="#5c594c">claims · invented links · template phrases · repeats</text>
+
+    <rect x="356" y="338" width="258" height="34" fill="#1d1c15" stroke="#1d1c15" stroke-width="1.2"/>
+    <text x="366" y="353" font-size="12" font-weight="700" fill="#c9ff2e">The CMO · optional (agent/)</text>
+    <text x="366" y="366" font-size="10" fill="#e8e6da">proposes campaigns, tracks who wrote back</text>
+  </g>
+
+  <!-- CHROME -->
+  <g>
+    <text x="692" y="40" font-size="11" fill="#5d7a00" letter-spacing="2" font-weight="700">YOUR OWN CHROME</text>
+    <rect x="680" y="52" width="240" height="180" fill="#fbf7e8" stroke="#1d1c15" stroke-width="1.5"/>
+    <rect x="680" y="52" width="240" height="6" fill="#c9ff2e"/>
+    <text x="696" y="84" font-size="14" font-weight="800" fill="#1d1c15">The extension</text>
+    <text x="696" y="104" font-size="10.5" fill="#5c594c">opens real tabs, scrolls and reads</text>
+    <text x="696" y="120" font-size="10.5" fill="#5c594c">at a person's pace — never in the</text>
+    <text x="696" y="136" font-size="10.5" fill="#5c594c">background, never a fetch</text>
+    <rect x="696" y="150" width="208" height="64" fill="#fffdf2" stroke="#1d1c15" stroke-width="1.2"/>
+    <text x="706" y="169" font-size="12" font-weight="700" fill="#1d1c15">reddit.com · r/smallbusiness</text>
+    <text x="706" y="186" font-size="10.5" fill="#5c594c">your draft, in Reddit's own box</text>
+    <rect x="706" y="194" width="70" height="16" fill="#c9ff2e" stroke="#1d1c15" stroke-width="1.2"/>
+    <text x="713" y="206" font-size="9.5" font-weight="700" fill="#1d1c15">Comment</text>
+    <text x="782" y="206" font-size="9.5" fill="#b3391f" font-weight="700">← only you press this</text>
+  </g>
+
+  <!-- MODELS -->
+  <g>
+    <text x="692" y="278" font-size="11" fill="#5d7a00" letter-spacing="2" font-weight="700">OPENROUTER · FREE MODELS</text>
+    <rect x="680" y="290" width="240" height="92" fill="#fbf7e8" stroke="#1d1c15" stroke-width="1.5"/>
+    <rect x="680" y="290" width="240" height="6" fill="#c9ff2e"/>
+    <text x="696" y="320" font-size="12" font-weight="700" fill="#1d1c15">a free key, no card, nothing charged</text>
+    <text x="696" y="338" font-size="10.5" fill="#5c594c">the seats fall back across providers;</text>
+    <text x="696" y="354" font-size="10.5" fill="#5c594c">paid or a local Ollama are one click away</text>
+    <text x="696" y="372" font-size="10" fill="#5c594c">or let your own Claude/ChatGPT be the model, over MCP</text>
+  </g>
+
+  <!-- arrows -->
+  <g stroke="#1d1c15" stroke-width="2" fill="none" marker-end="url(#arrow)">
+    <path d="M290,150 L338,150"/>
+    <path d="M338,176 L292,176" marker-end="url(#arrow)"/>
+    <path d="M630,120 L678,120"/>
+    <path d="M678,146 L632,146"/>
+    <path d="M614,248 L660,248 L660,320 L678,320"/>
+  </g>
+  <g font-size="10" fill="#39362a">
+    <text x="296" y="143">answers</text>
+    <text x="296" y="192">the next card</text>
+    <text x="636" y="112">reads</text>
+    <text x="636" y="160">rows</text>
+    <text x="620" y="296">verdicts,</text>
+    <text x="620" y="308">drafts</text>
+  </g>
+
+  <!-- footer -->
+  <g>
+    <line x1="40" y1="410" x2="920" y2="410" stroke="rgba(29,28,21,0.34)" stroke-width="1"/>
+    <text x="40" y="440" font-size="13" font-weight="800" fill="#1d1c15">Nothing hosted. Nothing posted by a machine.</text>
+    <text x="40" y="462" font-size="11.5" fill="#39362a">The panel and the dashboard talk only to 127.0.0.1. Your key, your prospects and your drafts stay in .mq/ on your disk.</text>
+    <text x="40" y="480" font-size="11.5" fill="#39362a">A campaign is a direction, never a template. A draft that repeats eight words you have used before is flagged before you see it.</text>
+    <text x="40" y="504" font-size="10" fill="#5c594c">messaging-quest 0.8.0 · docs/how-it-works.svg</text>
+  </g>
+</svg>
