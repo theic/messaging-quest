@@ -39,8 +39,8 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { createDeepAgent } from "deepagents";
 import { ChatOpenAI } from "@langchain/openai";
 import { tool } from "@langchain/core/tools";
@@ -60,7 +60,6 @@ import { engineTools } from "./verbs.mjs";
 import { threadSaver } from "./threads.mjs";
 import { QUESTIONS, normalizeQuestions } from "./tasks.mjs";
 
-const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const short = (s, n) => { const t = String(s ?? "").replace(/\s+/g, " ").trim(); return t.length > n ? t.slice(0, n - 1) + "…" : t; };
 
 /* ---------------------------------------------------------------- runtime */
@@ -281,31 +280,73 @@ const makeTools = (dir) => [
   ...browserTools(dir),
 
   tool(async () => {
-    // The same deck the panel renders — the strategist should never guess
-    // what the operator is being shown. MQ_SERVER is the dashboard's own
-    // address (set at listen), and this process is the dashboard, so the
-    // fetch is a loopback to ourselves; absent (a bare test harness), the
-    // honest answer is that there is no deck to read.
-    const base = process.env.MQ_SERVER;
-    if (!base) return "no deck here — the dashboard is not running";
-    try {
-      const res = await fetch(`${base}/api/cards`, { signal: AbortSignal.timeout(5000) });
-      const { cards, jobs, tasks } = await res.json();
-      return JSON.stringify({
-        showing: cards?.[0]?.id ?? null,
-        cards: (cards ?? []).map((c) => ({ id: c.id, question: c.question })),
-        running: (jobs ?? []).map((j) => j.label),
-        tasks: (tasks ?? []).map((t) => `${t.title}: ${t.status}`),
-      });
-    } catch (e) {
-      return `could not read the deck: ${e.message}`;
-    }
+    const deck = await deckSnapshot();
+    return typeof deck === "string" ? deck : JSON.stringify(deck);
   }, {
     name: "deck",
-    description: "What the operator's panel is showing right now: the current card, the cards behind it, running jobs and colleagues at work. Read this before advising a next action — the deck IS the next action, and advice that contradicts the card on screen is worse than silence.",
+    description: "What the operator's panel is showing right now: the current card, the cards behind it, running jobs and colleagues at work. Every panel message already arrives with this in front of it; call it again after you dealt something, or mid-turn when it may have moved. The deck IS the next action, and advice that contradicts the card on screen is worse than silence.",
     schema: z.object({}),
   }),
 ];
+
+/* ------------------------------------------------------------------- deck */
+
+/** The same deck the panel renders — the strategist should never guess what
+ *  the operator is being shown. MQ_SERVER is the dashboard's own address
+ *  (set at listen), and this process is the dashboard, so the fetch is a
+ *  loopback to ourselves; absent (a bare test harness), the honest answer is
+ *  that there is no deck to read. Enough of each card to talk about it
+ *  truthfully: what kind it is, the button it actually carries, and whether
+ *  the drafts are already on it — so the advice never offers to write what
+ *  is written, or names a button the card does not have. */
+async function deckSnapshot({ limit = 8 } = {}) {
+  const base = process.env.MQ_SERVER;
+  if (!base) return "no deck here — the dashboard is not running";
+  try {
+    const res = await fetch(`${base}/api/cards`, { signal: AbortSignal.timeout(5000) });
+    const { cards, jobs, tasks } = await res.json();
+    // The numbers as the engine counts them, this second — so a question
+    // about a count is answered from here, not from an earlier turn.
+    let numbers = null;
+    try {
+      const st = await (await fetch(`${base}/api/panel`, { signal: AbortSignal.timeout(5000) })).json();
+      numbers = {
+        contacted_ever: st.contacted ?? null, waiting_on_you: st.waiting ?? null, pending_verdicts: st.pending ?? null,
+        no_campaign: st.general ?? null,
+        campaigns: (st.campaigns ?? []).map((c) => ({ id: c.id, status: c.status, ...(c.numbers ?? {}) })),
+      };
+    } catch { /* the deck alone is still worth having */ }
+    const card = (c, onScreen) => ({
+      id: c.id, kind: c.kind ?? null, question: short(c.question, 140), eyebrow: c.eyebrow ?? null,
+      button: c.primary?.label ?? null,
+      ...(c.tabs?.length ? { drafts: c.tabs.length, drafted: "already written, in three styles, on the card — the operator edits and inserts; nobody needs to draft it again" } : {}),
+      // The drafts' own words ride only for the card on screen — enough to
+      // say which tab and why, without quoting the whole round every turn.
+      ...(onScreen && c.tabs?.length ? { tabs: c.tabs.map((t) => ({ tab: t.label ?? t.id, text: short(t.value, 260) })) } : {}),
+      ...(c.help ? { help: short(c.help, 200) } : {}),
+    });
+    return {
+      showing: cards?.[0]?.id ?? null,
+      cards: (cards ?? []).slice(0, limit).map((c, i) => card(c, i === 0)),
+      ...(cards?.length > limit ? { more: cards.length - limit } : {}),
+      running: (jobs ?? []).map((j) => j.label),
+      tasks: (tasks ?? []).map((t) => `${t.title}: ${t.status}`),
+      ...(numbers ? { numbers } : {}),
+    };
+  } catch (e) {
+    return `could not read the deck: ${e.message}`;
+  }
+}
+
+/** What every turn is shown first. The doctrine says "read the deck before
+ *  advising"; a model on a free seat does not always do what the doctrine
+ *  says, so the deck rides in front of the message and the tool stays for
+ *  the second look. Nothing when there is no dashboard. */
+async function deckPreface() {
+  const deck = await deckSnapshot();
+  if (typeof deck === "string") return "";
+  return `The operator's deck right now — the cards as the panel shows them, first one on screen; the button named on each is the one that exists:\n${JSON.stringify(deck)}\n\n`;
+}
 
 /* ----------------------------------------------------------- the browser */
 
@@ -395,7 +436,22 @@ House rules, non-negotiable:
   first-person claim me.md does not support.
 - Numbers come from the tools. Quote the count a tool returned; never tally
   rows by hand and never round — a figure you worked out yourself is a figure
-  you can get wrong, and the operator acts on it.
+  you can get wrong, and the operator acts on it. A count is answered from
+  the numbers in front of you in THIS message (the deck's "numbers") or from
+  status / campaigns called in this turn — never carried over from an
+  earlier answer; "sent" and "contacted" are counted there, and 0 is a
+  claim like any other.
+- The operator has a panel, not a terminal. Never tell them to run a
+  command: when a verb is the right move, propose deals the button; when a
+  setting is, name the tab (Settings, Campaigns, Rooms) it lives on.
+- Buttons come from the deck. When you tell the operator what to press,
+  name the button the deck tool showed on that card, in its own words;
+  never invent one. A reply card already carries its three drafts: do not
+  offer to write one — say which tab you would send, and why.
+- You answer on a small panel, as plain text: short sentences, a blank line
+  between points, no headings, no markdown, no tables. Lead with the answer;
+  say what you would do and why in a few lines, not a report — under 120
+  words unless the operator asked for more.
 - The five memory files are the operator's to edit. Propose; never pretend
   you saved. AGENTS.md is yours: write_notebook what is durable.
 - Setup is the deck's: on a fresh directory it already asks the account, the
@@ -496,6 +552,29 @@ const projectText = (dir) => {
   } catch { return ""; }
 };
 
+/**
+ * OpenRouter can answer 200 with an error object in the body when the
+ * upstream provider failed after headers went out — "Upstream error from
+ * Nvidia: Service temporarily overloaded", measured 2026-09-07, the free
+ * plan's ordinary weather. The engine's own client (lib/llm.mjs) reads that
+ * and asks again; the OpenAI client under LangChain does not, reads
+ * choices[0].message of nothing, and the turn dies on a TypeError with the
+ * provider's sentence lost. Re-labelled with the error's own status, the
+ * client retries it like any other 5xx, and with the seat's fallback list
+ * on the request OpenRouter itself moves to the next provider.
+ */
+const openRouterFetch = async (url, init) => {
+  const res = await fetch(url, init);
+  if (res.status !== 200 || !/json/i.test(res.headers.get("content-type") ?? "")) return res;
+  const text = await res.text();
+  let body = null;
+  try { body = JSON.parse(text); } catch { body = null; }
+  const err = body && body.error && !body.choices ? body.error : null;
+  const code = Number(err?.code);
+  const status = err ? (code >= 400 && code < 600 ? code : 502) : res.status;
+  return new Response(text, { status, statusText: err ? String(err.message ?? "upstream error").slice(0, 200) : res.statusText, headers: res.headers });
+};
+
 async function agentFor(dir) {
   const s = seat(dir, "scout"); // the researcher seat: biggest window, tool-happy
 
@@ -514,9 +593,14 @@ async function agentFor(dir) {
   const model = new ChatOpenAI({
     model: s.model,
     apiKey: s.key,
-    configuration: { baseURL: s.baseUrl },
+    configuration: { baseURL: s.baseUrl, ...(s.openrouter === false ? {} : { fetch: openRouterFetch }) },
     maxTokens: s.maxTokens,
     timeout: s.timeoutMs,
+    maxRetries: 3,
+    // The seat's fallback list — OpenRouter's model-level `models:` array,
+    // the same one the engine sends — so a provider that is full for a
+    // minute costs a minute, not the turn.
+    ...(Array.isArray(s.models) && s.models.length > 1 ? { modelKwargs: { models: s.models } } : {}),
   });
 
   const subagents = await skillSubagents(dir);
@@ -560,7 +644,7 @@ async function turn(dir, content, thread) {
   const agent = await agentFor(dir);
   try {
     const result = await agent.invoke(
-      { messages: [{ role: "user", content: String(content).slice(0, 12_000) }] },
+      { messages: [{ role: "user", content: (await deckPreface()) + String(content).slice(0, 12_000) }] },
       { configurable: { thread_id: `mq:${thread}` }, recursionLimit: 40 },
     );
     const last = result.messages?.[result.messages.length - 1];

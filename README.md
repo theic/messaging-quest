@@ -24,8 +24,10 @@ writes **three drafts**, each a different move: *Straight* (the answer, short),
 *Deeper* (what is behind their question), *Ask back* (one real thing and a
 question you want answered). Pick a tab, edit it, or comment on it and all
 three are written again. **Insert** puts your words into Reddit's own comment
-box; you read it there and press Reddit's button. Nothing in this repository
-can submit.
+box — the thread's, never under somebody's comment — and reads back that they
+landed; you read them there and press Reddit's button. Everything that runs
+is named at the top of the panel, and the judge runs by itself. Nothing in
+this repository can submit.
 
 **A CMO watches the whole thing.** When somebody writes back, their reply
 lands on your deck before any new person, with the next turn drafted. Once a
@@ -69,7 +71,10 @@ numbers, a focus for the deck, a room to search under it, pause and done.
 **Rooms**: what is watched and when it was last read, a room to try. **Settings**:
 where the models run, the key, the seats, your account, your projects. The
 box at the bottom talks to the CMO (`npm run brain` installs it; everything else
-runs without it).
+runs without it), and under the card sit the questions people typically ask
+it — what to do next, who is waiting, how a campaign is going, why this
+person — one press each. When an answer needs an action, the CMO deals it as
+a card rather than telling you where to click.
 
 The dashboard at `http://127.0.0.1:8787` is the ledger behind it — Today,
 People, Campaigns, You — and `node bin/mq.mjs` is the same engine from the

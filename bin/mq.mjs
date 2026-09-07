@@ -41,10 +41,10 @@ import { store, FILES, dataDir } from "../lib/store.mjs";
 import { browser, serverBase } from "../lib/browse.mjs";
 import { readCampaigns, readCampaign, setCampaignStatus, writerBlock } from "../lib/campaigns.mjs";
 import { listProjects, createProject, useProject, currentDir } from "../lib/projects.mjs";
-import { seedMissing } from "../lib/memory.mjs";
+import { seedMissing, readOne } from "../lib/memory.mjs";
 import { measureVoice, mergeVoice, voiceRules, voiceSummary, lengthCeiling, MIN_SAMPLE_CHARS } from "../lib/voice.mjs";
 import { signalWritingRules, communityRisks, draftsBlock, styleOf, styleLabel, YOURS } from "../lib/writing.mjs";
-import { repeats, claims, inventedLinks, tells, RUN_LIMIT } from "../lib/guards.mjs";
+import { repeats, claims, inventedLinks, tells, theirs, RUN_LIMIT } from "../lib/guards.mjs";
 import { standing, readiness, burst, mix, CQS_NOTE, PER_ROOM_24H, OVERALL_24H } from "../lib/ready.mjs";
 
 const ROOT = dataDir();          // the root: the default project, the registry, the machine's files
@@ -905,7 +905,13 @@ cmds.waiting = (args) => {
   const rows = waitingRows(S).map((c) => ({ id: c.id, author: c.latest?.author ?? c.author, place: c.place, campaign: c.campaign ?? null, url: c.latest?.url ?? c.url, at: c.latest?.at ?? null, turns: (c.turns ?? []).length, they_said: String(c.latest?.text ?? "").slice(0, 300), you_said: String((c.turns ?? []).filter((t) => t.by === "you").pop()?.text ?? "").slice(0, 300) }));
   if (args.includes("--json")) return console.log(JSON.stringify(rows, null, 2));
   const all = [...conversationRows(S).values()].filter((c) => c.state !== "closed");
-  if (!rows.length) return console.log(`nobody is waiting on you. ${all.length} conversation${all.length === 1 ? "" : "s"} tracked${unbound(S).length ? `, ${unbound(S).length} not yet found on your profile (mq sync)` : ""}.`);
+  if (!rows.length) {
+    console.log(`nobody is waiting on you. ${all.length} conversation${all.length === 1 ? "" : "s"} tracked${unbound(S).length ? `, ${unbound(S).length} not yet found on your profile (mq sync)` : ""}.`);
+    // Named, so whoever reads this — the specialist included — can say who
+    // is tracked without guessing from the deck.
+    for (const c of all) console.log(`  ${String(c.state).padEnd(9)} u/${c.author ?? "?"} in ${L().room(c.place)} · opened ${ago(c.opened_at)}${c.campaign ? `  [${c.campaign}]` : ""}${c.state === "sent" ? " — not yet found on your profile" : ""}`);
+    return;
+  }
   console.log(`${rows.length} waiting for you — oldest first:\n`);
   for (const r of rows) {
     console.log(`  ${r.id}  u/${r.author} in ${L().room(r.place)} · ${ago(r.at)}${r.campaign ? `  [${r.campaign}]` : ""}`);
@@ -1027,7 +1033,10 @@ cmds.mark = (args) => {
 /* ------------------------------------------------------ phase 3 — draft */
 
 const voiceOf = () => (existsSync(F("voice.json")) ? JSON.parse(readFileSync(F("voice.json"), "utf8")) : null);
-const meFile = () => (existsSync(F("me.md")) ? readFileSync(F("me.md"), "utf8") : "");
+// The seed is scaffolding, not a history: handed to a writer as "what you can
+// honestly say about yourself" it produced "i built doctick" — the
+// stranger's product — on 2026-09-07. Unfilled is empty.
+const meFile = () => { const m = readOne(DIR, "me.md"); return m?.filled ? m.body : ""; };
 
 /**
  * Measure how you write, from what you have already written.
@@ -1123,7 +1132,7 @@ cmds.draft = (args, stdin) => {
   }
   console.log(`\n${draftsBlock({ ceiling: lengthCeiling(fp), note, prior, style: noteStyle })}`);
   if (me) console.log(`\n## What you can honestly say about yourself\n\n${me.slice(0, 1200)}`);
-  else console.log(`\n## me.md is empty\n\nWrite ${DIR}/me.md — what you have actually built. Every first-person claim gets checked against it.`);
+  else console.log(`\n## me.md is empty\n\nWrite ${DIR}/me.md — what you have actually built. Every first-person claim gets checked against it. Until then NOTHING is yours to name: no "i built", no "i made", no "i use" — and never the thing THEY built, which is theirs. Help only.`);
   console.log(`\n---\nWhen you have a draft:  mq draft ${id} --save < reply.txt     (or the three as JSON: {"drafts":[{"style":"straight","text":"…"},…]})`);
 };
 
@@ -1175,7 +1184,8 @@ const saveDraft = (it, text, fp, { turn = 1 } = {}) => {
     const said = claims(d.text);
     const links = inventedLinks(d.text, `${it.body} ${it.url}`);
     const tell = tells(d.text, fp);
-    return { ...d, flags: { repeat: rep?.length ?? 0, claims: said.length, links: links.length, tells: tell.length }, rep, said, links, tell };
+    const took = theirs(d.text, `${it.title ?? ""} ${it.body ?? ""}`, meFile());
+    return { ...d, flags: { repeat: rep?.length ?? 0, claims: said.length, links: links.length, tells: tell.length, ...(took.length ? { theirs: took.length } : {}) }, rep, said, links, tell, took };
   });
   const row = {
     id: it.id, url: it.url, at: now(), turn, round,
@@ -1189,10 +1199,14 @@ const saveDraft = (it, text, fp, { turn = 1 } = {}) => {
 
   let clean = true;
   for (const d of checked) {
-    const { rep, said, links, tell } = d;
-    if (!rep && !links.length && !said.length && !tell.length) continue;
+    const { rep, said, links, tell, took } = d;
+    if (!rep && !links.length && !said.length && !tell.length && !took.length) continue;
     clean = false;
     if (checked.length > 1) console.log(`[${styleLabel(d.style)}]`);
+    if (took.length) {
+      console.log(`!! THEIRS, NOT YOURS — the draft says you built ${took.map((n) => `"${n}"`).join(", ")}, which is the thing THEY posted about:`);
+      console.log(`   Delete the claim. The person you are replying to can see it is false at a glance; me.md names what is yours.\n`);
+    }
     if (rep) {
       console.log(`!! REPEATED PHRASING — ${rep.length} identical consecutive words you have used before:`);
       console.log(`   "${rep.phrase}"`);

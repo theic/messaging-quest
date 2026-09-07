@@ -63,9 +63,9 @@
 // worker anyway — neither alone is enough (the predecessor's bridge, sw.js).
 
 import { CLICK_SCREEN } from "./screen.js";
-import { composerState, wordsSource, OPENS_DEFAULT, REPLIES_DEFAULT, NEVER } from "./insert.js";
+import { composerState, wordsSource, selectorList, OPENS_DEFAULT, REPLIES_DEFAULT, NEVER } from "./insert.js";
 
-export const GROUP_TITLE = "Messaging Quest";
+const GROUP_TITLE = "Messaging Quest";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const rand = (min, max) => min + Math.random() * (max - min);
@@ -843,27 +843,39 @@ async function consoleMessages(tabId, input) {
  * The one thing that ever writes into a composer, and only the panel's
  * Insert button calls it — the human pressed Insert, and the human presses
  * the platform's own button after. Done the way a person does it: the
- * composer's opener ("Add a comment", "Reply" — never anything that could
- * submit) gets a real click if the box is closed, the box gets a real click,
- * the caret goes to the end, and the draft is pasted as one piece of text
- * (Input.insertText: the same event a paste produces). Nothing synthetic
- * touches the page.
+ * composer's opener ("Add a comment", "Reply", Reddit's "Join the
+ * conversation" box — never anything that could submit) gets a real click
+ * if the box is closed, the box gets a real click, the caret goes to the
+ * end, and the draft goes in as one piece of text (Input.insertText: the
+ * event an IME's commit produces). An editor that ignores that gets the
+ * other thing a person does — Ctrl+V, with the draft the panel already put
+ * on the clipboard, and only when it did. Whether the words landed is READ
+ * back from the box before this says so. Nothing synthetic touches the page.
+ *
+ * `spec` is the platform's composer off the card (lib/platform.mjs
+ * composerOf: the opener labels, the reply labels, the elements that host a
+ * composer, the elements that hold a comment) plus the card's `target`:
+ * "post" for a comment on the thread — the thread's own box, never a
+ * comment's Reply — or "comment" for a reply under the person's own comment.
  */
-export async function insertDraft(tabId, message, spec = {}) {
+export async function insertDraft(tabId, message, spec = {}, { clipboard = false } = {}) {
   const text = String(message ?? "").trim();
   if (!text) return { ok: false, reason: "nothing to insert" };
-  // The platform's words, off the reply card (lib/platform.mjs composerOf):
-  // which labels open a composer, which sit on a reply box, which custom
-  // elements host one. The words that may never be pressed are ours.
   const opens = wordsSource(spec?.opens, OPENS_DEFAULT);
   const replies = wordsSource(spec?.replies, REPLIES_DEFAULT);
-  const hosts = (Array.isArray(spec?.hosts) ? spec.hosts : []).map((h) => String(h).trim()).filter((h) => /^[a-z][a-z0-9-]*$/i.test(h)).join(", ");
+  const hosts = selectorList(spec?.hosts), comments = selectorList(spec?.comments);
+  const target = spec?.target === "comment" ? "comment" : "post";
   const state = async () => {
-    const s = await inPage(tabId, composerState, [opens, replies, NEVER.source, hosts]);
+    const s = await inPage(tabId, composerState, [opens, replies, NEVER.source, hosts, comments, target]);
     return s?.error ? { error: s.error === "not_granted" ? "not_granted" : s.error } : s;
   };
   let st = await state();
+  // The composer may mount a beat after the page said it had loaded
+  // (Reddit's is an async island under the post): a few looks before giving up.
+  for (let i = 0; i < 8 && !st.error && !st.box && !st.opener; i++) { await pause(300, 600); st = await state(); }
   if (st.error) return { ok: false, reason: st.error };
+  // Enough of the draft to know it landed, read back from the box itself.
+  const landed = (before, s) => Boolean(s?.box) && s.box.chars - before >= Math.min(12, text.length);
   const out = await withDebugger(tabId, async (send) => {
     let opened = false;
     if (!st.box && st.opener) {
@@ -885,11 +897,32 @@ export async function insertDraft(tabId, message, spec = {}) {
     await pause(120, 300);
     await press(send, isMac ? "cmd+down" : "ctrl+end");
     if (!st.box.empty && st.box.kind !== "input") { await press(send, "enter"); await sleep(rand(60, 140)); await press(send, "enter"); }
+    const before = st.box.chars ?? 0;
     await pause(60, 160);
     await send("Input.insertText", { text });
-    return { ok: true, opened };
+    await pause(250, 500);
+    let how = "typed";
+    if (!landed(before, await state())) {
+      if (!clipboard) return { ok: false, reason: "not_taken", opened };
+      await pasteKey(send);
+      how = "pasted";
+      await pause(300, 600);
+      if (!landed(before, await state())) return { ok: false, reason: "not_taken", opened };
+    }
+    return { ok: true, opened, how };
   }, { keep: false });
   return out.error ? { ok: false, reason: out.error } : out;
+}
+
+/** Ctrl+V, one stroke — ⌘V on a Mac, where the stroke alone does not reach
+ *  the editor's paste command from the debugger and the command is named
+ *  beside it. Only ever sent with the panel's own draft on the clipboard. */
+async function pasteKey(send) {
+  const k = keyStroke(isMac ? "cmd+v" : "ctrl+v");
+  const base = { key: k.key, code: k.code, windowsVirtualKeyCode: k.vk, nativeVirtualKeyCode: k.vk, modifiers: k.modifiers };
+  await send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base, ...(isMac ? { commands: ["Paste"] } : {}) });
+  await sleep(rand(40, 110));
+  await send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
 }
 
 /* ================================================================ in-page */
