@@ -16,6 +16,7 @@
 // with textContent — some of it was written by strangers.
 
 import { renderCard } from "./card.js";
+import { suggestionsFor } from "./suggest.js";
 
 // In the extension the server is looked up in storage (8787 unless changed);
 // served as a page (/panel/ on the server itself), the server is by definition
@@ -51,10 +52,11 @@ const ago = (iso) => {
   return `${Math.round(h / 24)}d ago`;
 };
 
-const cardHost = $("card"), jobsLine = $("jobs"), errorLine = $("error"), answerBox = $("answer"), focusLine = $("focus-line");
+const cardHost = $("card"), jobsLine = $("jobs"), errorLine = $("error"), answerBox = $("answer"), focusLine = $("focus-line"), suggestBox = $("suggest");
 const VIEWS = { deck: $("view-deck"), campaigns: $("view-campaigns"), rooms: $("view-rooms"), settings: $("view-settings") };
 
 let current = null;      // the card on screen
+let deckCards = [];      // every card dealt, the one on screen first
 let pollTimer = null;
 let projectShown = null; // the project key the picker was last drawn for
 let state = null;        // /api/panel — what the other tabs show
@@ -79,8 +81,9 @@ const postJSON = async (path, body) => {
 async function load() {
   try {
     const [deck, st] = await Promise.all([getJSON("/api/cards"), getJSON("/api/panel").catch(() => null)]);
-    const { cards, jobs, control, tasks, project } = deck;
+    const { cards, jobs, control, tasks, project, brain } = deck;
     if (st) state = st;
+    deckCards = cards ?? [];
     // The card first: show() clears the notice line, and the hints that
     // follow are allowed to fill it again.
     show(cards?.[0] ?? null);
@@ -88,6 +91,7 @@ async function load() {
     showProject(project);
     showFocus();
     showBadges(cards);
+    showSuggestions(cards?.[0] ?? null, brain !== false);
     if (view !== "deck") drawView();
     schedule(cards?.[0], jobs, tasks);
   } catch {
@@ -112,6 +116,7 @@ function show(card) {
 function showDown() {
   current = null;
   state = null;
+  suggestBox.hidden = true;
   renderCard(cardHost, {
     id: "panel.down", kind: "panel.down",
     question: "The Messaging Quest server is not running.",
@@ -142,6 +147,24 @@ function showBadges(cards) {
   badge("badge-settings", noModel ? "!" : 0);
 }
 const badge = (id, n) => { const b = $(id); if (!b) return; b.hidden = !n; b.textContent = n ? String(n) : ""; };
+
+/** What people typically ask, under the card: a question goes to the
+ *  specialist through the same box as a typed one; a place goes to its tab.
+ *  Drawn from the state, so the campaign is named and the waiting counted. */
+function showSuggestions(card, brain) {
+  const chips = state ? suggestionsFor({ state, card, brain }) : [];
+  suggestBox.replaceChildren();
+  suggestBox.hidden = !chips.length;
+  if (!chips.length) return;
+  suggestBox.append(el("p", "es-suggest-label", brain ? "Ask your specialist" : "Where to go"));
+  const strip = el("div", "es-chips");
+  for (const c of chips) {
+    strip.append(c.ask
+      ? btn(c.label, () => ask(c.ask), "es-chip")
+      : btn(c.label, () => showView(c.view), "es-chip es-chip-go"));
+  }
+  suggestBox.append(strip);
+}
 
 /**
  * A task's tab is on a site this extension may not read yet. Chrome only
@@ -362,19 +385,46 @@ const loaded = (tabId) =>
 
 /* ------------------------------------------------------------- strategist */
 
+/** The specialist is told to answer in plain text; when a model bolds or
+ *  bullets anyway, the marks become what they meant rather than asterisks.
+ *  Text nodes only — nothing here is ever parsed as HTML. */
+function said(text) {
+  const out = [];
+  const lines = String(text ?? "").replace(/\r\n/g, "\n").split("\n");
+  lines.forEach((line, i) => {
+    const l = line.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, (m) => (/^\s*\d/.test(m) ? m : "• ")).replace(/^#{1,6}\s+/, "");
+    l.split(/\*\*/).forEach((part, j) => { if (!part) return; out.push(j % 2 ? el("b", null, part) : part); });
+    if (i < lines.length - 1) out.push("\n");
+  });
+  return out;
+}
+
 async function ask(preset) {
   const box = $("ask");
   const q = (preset ?? box.value).trim();
   if (!q) return;
   box.value = "";
   showView("deck");
+  const before = new Set(deckCards.map((c) => c.id));
   answerBox.hidden = false;
-  answerBox.textContent = "…";
+  answerBox.replaceChildren(el("b", null, q), "\n\n…");
+  answerBox.scrollIntoView({ block: "nearest" });
+  // A turn that reads a page or runs the writer takes a minute or more on
+  // a free seat; after a while the wait says so rather than looking stuck.
+  const slow = setTimeout(() => { if (/…$/.test(answerBox.textContent)) answerBox.append("\n\nStill working — a turn that reads a page or writes drafts takes a minute or two on the free plan."); }, 20_000);
   try {
     const out = await postJSON("/api/agent", { message: q, thread: "panel" });
-    answerBox.textContent = out.reply ?? (out.how ? `${out.error}.\n${out.how}` : out.error ?? "no answer");
+    clearTimeout(slow);
+    const reply = out.reply ?? (out.how ? `${out.error}.\n${out.how}` : out.error ?? "no answer");
+    answerBox.replaceChildren(el("b", null, q), "\n\n", ...said(reply));
     // A turn may have dealt a card — a proposal, a campaign, a question.
-    load();
+    // When it did, the card is the next action and the answer says where:
+    // on top, or behind the card already on screen, which stays first.
+    await load();
+    const dealt = deckCards.filter((c) => !before.has(c.id));
+    if (dealt.length && dealt[0].id === current?.id) answerBox.append("\n\nA new card is on the deck above.");
+    else if (dealt.length) answerBox.append(`\n\nA new card is on the deck, behind the one on screen: “${dealt[0].question}”.`);
+    answerBox.scrollIntoView({ block: "nearest" });
   } catch {
     answerBox.textContent = "The server is not running.";
   }

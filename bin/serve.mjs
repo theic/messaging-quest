@@ -2073,6 +2073,9 @@ function panelState() {
     probe: stash.probe ?? null,
     pending: S.pending().length,
     waiting: waitingRows(S).length,
+    // Everyone ever answered, across projects — the ledger that keeps the
+    // same human from being answered twice.
+    contacted: S.contacted().size,
     running: J.running().map((j) => ({ verb: j.verb, label: j.label })),
     settings: {
       plan: p,
@@ -2201,6 +2204,9 @@ const server = createServer((req, res) => {
         project: projectSummary(),
         control: controlSummary(),
         tasks: RT() ? [...RT().running(), ...RT().blocked()].map((t) => ({ id: t.id, title: t.title, status: t.status, tabId: t.lease?.tabId ?? null })) : [],
+        // Whether there is a specialist to ask — the panel's suggestions
+        // offer questions only when somebody is there to answer them.
+        brain: Boolean(RT()),
       });
     } catch (e) {
       console.error(e);
@@ -2379,6 +2385,7 @@ const server = createServer((req, res) => {
       "card.css": ["card.css", "text/css; charset=utf-8"],
       "card.js": ["card.js", "text/javascript; charset=utf-8"],
       "sidepanel.js": ["sidepanel.js", "text/javascript; charset=utf-8"],
+      "suggest.js": ["suggest.js", "text/javascript; charset=utf-8"],
       "insert.js": ["insert.js", "text/javascript; charset=utf-8"],
     };
     const hit = PANEL[url.pathname.slice("/panel/".length)];

@@ -23,7 +23,7 @@ import { verdictOf } from "../lib/probe.mjs";
 import { fromDescription, readRoomFile, roomFile, bansPromotion } from "../lib/rules.mjs";
 import { conforms } from "../lib/llm.mjs";
 import { loadPlatforms, platform, roomOf } from "../lib/platform.mjs";
-import { longestSharedRun, repeats, claims, inventedLinks, RUN_LIMIT } from "../lib/guards.mjs";
+import { longestSharedRun, repeats, claims, inventedLinks, theirs, RUN_LIMIT } from "../lib/guards.mjs";
 import { standing, readiness, burst, mix } from "../lib/ready.mjs";
 import { nextCards, onboarded, questionCards } from "../lib/cards.mjs";
 import { agentDefinition } from "../lib/skills.mjs";
@@ -334,6 +334,16 @@ check("a fabricated job history is surfaced", said.length, 1);
 check("...as the whole sentence, not the two words that matched", /vocavela/.test(said[0].sentence), true);
 check("ordinary prose makes no claim", claims("That sounds frustrating. Have you tried asking them directly?").length, 0);
 check("first person alone is not a claim about experience", claims("I would probably start there.").length, 0);
+
+// "i built doctick" — to the person who built DocTick (a free writer, 2026-09-07,
+// with me.md still the seed). The claim is theirs; the guard says so by name.
+const theirPost = "I built DocTick: a passwordless client document portal for Google Drive. Giving away 50 passes for feedback.";
+check("claiming the product in their own post as yours is named", theirs("Hey i built doctick to fix google drive's missing file request feature.", theirPost, ""), ["doctick"]);
+check("...once, however many times it is said", theirs("i built doctick. later i made DocTick better.", theirPost, ""), ["doctick"]);
+check("a product me.md names is yours to claim", theirs("i built doctick for exactly this", theirPost, "# me\n\nI built DocTick last spring."), []);
+check("a thing that is not a name never matches", theirs("i built a small tool that does that, and i made something similar", theirPost, ""), []);
+check("a name not in their post is a history claim, not theirs", theirs("i built questboard for this", theirPost, ""), []);
+check("no post, nothing to compare against", theirs("i built doctick", "", ""), []);
 
 // The drafter has no search, so any URL it did not lift from the thread is invented.
 check("a link from the thread is fine", inventedLinks("see https://real.example", "body https://real.example"), []);
@@ -1682,7 +1692,7 @@ check("a proposal with a verb outside the law never renders",
   const esT = (args, stdin) => { try { return execFileSync(process.execPath, [ES, ...args], { env: { ...process.env, MQ_DIR: DT }, input: stdin ?? "", encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }); } catch (e) { return `${e.stdout || ""}${e.stderr || ""}`; } };
   writeCampaign(DT, { name: "Launch posts", platform: "reddit", mention: "never", idea: "one true observation about what they built" });
   appendFileSync(join(DT, "found.jsonl"), [
-    JSON.stringify({ id: "t3_a", place: "saas", url: "https://www.reddit.com/r/saas/comments/a/x/", author: "ana", title: "launched, zero users", body: "we launched and nothing", probe: "saas:launch", campaign: "launch-posts", seen_at: "2026-09-06T01:00:00Z" }),
+    JSON.stringify({ id: "t3_a", place: "saas", url: "https://www.reddit.com/r/saas/comments/a/x/", author: "ana", title: "launched, zero users", body: "we launched Zerolist and nothing", probe: "saas:launch", campaign: "launch-posts", seen_at: "2026-09-06T01:00:00Z" }),
     JSON.stringify({ id: "t3_b", place: "saas", url: "https://www.reddit.com/r/saas/comments/b/x/", author: "bo", title: "same", body: "same here", probe: "saas:launch", campaign: "launch-posts", seen_at: "2026-09-06T01:00:00Z" }),
   ].join("\n") + "\n");
   const mat = esT(["draft", "t3_a"]);
@@ -1696,6 +1706,7 @@ check("a proposal with a verb outside the law never renders",
   const rowsT = () => readFileSync(join(DT, "drafts.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
   check("a round of three saves as one row: the tabs, the first doubled as text for older readers, round 1", [rowsT().length, rowsT()[0].drafts.map((d) => d.style), rowsT()[0].text === three.drafts[0].text, rowsT()[0].round, /3 drafts saved/.test(saved)], [1, ["straight", "deeper", "ask"], true, 1, true]);
   check("...the refusals run over each, and flag the one that claims a history — not the others", [rowsT()[0].drafts.map((d) => d.flags.claims), /\[Deeper\]/.test(saved), /CLAIMS ABOUT YOU/.test(saved)], [[0, 1, 0], true, true]);
+  check("the material treats an unfilled me.md as empty, and says nothing is yours to name", [/## me.md is empty/.test(mat), /never the thing THEY built/.test(mat), /What you have actually done/.test(mat)], [true, true, false]);
   const noteT = esT(["draft", "t3_a", "--note", "too long", "--style", "deeper"]);
   check("a note names the draft it was about and quotes that tab as rejected", [/too long/.test(noteT), /DEEPER draft/.test(noteT), /--- rejected ---\nzero users after a launch/.test(noteT)], [true, true, true]);
   const other = esT(["draft", "t3_b"]);
@@ -1709,11 +1720,13 @@ check("a proposal with a verb outside the law never renders",
   check("text that merely starts with a brace is text", (() => { esT(["draft", "t3_a", "--save"], "{ not json at all"); const d = rowsT()[4].drafts[0]; return [d.style, d.text]; })(), ["yours", "{ not json at all"]);
   check("a JSON round with nothing in it is refused", /no draft with any text/.test(esT(["draft", "t3_a", "--save"], JSON.stringify({ drafts: [{ style: "ask", text: "" }] }))), true);
   check("the MCP and the runtime's save still take plain text", /draft saved/.test(esT(["draft", "t3_b", "--save"], "plain, from an assistant")), true);
+  const tookT = esT(["draft", "t3_a", "--save"], JSON.stringify({ drafts: [{ style: "straight", text: "we launched too. i built zerolist to fix exactly this." }, { style: "deeper", text: "i built nothing here, honestly: the page answers a question nobody typed." }, { style: "ask", text: "what did the first ten people say?" }] }));
+  check("a draft that claims what THEY posted about as yours is flagged by name, on that tab only — a plain word they also used is not", [rowsT().filter((d) => d.id === "t3_a").pop().drafts.map((d) => d.flags.theirs ?? 0), /THEIRS, NOT YOURS/.test(tookT), /"zerolist"/.test(tookT)], [[1, 0, 0], true, true]);
 
   /* The deck: tabs on the card, the note card naming the tab, a walk from a name. */
-  const person = { id: "t3_q", place: "saas", url: "https://www.reddit.com/r/saas/comments/q/x/", author: "a", title: "t", body: "b", why: "asks", readyState: "ready", blockedWhy: null, draft: { round: 2, drafts: [{ style: "straight", text: "S", flags: { claims: 0 } }, { style: "deeper", text: "D", flags: { claims: 1, tells: 2 } }, { style: "ask", text: "A", flags: {} }] } };
+  const person = { id: "t3_q", place: "saas", url: "https://www.reddit.com/r/saas/comments/q/x/", author: "a", title: "t", body: "b", why: "asks", readyState: "ready", blockedWhy: null, draft: { round: 2, drafts: [{ style: "straight", text: "S", flags: { claims: 0 } }, { style: "deeper", text: "D", flags: { claims: 1, tells: 2 } }, { style: "ask", text: "A", flags: { theirs: 1 } }] } };
   const cardT = nextCards(snap({ hasModel: true, queue: [person] }))[0];
-  check("the reply card carries the three as tabs, the first in the field, the flags in words on the tab they belong to", [cardT.tabs.map((t) => [t.id, t.label]), cardT.field.value, cardT.tabs[1].warnings, cardT.tabs[0].warnings, cardT.data.round], [[["straight", "Straight"], ["deeper", "Deeper"], ["ask", "Ask back"]], "S", ["1 claim about your history — check against me.md", "2 template phrases"], [], 2]);
+  check("the reply card carries the three as tabs, the first in the field, the flags in words on the tab they belong to", [cardT.tabs.map((t) => [t.id, t.label]), cardT.field.value, cardT.tabs[1].warnings, cardT.tabs[0].warnings, cardT.tabs[2].warnings, cardT.data.round], [[["straight", "Straight"], ["deeper", "Deeper"], ["ask", "Ask back"]], "S", ["1 claim about your history — check against me.md", "2 template phrases"], [], ["says you built what THEY built — theirs, not yours"], 2]);
   const oldT = nextCards(snap({ hasModel: true, queue: [{ ...person, draft: { text: "one old draft", flags: null } }] }))[0];
   check("a draft saved before 0.8.0 is one tab, the operator's own", [oldT.tabs.map((t) => t.label), oldT.field.value], [["Yours"], "one old draft"]);
   const rwT = nextCards(snap({ hasModel: true, queue: [person], stash: { rewrite: { id: "t3_q", prior: "D edited", style: "deeper", who: "u/a" } } }))[0];
@@ -1749,7 +1762,7 @@ check("a proposal with a verb outside the law never renders",
     const stP = async () => (await GP("/api/panel")).json;
     const deckP = async () => (await GP("/api/cards")).json.cards;
     const st0 = await stP();
-    check("the panel's state: free by default, no key yet and where one comes from, the campaign with its numbers, the seats on free models", [st0.settings.plan, st0.settings.key.set, /openrouter\.ai\/keys/.test(st0.settings.key.url), st0.campaigns.map((c) => c.id), st0.campaigns[0].numbers.found, st0.settings.roles.map((r) => r.key), st0.settings.roles.every((r) => /:free$/.test(r.model)), st0.general.found, st0.account, st0.focus], ["free", false, true, ["launch-posts"], 0, ["judge", "scout", "writer"], true, 1, "panel_8", null]);
+    check("the panel's state: free by default, no key yet and where one comes from, the campaign with its numbers, the seats on free models", [st0.settings.plan, st0.settings.key.set, /openrouter\.ai\/keys/.test(st0.settings.key.url), st0.campaigns.map((c) => c.id), st0.campaigns[0].numbers.found, st0.settings.roles.map((r) => r.key), st0.settings.roles.every((r) => /:free$/.test(r.model)), st0.general.found, st0.account, st0.focus, typeof st0.contacted], ["free", false, true, ["launch-posts"], 0, ["judge", "scout", "writer"], true, 1, "panel_8", null, "number"]);
     check("a panel act that is not JSON is refused; one the panel cannot do is named", [(await PP("/api/panel/act", { do: "tick" }, "text/plain")).status, (await PP("/api/panel/act", { do: "explode" })).json.error], [400, "not a thing the panel can do: explode"]);
     check("the key is checked before it is kept, and can be removed", [(await PP("/api/panel/act", { do: "settings.key", key: "hunter2" })).status, (await PP("/api/panel/act", { do: "settings.key", key: "sk-or-test-key" })).status, (await stP()).settings.key.set, (await PP("/api/panel/act", { do: "settings.key", key: "" })).status, (await stP()).settings.key.set], [400, 200, true, 200, false]);
     check("a seat takes only its plan's menu; the plan switches, refuses a made-up one, and switches back", [(await PP("/api/panel/act", { do: "settings.model", role: "judge", model: "moonshotai/kimi-k3" })).status, (await PP("/api/panel/act", { do: "settings.model", role: "judge", model: "inclusionai/ling-3.0-flash-fin:free" })).status, (await stP()).settings.roles[0].model, (await PP("/api/panel/act", { do: "settings.plan", plan: "paid" })).status, (await stP()).settings.plan, (await PP("/api/panel/act", { do: "settings.plan", plan: "gold" })).status, (await PP("/api/panel/act", { do: "settings.plan", plan: "free" })).status], [400, 200, "inclusionai/ling-3.0-flash-fin:free", 200, "paid", 400, 200]);
@@ -1772,8 +1785,32 @@ check("a proposal with a verb outside the law never renders",
     const cp = conversationRows(SP).get("t3_p1");
     check("'I posted it' from the third tab records that tab's words, and which style went up, on the conversation and the mark", [cp.turns[0].text, cp.turns[0].style, SP.marks().get("t3_p1").style], ["A1", "ask", "ask"]);
     check("the panel's files are served, tabs and all", [/es-tabs/.test(await (await fetch(baseP + "/panel/")).text()), /es-tabs-strip/.test(await (await fetch(baseP + "/panel/card.css")).text()), /api\/panel/.test(await (await fetch(baseP + "/panel/sidepanel.js")).text())], [true, true, true]);
+    check("...and the suggestions under the card, with the deck saying whether a specialist is there to ask", [/id="suggest"/.test(await (await fetch(baseP + "/panel/")).text()), (await fetch(baseP + "/panel/suggest.js")).status, /es-chip/.test(await (await fetch(baseP + "/panel/card.css")).text()), typeof (await (await fetch(baseP + "/api/cards")).json()).brain], [true, 200, true, "boolean"]);
   }
   srvP.kill();
+}
+
+/* ------------------------------------------- the suggestions under the card (0.9.0) */
+
+// What people typically ask their specialist is offered, not guessed at: the
+// chips come from the panel's state, so a campaign is named, a waiting person
+// counted, and the person on the deck asked about. Pure, so it is held here.
+{
+  const { suggestionsFor } = await import("../extension/suggest.js");
+  const shape = (chips) => chips.every((c) => c.label && ((typeof c.ask === "string") !== (typeof c.view === "string")));
+  const fresh = suggestionsFor({ state: { setup: { done: 0, total: 4 }, campaigns: [], sources: [], rooms: [], waiting: 0 }, card: { kind: "onboard.url" } });
+  check("a fresh directory offers the one question that always applies, and nowhere to go yet", [fresh.map((c) => c.label), shape(fresh)], [["What should I do next?"], true]);
+  const st = { setup: { done: 4, total: 4 }, focus: null, waiting: 2, sources: [{ id: "founder:x" }], rooms: [{ place: "founder" }],
+    campaigns: [{ id: "launch-posts", name: "Launch posts", status: "paused" }, { id: "help", name: "Help only", status: "active" }] };
+  const busy = suggestionsFor({ state: st, card: { kind: "work.reply" } });
+  check("a working directory names the active campaign, counts who is waiting, asks about the person on the deck, and points at the rooms and campaigns",
+    [busy.map((c) => c.label), shape(busy), busy.length <= 7],
+    [["What should I do next?", "Who is waiting on me?", "Why this person?", "How is “Help only” going?", "What campaign should I try next?", "Try a room", "The campaigns"], true, true]);
+  check("the focus wins over the first active campaign", suggestionsFor({ state: { ...st, focus: "launch-posts" }, card: null }).find((c) => /going/.test(c.label))?.label, "How is “Launch posts” going?");
+  check("no campaign yet, setup done: the first campaign is proposed, and Start a campaign leads to its tab", suggestionsFor({ state: { ...st, campaigns: [], waiting: 0 }, card: null }).map((c) => c.label), ["What should I do next?", "Propose my first campaign", "What is my brand about?", "Which room next?", "Try a room", "Start a campaign"]);
+  check("without a specialist installed there is nothing to ask, only places to go", suggestionsFor({ state: st, card: null, brain: false }).map((c) => c.label), ["Try a room", "The campaigns"]);
+  check("no state, no chips", suggestionsFor({ state: null }), []);
+  check("every question chip is a full sentence for the specialist, not a label", busy.filter((c) => c.ask).every((c) => c.ask.length > 40 && /[?.]$/.test(c.ask)), true);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

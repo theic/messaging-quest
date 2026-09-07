@@ -91,7 +91,7 @@ export function normalizeQuestions(list) {
 /** The same tool in every worker and in the CMO: the schema is shared, the
  *  backing differs. Here it is interrupt(): the thread pauses, persisted, and
  *  the answers resume it — the tool then returns them to the model. */
-export const askPersonTool = () => tool(async ({ questions }) => {
+const askPersonTool = () => tool(async ({ questions }) => {
   const answers = interrupt({ questions: normalizeQuestions(questions) });
   return JSON.stringify(answers ?? {});
 }, {

@@ -431,6 +431,42 @@ the campaign in the browser, 7 judged and 4 fit, the room watched under it,
 and a draft that disclosed once, linked nothing, offered and asked — with the
 claims guard firing because me.md was empty.
 
+**Publish-ready: the tree read for dead code, the type up, the specialist
+shown the deck (2026-09-07, 0.9.0).** Three passes before the repository
+goes to people who did not build it. First, WHAT NOBODY CALLS GOES. Every
+export was counted against every file: six functions with no caller were
+deleted (an HTML reducer, a role summary, an active-campaigns filter, a
+draft-count constant, an empty-voice check, an etiquette note), twenty-one
+exports nobody imports lost the keyword, and the two comments that still
+spoke of the relay were reworded. No behaviour moved; the suites say so.
+Second, THE TYPE. Nothing under 12px anywhere; the panel's body at 15px
+and its drafts at 15px on 1.55 — a side panel is read at arm's length and
+the draft is what the operator reads most carefully; eyebrows, tags and
+table heads in the monospace or the bold sans rather than a pixel face that
+was never installed on anybody's machine; the faces stay the site's when
+they are installed and the system's when not, and no font is ever fetched.
+Third, THE SPECIALIST IS SHOWN THE DECK, NOT ASKED TO LOOK. The questions
+people typically ask sit under the card as buttons (extension/suggest.js —
+pure, drawn from the panel's state, so the campaign is named and the
+waiting counted). Every panel message arrives with the deck in front of it
+— each card's kind, the button it actually carries, whether its drafts are
+written and, for the card on screen, the drafts' own words — and with the
+engine's counts, because a free seat does not always call the tool the
+doctrine tells it to: asked "what next" it offered to draft what was
+drafted and named a button that did not exist; asked for a count it
+carried "0 sent" over from an earlier turn. The doctrine gained: name only
+the button the deck shows, never offer to write what is written, answer a
+count from the numbers in this message, never send the operator to a
+terminal, plain text under 120 words. The panel says where a dealt card
+went (on top, or behind the one on screen) and, after twenty seconds, that
+a turn which writes takes a minute or two. And ONE GUARD, from the run: the
+writer, told it may name what the operator built and handed a me.md that
+was still the seed, wrote "i built doctick" to the person who built
+DocTick. So an unfilled me.md is empty to the writer, the disclosed rules
+say whose X is, and `theirs` (lib/guards.mjs) flags a name claimed as
+built that appears in their post as a name and nowhere in me.md — a flag,
+never a rejection, like the others.
+
 **Three drafts, four tabs, free by default (2026-09-06, 0.8.0).** Before
 the tool is shared with people who did not build it, three things were
 decided at once. First, THE WRITER WRITES THREE, ALWAYS. It used to be
@@ -665,6 +701,48 @@ Reddit stays the only scout built.
   broker refusal, debugger screenshot and release passed live; reads waited
   on the reddit.com grant. The grant ask now outlives the lease that hit
   the wall (it vanished with the smoke test's tab before).
+- 0.9.0 (2026-09-07), built — publish-ready. DEAD CODE: every export
+  counted against every file; six uncalled functions deleted, twenty-one
+  needless exports dropped, the relay wording gone; no dead CSS class. THE
+  TYPE: extension/card.css and lib/ui.mjs on one scale — nothing under
+  12px, the panel's body 15px and its drafts 15px/1.55, no pixel face in
+  running text, the dashboard's nav, tags and table heads in bold small
+  sans, td/th allowed to wrap so no page scrolls sideways. THE PANEL: the
+  questions people typically ask under the card (extension/suggest.js, pure,
+  from the panel's state: what next, who is waiting, why this person, how
+  the focused campaign is going, what campaign next / propose the first,
+  what is my brand about, which room next, plus Try a room / The campaigns);
+  the answer box with the question in bold, bold and bullets rendered as
+  text nodes, "a new card is on the deck above" / "behind the one on
+  screen", a line after twenty seconds that a writing turn takes a minute
+  or two; `brain` on /api/cards, `contacted` on /api/panel. THE
+  SPECIALIST: the deck (each card's kind, its actual button, whether the
+  drafts are written, the on-screen card's tab texts) and the engine's
+  numbers in front of EVERY turn (agent/strategist.mjs deckPreface), the
+  deck tool kept for a second look; doctrine lines on buttons, counts, no
+  terminal, plain text; `mq waiting` names the tracked conversations. THE
+  WRITER: an unfilled me.md is empty to it, DISCLOSED_RULES say whose X is,
+  lib/guards.mjs `theirs` and the THEIRS flag on the round, in the CLI and
+  on the card's tab. THE QUESTION RUN (2026-09-07, the served panel, the
+  free plan, minimax-m2.7 in the scout seat, fifteen turns at 30–60s each):
+  brand in two sentences, right; what next — named the reply, offered to
+  draft what was drafted, invented an "Accept" button (fixed by the
+  preface); why this person — wrong before the preface ("the drafts can't
+  be written yet"), right after (fit, three tabs, picks Ask back and says
+  why); how is Launch posts going — every number matched the panel; what
+  campaign next — the walk dealt ("Honest outreach", r/Entrepreneur) and
+  the answer said so; brand in three lines, right; which room next — a
+  probe card for r/saas, dealt behind the walk (the panel now says where);
+  who is waiting — right count, wrong name (the verb now names them);
+  refused: post it for me, one message for twenty threads (named the
+  repeat guard), a DM against the house rules (quoted the room's rule),
+  switching projects (the panel's); exact counts — "0 sent" carried over
+  from an earlier turn, then right with the numbers in the preface
+  (contacted 1, fit 8); make the deeper draft shorter — 216s, ran the
+  writer and relayed the flags honestly, and the round it wrote claimed "i
+  built doctick" to DocTick's author, which is the guard above. 504 engine
+  + 34 voice + 37 runtime tests green. Not verified: the extension's own
+  side panel (the served panel is the same files).
 - 0.8.0 (2026-09-06), built — three drafts, four tabs, free by default.
   `lib/writing.mjs` STYLES + draftsBlock (straight, deeper, ask back — the
   same block in `mq draft` and the on-page prompt); `lib/agents.mjs`

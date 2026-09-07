@@ -65,7 +65,7 @@
 import { CLICK_SCREEN } from "./screen.js";
 import { composerState, wordsSource, OPENS_DEFAULT, REPLIES_DEFAULT, NEVER } from "./insert.js";
 
-export const GROUP_TITLE = "Messaging Quest";
+const GROUP_TITLE = "Messaging Quest";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const rand = (min, max) => min + Math.random() * (max - min);

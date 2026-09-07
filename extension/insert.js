@@ -41,8 +41,8 @@ export const wordsSource = (list, dflt) => {
     .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   return `^(${words.join("|")})$`;
 };
-export const OPENS = new RegExp(wordsSource([], OPENS_DEFAULT), "i");
-export const REPLIES = new RegExp(wordsSource([], REPLIES_DEFAULT), "i");
+const OPENS = new RegExp(wordsSource([], OPENS_DEFAULT), "i");
+const REPLIES = new RegExp(wordsSource([], REPLIES_DEFAULT), "i");
 
 /**
  * In the page: `{ box, opener }`. `box` is the composer if one is open —

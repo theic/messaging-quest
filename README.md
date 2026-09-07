@@ -69,7 +69,10 @@ numbers, a focus for the deck, a room to search under it, pause and done.
 **Rooms**: what is watched and when it was last read, a room to try. **Settings**:
 where the models run, the key, the seats, your account, your projects. The
 box at the bottom talks to the CMO (`npm run brain` installs it; everything else
-runs without it).
+runs without it), and under the card sit the questions people typically ask
+it — what to do next, who is waiting, how a campaign is going, why this
+person — one press each. When an answer needs an action, the CMO deals it as
+a card rather than telling you where to click.
 
 The dashboard at `http://127.0.0.1:8787` is the ledger behind it — Today,
 People, Campaigns, You — and `node bin/mq.mjs` is the same engine from the
