@@ -1249,30 +1249,49 @@ const SPAWNABLE = {
 /** Verbs that need a model, and therefore run in this process. */
 const AGENTIC = { judge: "Judging what was found", draft: "Writing a draft" };
 
+/* What the deck needs to say about them (0.9.1): which person a draft is
+ * being written for right now, and how the last judge or the last draft
+ * ended when it did not end well. A card that read "Write the draft" after
+ * the writer had failed twice, silently, was the panel's worst habit — the
+ * button looked unpressed and the failure lived in a job log nobody opened.
+ * Per project dir, this process only. */
+const DRAFTING = new Map();   // dir → the item a draft is being written for
+const LAST = new Map();       // dir → { judge: { error, at } | null, draft: { id, error, at } | null }
+const lastOf = (dir) => LAST.get(dir) ?? { judge: null, draft: null };
+const remember = (dir, patch) => LAST.set(dir, { ...lastOf(dir), ...patch });
+
 const startAgentic = (verb, args) => {
+  const dir = P();
   if (verb === "judge") {
     return J.run("judge", async (ctl) => {
-      const pend = S.pending();
-      if (!pend.length) { ctl.log("nothing pending to judge"); return; }
-      const all = S.found();
-      const items = pend.map((x) => {
-        const it = all.get(x.id) ?? {};
-        return { n: x.n, place: it.place, author: it.author, title: it.title, body: it.body, crowd: it.comments ?? null, posted_at: it.posted_at ?? null };
-      });
-      ctl.log(`${items.length} to judge · ${chosen(P()).judge}`);
-      const { judgeItems } = await import("../lib/agents.mjs");
-      const rule = readFileSync(S.F("rule.md"), "utf8");
-      const verdicts = await judgeItems(P(), items, rule, ctl);
-      // Nothing back is a failure, not a quiet success: the first live judge
-      // run on the free plan finished "ok" in 0.8s with every batch refused
-      // (400, a fallback list one entry too long) and the only trace was a
-      // log the job store does not keep.
-      if (!verdicts.length) throw new Error(`no verdicts came back — ${verdicts.failed?.[0] ?? "nothing written"}`);
-      // Hand them to the CLI rather than appending here: `mq judge` is what
-      // stamps the rubric hash, clears pending and settles the probe, and two
-      // implementations of that is how a queue starts disagreeing with itself.
-      ctl.log(`\nwriting ${verdicts.length} verdicts`);
-      await runEs("judge", [], { stdin: JSON.stringify(verdicts), ctl });
+      try {
+        const pend = S.pending();
+        if (!pend.length) { ctl.log("nothing pending to judge"); return "nothing was pending"; }
+        const all = S.found();
+        const items = pend.map((x) => {
+          const it = all.get(x.id) ?? {};
+          return { n: x.n, place: it.place, author: it.author, title: it.title, body: it.body, crowd: it.comments ?? null, posted_at: it.posted_at ?? null };
+        });
+        ctl.log(`${items.length} to judge · ${chosen(dir).judge}`);
+        const { judgeItems } = await import("../lib/agents.mjs");
+        const rule = readFileSync(S.F("rule.md"), "utf8");
+        const verdicts = await judgeItems(dir, items, rule, ctl);
+        // Nothing back is a failure, not a quiet success: the first live judge
+        // run on the free plan finished "ok" in 0.8s with every batch refused
+        // (400, a fallback list one entry too long) and the only trace was a
+        // log the job store does not keep.
+        if (!verdicts.length) throw new Error(`no verdicts came back — ${verdicts.failed?.[0] ?? "nothing written"}`);
+        // Hand them to the CLI rather than appending here: `mq judge` is what
+        // stamps the rubric hash, clears pending and settles the probe, and two
+        // implementations of that is how a queue starts disagreeing with itself.
+        ctl.log(`\nwriting ${verdicts.length} verdicts`);
+        await runEs("judge", [], { stdin: JSON.stringify(verdicts), ctl });
+        remember(dir, { judge: null });
+        return `${verdicts.length} verdict${verdicts.length === 1 ? "" : "s"} written`;
+      } catch (e) {
+        remember(dir, { judge: { error: e?.message ?? String(e), at: Date.now() } });
+        throw e;
+      }
     }, { label: AGENTIC.judge });
   }
 
@@ -1280,30 +1299,72 @@ const startAgentic = (verb, args) => {
     const id = String(args[0] ?? "");
     if (!id) return { error: "no item" };
     return J.run("draft", async (ctl) => {
-      ctl.log(`assembling the prompt for ${id}`);
-      // `mq draft <id>` already builds the whole thing — the post, the measured
-      // voice, the community's risks, the three-moves instruction. It printed
-      // it for a human to paste. This sends it.
-      // Everything after the id rides through: "--note <text>" is the
-      // operator's critique of the last draft (the rewrite card).
-      const prompt = await capture("draft", [id, ...args.slice(1)]);
-      const note = args.includes("--note") ? String(args[args.indexOf("--note") + 1] ?? "") : "";
-      const style = args.includes("--style") ? String(args[args.indexOf("--style") + 1] ?? "") : "";
-      if (note) ctl.log(`with the operator's note on the last round${style ? ` (the ${style} draft)` : ""}`);
-      const { draftReply } = await import("../lib/agents.mjs");
-      const { drafts, no_fit } = await draftReply(P(), prompt, ctl);
-      if (!drafts.length) { ctl.log(no_fit ? `the writer declined: ${no_fit}` : "nothing came back"); return; }
-      ctl.log(`\n${drafts.length} draft${drafts.length === 1 ? "" : "s"}:`);
-      for (const d of drafts) ctl.log(`\n— ${d.style}\n${d.text}`);
-      // All three are saved as one round, so they land on the card as tabs.
-      // Saving runs the refusals over each, which is the only reason to go
-      // through the CLI rather than appending a draft row here.
-      ctl.log(`\nsaving the round, and running the refusals over each`);
-      await runEs("draft", [id, "--save"], { stdin: JSON.stringify({ drafts, ...(note ? { note, style } : {}) }), ctl });
+      DRAFTING.set(dir, id);
+      try {
+        ctl.log(`assembling the prompt for ${id}`);
+        // `mq draft <id>` already builds the whole thing — the post, the measured
+        // voice, the community's risks, the three-moves instruction. It printed
+        // it for a human to paste. This sends it.
+        // Everything after the id rides through: "--note <text>" is the
+        // operator's critique of the last draft (the rewrite card).
+        const prompt = await capture("draft", [id, ...args.slice(1)]);
+        const note = args.includes("--note") ? String(args[args.indexOf("--note") + 1] ?? "") : "";
+        const style = args.includes("--style") ? String(args[args.indexOf("--style") + 1] ?? "") : "";
+        if (note) ctl.log(`with the operator's note on the last round${style ? ` (the ${style} draft)` : ""}`);
+        const { draftReply } = await import("../lib/agents.mjs");
+        const { drafts, no_fit } = await draftReply(dir, prompt, ctl);
+        if (!drafts.length) {
+          // The writer's no is an answer, not a failure — but the card must
+          // carry it, or the button reads as if it was never pressed.
+          const why = no_fit ? `the writer declined: ${no_fit}` : "nothing came back from the writer";
+          ctl.log(why);
+          remember(dir, { draft: { id, error: why, at: Date.now() } });
+          return why;
+        }
+        ctl.log(`\n${drafts.length} draft${drafts.length === 1 ? "" : "s"}:`);
+        for (const d of drafts) ctl.log(`\n— ${d.style}\n${d.text}`);
+        // All three are saved as one round, so they land on the card as tabs.
+        // Saving runs the refusals over each, which is the only reason to go
+        // through the CLI rather than appending a draft row here.
+        ctl.log(`\nsaving the round, and running the refusals over each`);
+        await runEs("draft", [id, "--save"], { stdin: JSON.stringify({ drafts, ...(note ? { note, style } : {}) }), ctl });
+        remember(dir, { draft: null });
+        return `${drafts.length} draft${drafts.length === 1 ? "" : "s"} on the card`;
+      } catch (e) {
+        remember(dir, { draft: { id, error: e?.message ?? String(e), at: Date.now() } });
+        throw e;
+      } finally {
+        if (DRAFTING.get(dir) === id) DRAFTING.delete(dir);
+      }
     }, { label: AGENTIC.draft });
   }
   return { error: `${verb} is not a thing this can run` };
 };
+
+/* The judge starts by itself (0.9.1). A verdict is not a decision the
+ * operator has to make — the rule is theirs, the reading is the model's —
+ * and a deck that sat on "Judge them" was a deck that sat. Every ten
+ * seconds: something pending, a model to judge with, no read still filling
+ * the queue (a probe or a tick judged mid-read is two small runs where one
+ * would do), no judge already running, and not within five minutes of a
+ * failure — a 429 on the free plan asked again every ten seconds is how a
+ * day's budget goes. The card says so while it runs and says why when it
+ * failed; the strip at the top of the panel shows it either way. */
+const JUDGE_RETRY_MS = 5 * 60_000;
+function autoJudge() {
+  try {
+    const dir = P();
+    if (!hasModel(dir) || J.busy("judge")) return;
+    if (["probe", "tick", "pull", "add"].some((v) => J.busy(v))) return;
+    if (!S.pending().length) return;
+    const failed = lastOf(dir).judge;
+    if (failed && Date.now() - failed.at < JUDGE_RETRY_MS) return;
+    startAgentic("judge", []);
+  } catch (e) {
+    console.error(`the judge could not start by itself: ${e?.message ?? e}`);
+  }
+}
+setInterval(autoJudge, 10_000).unref();
 
 /* --- Skills -------------------------------------------------------------- */
 
@@ -1630,6 +1691,13 @@ function cardSnapshot() {
     sources,
     rooms,
     pendingCount: S.pending().length,
+    // The judge and the writer as the cards need them (0.9.1): running now,
+    // or failed last — so a card never offers what is already being done,
+    // and never hides a failure behind the same button.
+    judging: J.busy("judge"),
+    judgeFailed: lastOf(P()).judge && Date.now() - lastOf(P()).judge.at < 10 * 60_000 ? lastOf(P()).judge.error : null,
+    drafting: DRAFTING.get(P()) ?? null,
+    draftFailed: lastOf(P()).draft ? { id: lastOf(P()).draft.id, error: lastOf(P()).draft.error } : null,
     queue,
     itemCount: S.items().size,
     contactedCount: S.contacted().size,
@@ -1884,12 +1952,14 @@ async function actCard({ card, action, choice, choices, text, tab }) {
     // The verb is re-parsed from the STASH, never taken from the request —
     // the client only ever says "do" or "dismiss" to whatever the server
     // itself wrote there.
-    if (p.verb === "judge" || p.verb === "draft") { startAgentic(p.verb, p.args); return { ok: true }; }
+    if (p.verb === "judge" || p.verb === "draft") { const r = startAgentic(p.verb, p.args); return r?.error ? r : { ok: true }; }
     return spawn(p.verb, p.args);
   }
 
   if (id === "work.judge") {
-    if (act === "judge") startAgentic("judge", []);
+    // A refusal — the judge already running — goes back to the panel as
+    // words, not as a button that seemed to do nothing.
+    if (act === "judge") { const r = startAgentic("judge", []); if (r?.error) return r; }
     return { ok: true };
   }
 
@@ -1915,7 +1985,7 @@ async function actCard({ card, action, choice, choices, text, tab }) {
       S.append("marks.jsonl", { id: itemId, mark: "skip", at: new Date().toISOString(), via: "panel" });
       return { ok: true };
     }
-    if (act === "draft") { startAgentic("draft", [itemId]); return { ok: true }; }
+    if (act === "draft") { const r = startAgentic("draft", [itemId]); return r?.error ? r : { ok: true }; }
     if (act === "rewrite") {
       const last = S.drafts().filter((d) => d.id === itemId).pop();
       patchStash(P(), { rewrite: { id: itemId, prior: t || tabText(last), style, who: it.author ? `u/${it.author}` : null } });
@@ -1938,7 +2008,7 @@ async function actCard({ card, action, choice, choices, text, tab }) {
       return { ok: true };
     }
     if (act === "skip") { closeConversation(S, conv); return { ok: true }; }
-    if (act === "draft") { startAgentic("draft", [itemId]); return { ok: true }; }
+    if (act === "draft") { const r = startAgentic("draft", [itemId]); return r?.error ? r : { ok: true }; }
     if (act === "rewrite") {
       const turn = yourTurns(conv) + 1;
       const last = S.drafts().filter((d) => d.id === itemId && (d.turn ?? 1) === turn).pop();
@@ -1956,8 +2026,8 @@ async function actCard({ card, action, choice, choices, text, tab }) {
     patchStash(P(), { rewrite: null });
     if (act !== "rewrite") return { ok: true };
     if (!t) return { error: "say what should change, or keep the drafts" };
-    startAgentic("draft", [itemId, "--note", t.slice(0, 600), ...(r.style ? ["--style", r.style] : [])]);
-    return { ok: true };
+    const started = startAgentic("draft", [itemId, "--note", t.slice(0, 600), ...(r.style ? ["--style", r.style] : [])]);
+    return started?.error ? started : { ok: true };
   }
 
   if (id === "work.due") {
@@ -2200,7 +2270,11 @@ const server = createServer((req, res) => {
       const cards = nextCards(cardSnapshot());
       body = JSON.stringify({
         cards,
-        jobs: J.running().map((j) => ({ label: j.label, note: j.note })),
+        jobs: J.running().map((j) => ({ label: j.label, note: j.note, startedAt: j.startedAt, done: j.done, total: j.total })),
+        // What last finished, and how (0.9.1): the panel's strip says
+        // "done" or "failed — why" where silence used to stand.
+        recent: J.list().filter((j) => j.status !== "running" && j.finishedAt && Date.now() - Date.parse(j.finishedAt) < 10 * 60_000).slice(0, 3)
+          .map((j) => ({ label: j.label, status: j.status, error: j.error, note: j.note, finishedAt: j.finishedAt })),
         project: projectSummary(),
         control: controlSummary(),
         tasks: RT() ? [...RT().running(), ...RT().blocked()].map((t) => ({ id: t.id, title: t.title, status: t.status, tabId: t.lease?.tabId ?? null })) : [],

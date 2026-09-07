@@ -76,11 +76,22 @@ The panel deals the next action: setup runs as cards (your account, your URL
 you write — then a proof-read of what it found, then the first room). After
 that it deals work: a person worth answering with the reply already written,
 **Open the thread & type it in** puts the draft into Reddit's real composer —
-and *you* press Reddit's own Comment button. Nothing here can submit: the
-code that finds the composer is screened against every label that could, and
-"I posted it" is recorded through the same limits the CLI enforces (2 replies
-per room, 5 overall, per 24 hours — with the refusing sentence shown on the
-card).
+the thread's own comment box for a comment on their post, the reply box under
+their comment when they wrote back, never the first comment's Reply — and
+*you* press Reddit's own Comment button. It reads back that the words landed
+before it says so, and pastes them with a real Ctrl+V from your clipboard when
+the editor ignored the first try. Nothing here can submit: the code that finds
+the composer is screened against every label that could, and "I posted it" is
+recorded through the same limits the CLI enforces (2 replies per room, 5
+overall, per 24 hours — with the refusing sentence shown on the card).
+
+Everything that runs is named in the strip at the top of the panel, on every
+tab — the judge, the writer, a read, a colleague in its tab, your own question
+in flight — with a clock; when nothing runs, the strip says what last finished
+and how it went. The judge starts by itself whenever something is pending and
+a model is there (0.9.1); the card waits while it runs and says why when it
+failed. A draft being written is a wait, not the same button; a failed attempt
+puts its reason on the card and offers once more.
 
 No Chrome? The same deck is served at `http://127.0.0.1:8787/panel/` —
 everything works there except typing into the composer (you get the draft on
@@ -123,9 +134,10 @@ page. Every scroll, click and key goes through Chrome's own input pipeline,
 with a mouse that travels and rests, wheel ticks of uneven size, typing one
 key at a time, and an uneven pause before every step — the page sees only
 trusted events, and a test fails the build on the first synthetic one. The
-Insert button works the same way: a real click on "Add a comment", a real
-click into the box, the draft pasted as one piece. Reddit's own button is
-yours.
+Insert button works the same way: a real click on the thread's own box ("Join
+the conversation" on Reddit — a small textarea that a click swaps for the real
+editor), a real click into the editor, the draft as one piece, a real Ctrl+V
+when the editor ignored that. Reddit's own button is yours.
 
 The extension is also **the only way anything here reads Reddit** (0.6.0).
 There is no feed, no background fetch, no API: a probe, a tick, a colleague's
@@ -355,8 +367,12 @@ and the writer's real material.
 | Role | Free default | Measured |
 |---|---|---|
 | **judge** | `poolside/laguna-s-2.1:free` | 5.2s and 4.7s, zero reasoning tokens, conformed first ask, agreed with the paid judge |
-| **scout** | `minimax/minimax-m2.7:free` | three pages and a conforming proposal in 27s + 14s |
-| **writer** | `minimax/minimax-m2.7:free` | three specific options in 13s, none with a template phrase |
+| **scout** | `nvidia/nemotron-3-super-120b-a12b:free` | three pages and a conforming proposal in 102s + 18s |
+| **writer** | `nvidia/nemotron-3-super-120b-a12b:free` | the next measured free run; a writing measurement is still owed |
+
+MiniMax M2.7's free variant held both seats until 2026-09-07, when OpenRouter
+retired it (404 "unavailable for free") — and a model-level fallback does not
+cover an id that 404s, so every draft failed at once. It is out of the menu.
 
 The whole table, including the models that were full (Gemma 4 and GLM 5.2
 answered 429 on every ask) or refused, is in [lib/models.mjs](../lib/models.mjs)

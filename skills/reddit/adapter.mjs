@@ -75,13 +75,17 @@ export default {
   },
 
   /** The composer the Insert flow looks for: the labels that open one and
-   *  the labels of a reply box, plus the custom elements that host one. The
-   *  words that may never be pressed are the extension's own list, not a
-   *  platform's (extension/screen.js). */
+   *  the labels of a reply box, the custom elements that host one, and the
+   *  element that holds one comment — so a comment on the post goes into
+   *  the thread's own box ("Join the conversation", a twenty-pixel textarea
+   *  that a click swaps for the real editor, measured 2026-09-07) and never
+   *  under the first comment's Reply. The words that may never be pressed
+   *  are the extension's own list, not a platform's (extension/screen.js). */
   composer: {
     opens: ["add a comment", "add comment", "write a comment", "leave a comment", "join the conversation"],
     replies: ["reply", "write a reply", "reply to post", "comment"],
     hosts: ["shreddit-composer", "comment-composer-host"],
+    comments: ["shreddit-comment"],
   },
 
   /* ------------------------------------- own-visibility (optional set) --- */

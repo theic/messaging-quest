@@ -694,6 +694,21 @@ check("a judged person deals even when nothing is watched yet",
   nextCards(snap({ ...noSources, queue: [qItem] }))[0].kind, "work.reply");
 check("...and pending verdicts deal before the room question, not instead of it",
   nextCards(snap({ ...noSources, pendingCount: 40 })).map((c) => c.id).slice(0, 2), ["work.judge", "onboard.room"]);
+// The judge runs by itself (0.9.1): the card waits while it does, and after
+// a failure says why and offers it again — never a button that looks
+// unpressed over a job that failed in a log nobody opened.
+{
+  const judging = nextCards(snap({ ...noSources, pendingCount: 40, hasModel: true, judging: true }))[0];
+  const failed = nextCards(snap({ ...noSources, pendingCount: 40, hasModel: true, judgeFailed: "429 rate limited" }))[0];
+  check("while the judge runs by itself the card waits; after it failed the card says why and offers it again",
+    [judging.kind, judging.primary.id, failed.kind, failed.primary.label, /429 rate limited/.test(failed.help)], ["work.judge.wait", "wait", "work.judge", "Try again now", true]);
+  const unwritten = { ...qItem, draft: null };
+  const writing = nextCards(snap({ ...noSources, hasModel: true, queue: [unwritten], drafting: "t3_q" }))[0];
+  const declined = nextCards(snap({ ...noSources, hasModel: true, queue: [unwritten], draftFailed: { id: "t3_q", error: "the writer declined: it would have to name the product" } }))[0];
+  check("a person whose draft is being written is a wait, not a button; a failed attempt says why and offers it again",
+    [writing.kind, writing.primary.id, writing.secondary, declined.kind, declined.primary.label, /writer declined/.test(declined.help)], ["work.draft.wait", "wait", undefined, "work.draft", "Write it again", true]);
+  check("...and somebody else's failure is not this person's", nextCards(snap({ ...noSources, hasModel: true, queue: [unwritten], draftFailed: { id: "t3_other", error: "x" } }))[0].primary.label, "Write the draft");
+}
 
 /* ------------------------------------------------------------ the deck API */
 
@@ -1299,12 +1314,14 @@ check("a proposal with a verb outside the law never renders",
   const G = labelsOf(null);
   check("...and a platform with none still reads as English", [G.room("saas"), G.rulesUrl("saas"), G.account.question, G.submit], ["saas", null, "Which account is yours?", "the platform's own button"]);
   check("the composer the Insert flow looks for is the platform's, off the url", composerOf("https://www.reddit.com/r/x/comments/1/t/").hosts, ["shreddit-composer", "comment-composer-host"]);
+  check("...with the element that holds one comment, so a comment on the post never lands under the first comment's Reply", composerOf("https://www.reddit.com/r/x/comments/1/t/").comments, ["shreddit-comment"]);
   const generic = nextCards({ ...snap({ account: { name: "x" }, stash: allVoice, memory: memDone, sources: [{ place: "saas" }], rooms: [{ place: "saas", state: "unanswered" }] }) })[0];
   check("a card without a platform names the room plainly", [generic.eyebrow, generic.links], ["saas", undefined]);
   const labelled = nextCards({ ...snap({ platform: L, account: { name: "x" }, stash: allVoice, memory: memDone, sources: [{ place: "saas" }], rooms: [{ place: "saas", state: "unanswered" }] }) })[0];
   check("...and with one, the platform's words and its rules page", [labelled.eyebrow, labelled.links[0].href], ["r/saas", "https://www.reddit.com/r/saas/about/rules"]);
   const reply = nextCards(snap({ platform: L, account: { name: "x" }, stash: { ...allVoice, welcomed: true }, memory: memDone, sources: [{ place: "saas" }], rooms: [{ place: "saas", state: "allowed" }], queue: [{ ...qItem, campaign: "honest-comments", composer: composerOf(qItem.url) }] }))[0];
   check("the reply card carries the composer, the platform's button, and the campaign", [reply.data.insert.opens.length > 0, reply.data.submit, /honest-comments/.test(reply.eyebrow)], [true, "Reddit's own Comment button", true]);
+  check("...and where the reply belongs: a comment on their post goes into the thread's own box", [reply.data.insert.target, reply.data.insert.comments], ["post", ["shreddit-comment"]]);
   check("the heart's card module names no platform of its own", /reddit|subreddit/i.test(readFileSync(join(here, "..", "lib", "cards.mjs"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "")), false);
 }
 
@@ -1603,6 +1620,9 @@ check("a proposal with a verb outside the law never renders",
   check("somebody who wrote back outranks a new person, and the card offers to write the turn", [d1[0].id, d1[0].kind, d1[0].question, d1[0].primary.id, /You said: most of it is generated/.test(d1[0].help), /turn 2/.test(d1[0].eyebrow), d1[1].id], ["work.turn.t3_c", "work.turn", "what tool?", "draft", true, true, "work.reply.t3_q"]);
   const d2 = nextCards(snap({ hasModel: true, conversations: [{ ...conv, draft: { text: "yes, i built it", flags: null } }] }));
   check("...with a draft for this turn it is the control panel: the field, Insert, I posted it, Rewrite, Let it go", [d2[0].field.value, d2[0].primary.id, d2[0].actions.map((a) => a.id), d2[0].secondary.id, d2[0].data.client, d2[0].data.turn], ["yes, i built it", "insert", ["posted", "rewrite"], "skip", "insert", 2]);
+  check("...aimed under THEIR comment, not at the thread's box", d2[0].data.insert.target, "comment");
+  const dw = nextCards(snap({ hasModel: true, conversations: [conv], drafting: "t3_c" }))[0];
+  check("...and while the reply is being written the turn card waits and says so", [dw.kind, dw.primary.id, /writer is on it/.test(dw.help)], ["work.turn.wait", "wait", true]);
   const reply = nextCards(snap({ hasModel: true, queue: [person] })).find((c) => c.kind === "work.reply");
   check("the reply card gained Rewrite", reply.actions.map((a) => a.id), ["posted", "rewrite"]);
   const d3 = nextCards(snap({ hasModel: true, queue: [person], conversations: [conv], stash: { rewrite: { id: "t3_q", prior: "a draft", who: "u/a" } } }));
@@ -1786,6 +1806,11 @@ check("a proposal with a verb outside the law never renders",
     check("'I posted it' from the third tab records that tab's words, and which style went up, on the conversation and the mark", [cp.turns[0].text, cp.turns[0].style, SP.marks().get("t3_p1").style], ["A1", "ask", "ask"]);
     check("the panel's files are served, tabs and all", [/es-tabs/.test(await (await fetch(baseP + "/panel/")).text()), /es-tabs-strip/.test(await (await fetch(baseP + "/panel/card.css")).text()), /api\/panel/.test(await (await fetch(baseP + "/panel/sidepanel.js")).text())], [true, true, true]);
     check("...and the suggestions under the card, with the deck saying whether a specialist is there to ask", [/id="suggest"/.test(await (await fetch(baseP + "/panel/")).text()), (await fetch(baseP + "/panel/suggest.js")).status, /es-chip/.test(await (await fetch(baseP + "/panel/card.css")).text()), typeof (await (await fetch(baseP + "/api/cards")).json()).brain], [true, 200, true, "boolean"]);
+    // The strip (0.9.1): one place at the top for everything running, and
+    // the deck saying what last finished and how — the old jobs line is gone.
+    const panelHtml = await (await fetch(baseP + "/panel/")).text();
+    const deckNow = await (await fetch(baseP + "/api/cards")).json();
+    check("...and the strip at the top: on the page, styled, fed by the deck's running and recent jobs", [/id="status"/.test(panelHtml), /id="jobs"/.test(panelHtml), /es-status-dot/.test(await (await fetch(baseP + "/panel/card.css")).text()), Array.isArray(deckNow.recent), Array.isArray(deckNow.jobs)], [true, false, true, true, true]);
   }
   srvP.kill();
 }

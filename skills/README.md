@@ -111,10 +111,12 @@ Optional, and simply absent elsewhere:
   placeholder}`, `phrase {placeholder}`, `rules`, `submit` ("Reddit's own
   Comment button"), `appeals`. The heart's cards carry no platform word of
   their own; a platform that declares none still reads as plain English.
-- `composer` — `{opens, replies, hosts}`: the labels that open a composer,
-  the labels on a reply box, the custom elements that host one. Rides on the
-  reply card to the extension's Insert flow; the words that may never be
-  pressed are the extension's own list, not a platform's.
+- `composer` — `{opens, replies, hosts, comments}`: the labels that open a
+  composer, the labels on a reply box, the custom elements that host one,
+  and the custom element that holds one comment (so a comment on the post
+  goes into the thread's own box and a reply under the person's comment).
+  Rides on the reply card to the extension's Insert flow; the words that may
+  never be pressed are the extension's own list, not a platform's.
 - the **own-visibility set**: `userPage(name)`, `threadPage(url)`,
   `commentPage(url)`, `threadOf(item)` — the pages `sync`/`check`/`back`
   open to read *your* words the way a stranger sees them, in an **Incognito**

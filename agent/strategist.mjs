@@ -552,6 +552,29 @@ const projectText = (dir) => {
   } catch { return ""; }
 };
 
+/**
+ * OpenRouter can answer 200 with an error object in the body when the
+ * upstream provider failed after headers went out — "Upstream error from
+ * Nvidia: Service temporarily overloaded", measured 2026-09-07, the free
+ * plan's ordinary weather. The engine's own client (lib/llm.mjs) reads that
+ * and asks again; the OpenAI client under LangChain does not, reads
+ * choices[0].message of nothing, and the turn dies on a TypeError with the
+ * provider's sentence lost. Re-labelled with the error's own status, the
+ * client retries it like any other 5xx, and with the seat's fallback list
+ * on the request OpenRouter itself moves to the next provider.
+ */
+const openRouterFetch = async (url, init) => {
+  const res = await fetch(url, init);
+  if (res.status !== 200 || !/json/i.test(res.headers.get("content-type") ?? "")) return res;
+  const text = await res.text();
+  let body = null;
+  try { body = JSON.parse(text); } catch { body = null; }
+  const err = body && body.error && !body.choices ? body.error : null;
+  const code = Number(err?.code);
+  const status = err ? (code >= 400 && code < 600 ? code : 502) : res.status;
+  return new Response(text, { status, statusText: err ? String(err.message ?? "upstream error").slice(0, 200) : res.statusText, headers: res.headers });
+};
+
 async function agentFor(dir) {
   const s = seat(dir, "scout"); // the researcher seat: biggest window, tool-happy
 
@@ -570,9 +593,14 @@ async function agentFor(dir) {
   const model = new ChatOpenAI({
     model: s.model,
     apiKey: s.key,
-    configuration: { baseURL: s.baseUrl },
+    configuration: { baseURL: s.baseUrl, ...(s.openrouter === false ? {} : { fetch: openRouterFetch }) },
     maxTokens: s.maxTokens,
     timeout: s.timeoutMs,
+    maxRetries: 3,
+    // The seat's fallback list — OpenRouter's model-level `models:` array,
+    // the same one the engine sends — so a provider that is full for a
+    // minute costs a minute, not the turn.
+    ...(Array.isArray(s.models) && s.models.length > 1 ? { modelKwargs: { models: s.models } } : {}),
   });
 
   const subagents = await skillSubagents(dir);

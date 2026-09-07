@@ -287,8 +287,20 @@ main input:focus, main textarea:focus, main select:focus { outline: none; box-sh
 
 /* ----------------------------------------------------------------- chrome */
 
-.es-jobs { color: var(--dim); font: 12.5px/1.4 var(--sans); min-height: 16px; }
-.es-jobs:empty { display: none; }
+/* The strip (0.9.1): one place, at the top, on every tab, for everything
+   that is happening — a live line carries a pulsing dot and a clock, a
+   finished one is still and coral when it failed, and quiet is said in so
+   many words rather than left as silence. */
+.es-status { border-top: 1.5px solid var(--line-2); padding: 6px 0 4px; display: flex; flex-direction: column; gap: 3px; }
+.es-status-line { display: flex; align-items: baseline; gap: 7px; color: var(--ink2); font: 13px/1.4 var(--sans); }
+.es-status-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.es-status-time { color: var(--dim); font: 12px/1.4 var(--mono); white-space: nowrap; }
+.es-status-dot { width: 8px; height: 8px; flex: none; align-self: center; border: 1.5px solid var(--ink); background: transparent; }
+.es-status-dot.es-live { background: var(--lime); animation: es-pulse 1.2s ease-in-out infinite; }
+.es-status-failed { color: var(--coral); }
+.es-status-failed .es-status-dot { border-color: var(--coral); background: var(--coral); }
+.es-status-quiet { color: var(--dim); }
+.es-status-quiet .es-status-dot { border-color: var(--line); }
 .es-error { color: var(--coral); font-size: 13.5px; white-space: pre-wrap; }
 
 .es-said {

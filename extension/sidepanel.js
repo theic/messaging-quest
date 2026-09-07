@@ -52,10 +52,11 @@ const ago = (iso) => {
   return `${Math.round(h / 24)}d ago`;
 };
 
-const cardHost = $("card"), jobsLine = $("jobs"), errorLine = $("error"), answerBox = $("answer"), focusLine = $("focus-line"), suggestBox = $("suggest");
+const cardHost = $("card"), statusBox = $("status"), errorLine = $("error"), answerBox = $("answer"), focusLine = $("focus-line"), suggestBox = $("suggest");
 const VIEWS = { deck: $("view-deck"), campaigns: $("view-campaigns"), rooms: $("view-rooms"), settings: $("view-settings") };
 
 let current = null;      // the card on screen
+let shownSig = null;     // the card as drawn — redrawn only when the deck's first card changes
 let deckCards = [];      // every card dealt, the one on screen first
 let pollTimer = null;
 let projectShown = null; // the project key the picker was last drawn for
@@ -81,13 +82,17 @@ const postJSON = async (path, body) => {
 async function load() {
   try {
     const [deck, st] = await Promise.all([getJSON("/api/cards"), getJSON("/api/panel").catch(() => null)]);
-    const { cards, jobs, control, tasks, project, brain } = deck;
+    const { cards, jobs, control, tasks, project, brain, recent } = deck;
     if (st) state = st;
     deckCards = cards ?? [];
     // The card first: show() clears the notice line, and the hints that
-    // follow are allowed to fill it again.
-    show(cards?.[0] ?? null);
-    showJobs(jobs, control, tasks);
+    // follow are allowed to fill it again. Redrawn only when it CHANGED —
+    // the panel now polls while idle too, and a poll must never wipe the
+    // words the operator is editing in the card's field.
+    const first = cards?.[0] ?? null;
+    const sig = JSON.stringify(first);
+    if (sig !== shownSig) { show(first); shownSig = sig; }
+    showStatus(jobs, control, tasks, recent);
     showProject(project);
     showFocus();
     showBadges(cards);
@@ -115,8 +120,11 @@ function show(card) {
 /** The server being down is a card too — the honest one, with the command. */
 function showDown() {
   current = null;
+  shownSig = null;
   state = null;
   suggestBox.hidden = true;
+  LOCAL.clear();
+  showStatus([], null, [], []);
   renderCard(cardHost, {
     id: "panel.down", kind: "panel.down",
     question: "The Messaging Quest server is not running.",
@@ -126,20 +134,73 @@ function showDown() {
   for (const [k, node] of Object.entries(VIEWS)) if (k !== "deck") node.replaceChildren(el("p", "es-help", "The server is not running — the Next tab says how to start it."));
 }
 
-function showJobs(jobs, control, tasks) {
-  const parts = (jobs ?? []).map((j) => `${j.label}${j.note ? ` — ${j.note}` : ""}`);
-  // Colleagues at work: silence means working; a question is a card. The
-  // tab each holds is one click away in the "Messaging Quest" group.
-  for (const t of tasks ?? []) parts.push(`${t.title} — ${t.status === "blocked" ? "needs you" : "working"}${t.tabId ? " in its tab" : ""}`);
-  if (!(tasks ?? []).length) for (const l of control?.leases ?? []) parts.push(`${l.task || "a task"} holds ${l.tabs.length === 1 ? "a tab" : `${l.tabs.length} tabs`}`);
-  jobsLine.textContent = parts.join(" · ");
+/* -------------------------------------------------------------- the strip */
+
+/**
+ * One place, at the top, on every tab, for everything that is happening
+ * (0.9.1): the server's jobs — the judge, the writer, a read — with their
+ * progress and how long they have run; the colleagues in their tabs; the
+ * panel's own work, a question in flight or a thread being opened; and,
+ * when nothing runs, what last finished and how it went. Silence is never
+ * left to mean "working": a thing that runs is named while it runs, and a
+ * thing that failed says so here rather than nowhere.
+ */
+const LOCAL = new Map();     // the panel's own work: key → { label, at }
+let served = { jobs: [], control: null, tasks: [], recent: [] };
+let ticker = null;
+
+const working = (key, label) => { LOCAL.set(key, { label, at: Date.now() }); drawStatus(); };
+const finished = (key) => { LOCAL.delete(key); drawStatus(); };
+
+function showStatus(jobs, control, tasks, recent) {
+  served = { jobs: jobs ?? [], control, tasks: tasks ?? [], recent: recent ?? [] };
+  drawStatus();
   updateGrantHint(control);
 }
 
+const elapsed = (since) => {
+  const s = Math.max(0, Math.round((Date.now() - since) / 1000));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+};
+
+function drawStatus() {
+  const lines = [];
+  for (const w of LOCAL.values()) lines.push({ text: w.label, since: w.at, live: true });
+  for (const j of served.jobs) {
+    const count = j.total ? ` ${j.done}/${j.total}` : "";
+    lines.push({ text: `${j.label}${count}${j.note && j.note !== "starting" ? ` — ${j.note}` : ""}`, since: Date.parse(j.startedAt) || null, live: true });
+  }
+  // Colleagues at work: a question is a card; the rest is said here. The
+  // tab each holds is one click away in the "Messaging Quest" group.
+  for (const t of served.tasks) lines.push({ text: `${t.title} — ${t.status === "blocked" ? "needs you on the card" : "reading in its tab"}`, since: null, live: t.status !== "blocked" });
+  if (!served.tasks.length) for (const l of served.control?.leases ?? []) lines.push({ text: `${l.task || "a task"} holds ${l.tabs.length === 1 ? "a tab" : `${l.tabs.length} tabs`}`, since: null, live: true });
+  const busy = lines.some((l) => l.live);
+  if (!busy) {
+    const r = served.recent[0];
+    if (r) lines.push({ text: `${r.status === "ok" ? "Done" : "Failed"}: ${r.label.toLowerCase()}${r.error ? ` — ${r.error}` : r.note && r.note !== "done" ? ` — ${r.note}` : ""} · ${ago(r.finishedAt)}`, since: null, live: false, failed: r.status !== "ok" });
+    else lines.push({ text: "Nothing running.", since: null, live: false, quiet: true });
+  }
+  statusBox.replaceChildren();
+  statusBox.classList.toggle("es-status-busy", busy);
+  for (const l of lines) {
+    const line = el("div", `es-status-line${l.failed ? " es-status-failed" : ""}${l.quiet ? " es-status-quiet" : ""}`);
+    const dot = el("span", `es-status-dot${l.live ? " es-live" : ""}`);
+    dot.setAttribute("aria-hidden", "true");
+    line.append(dot, el("span", "es-status-text", l.text));
+    if (l.since) line.append(el("span", "es-status-time", elapsed(l.since)));
+    statusBox.append(line);
+  }
+  statusBox.hidden = false;
+  // The clock runs while anything does: a count that moves is the plainest
+  // sign that something is happening.
+  if (busy && !ticker) ticker = setInterval(drawStatus, 1000);
+  if (!busy && ticker) { clearInterval(ticker); ticker = null; }
+}
+
 /** The counts on the tabs: cards that ask, campaigns, reads due, and a dot
- *  on Settings while no model can be filled. */
+ *  on Settings while no model can be filled. A wait of any kind is not an ask. */
 function showBadges(cards) {
-  const asks = (cards ?? []).filter((c) => !/^(onboard\.wait|onboard\.probing|work\.quiet)$/.test(c.kind ?? c.id)).length;
+  const asks = (cards ?? []).filter((c) => !/^(onboard\.wait|onboard\.probing|work\.quiet)$|\.wait$/.test(c.kind ?? c.id)).length;
   badge("badge-deck", asks > 1 ? asks : 0);
   badge("badge-campaigns", state?.campaigns?.filter((c) => c.status === "active").length ?? 0);
   badge("badge-rooms", state?.sources?.filter((s) => s.due).length ?? 0);
@@ -246,13 +307,15 @@ function showFocus() {
   focusLine.append(label);
 }
 
-/** Waits poll themselves; everything else refreshes on act or on the alarm.
- *  A colleague at work is a wait too — its question or its result is the
- *  next card, and it arrives on the runtime's clock, not on a click. */
+/** Waits poll themselves, quickly; an idle panel still looks every quarter
+ *  minute, because work now starts on the server's own clock too (the
+ *  judge, 0.9.1) and a colleague's question or result is the next card,
+ *  arriving on the runtime's clock rather than on a click. The card is
+ *  only redrawn when it changed, so the polling costs the operator nothing. */
 function schedule(card, jobs, tasks) {
   clearTimeout(pollTimer);
   const waiting = /wait|probing/.test(card?.kind ?? "") || (jobs ?? []).length > 0 || (tasks ?? []).some((t) => t.status === "running");
-  if (waiting) pollTimer = setTimeout(load, 4000);
+  pollTimer = setTimeout(load, waiting ? 2500 : 15_000);
 }
 
 const sayError = (msg) => { errorLine.textContent = msg; errorLine.hidden = false; };
@@ -317,50 +380,75 @@ const originOf = (url) => { try { return new URL(url).origin; } catch { return n
  * tab, then asks the service worker to put the draft in (insertDraft). The
  * human reads the draft in the platform's own composer and presses the
  * platform's own button — nothing here can submit, by construction.
+ *
+ * Where it goes rides on the card (0.9.1): a comment on the post into the
+ * thread's own box, never under the first comment; a reply to a person's
+ * comment under theirs. The strip at the top says what is being done while
+ * it is done, and the card waits in the meantime.
  */
 async function insertFlow(card, editedText, tab) {
   const draft = (editedText ?? "").trim() || card.data.draft;
   const button = card.data.submit || "the platform's own button";
+  const spec = card.data.insert ?? {};
+  const where = spec.target === "comment" ? "the reply box under their comment" : "the thread's own comment box";
   errorLine.hidden = true;
 
-  try { await navigator.clipboard.writeText(draft); } catch { /* still worth trying to type it in */ }
+  let onClipboard = false;
+  try { await navigator.clipboard.writeText(draft); onClipboard = true; } catch { /* still worth trying to type it in */ }
 
   if (!ext) {
     openTab(card.data.url);
-    note("Copied to your clipboard — paste it into the reply box. (Typing it in only works from the installed extension.)", card, draft, tab);
+    note(`Copied to your clipboard — paste it into ${where}. (Typing it in only works from the installed extension.)`, card, draft, tab);
     return;
   }
 
   const origin = originOf(card.data.url);
   const granted = origin ? await ext.permissions.request({ origins: [`${origin}/*`] }).catch(() => false) : false;
 
+  working("insert", "Opening the thread…");
+  showWait("Opening the thread.", `In a tab of your own. Then the draft goes into ${where} the way you would put it there — a click on the box, then the words — and you press ${button}.`);
   const tabOpened = await ext.tabs.create({ url: card.data.url, active: true });
 
   if (!granted) {
-    note(`Copied to your clipboard — paste it into the reply box. (Typing it in needs the ${origin ? origin.replace(/^https?:\/\//, "") : "site"} permission.)`, card, draft, tab);
+    finished("insert");
+    note(`Copied to your clipboard — paste it into ${where}. (Typing it in needs the ${origin ? origin.replace(/^https?:\/\//, "") : "site"} permission.)`, card, draft, tab);
     return;
   }
 
   await loaded(tabOpened.id);
   await new Promise((r) => setTimeout(r, 800)); // the SPA settles after "load"
+  working("insert", `Putting the draft into ${where}…`);
   // The service worker holds the one debugger session and does it the way a
   // person does: a real click on the opener if the box is closed, a real
-  // click into the box, the draft pasted as one piece (control.js
-  // insertDraft). The composer's words are the platform's, off the card.
+  // click into the box, the draft as one piece — and Ctrl+V, with what this
+  // just put on the clipboard, when the editor ignored that (control.js
+  // insertDraft). It reads back whether the words landed before it says so.
   let res = null;
-  try { res = await ext.runtime.sendMessage({ type: "insert", tabId: tabOpened.id, text: draft, spec: card.data.insert ?? {} }); } catch { res = null; }
-  const ok = Boolean(res?.ok);
+  try { res = await ext.runtime.sendMessage({ type: "insert", tabId: tabOpened.id, text: draft, spec, clipboard: onClipboard }); } catch { res = null; }
+  finished("insert");
 
-  note(ok
-    ? `Pasted into the composer. Read it there, press ${button} — then tell me:`
+  const Where = where[0].toUpperCase() + where.slice(1);
+  const said = res?.ok
+    ? `${res.how === "pasted" ? "Pasted" : "Typed"} into ${where}. Read it there, press ${button} — then tell me:`
     : res?.reason === "not_granted"
-      ? "Copied to your clipboard — paste it into the reply box. (Putting it there needs the site permission.) Then tell me:"
-      : "Could not find the composer — the draft is on your clipboard, paste it in. Then tell me:", card, draft, tab);
+      ? `Copied to your clipboard — paste it into ${where}. (Putting it there needs the site permission.) Then tell me:`
+      : res?.reason === "not_taken"
+        ? `${Where} is open but did not take the words — paste them in yourself, they are on your clipboard. Then tell me:`
+        : `Could not find ${where} on that page — the draft is on your clipboard, paste it in. Then tell me:`;
+  note(said, card, draft, tab);
+}
+
+/** The panel's own wait card: what it is doing right now, while it does it. */
+function showWait(question, help) {
+  shownSig = null;
+  renderCard(cardHost, { id: "panel.wait", kind: "panel.wait", question, help, primary: { id: "wait", label: "Working…" } }, () => {});
+  cardHost.firstChild?.classList.add("es-waiting");
 }
 
 /** After the thread opens, the card becomes the confirm: posted, or not.
  *  What went up rides with it — the words as edited, and which tab. */
 function note(text, card, posted = "", tab = null) {
+  shownSig = null;
   renderCard(cardHost, {
     id: card.id, kind: "panel.confirm",
     eyebrow: card.eyebrow,
@@ -409,12 +497,14 @@ async function ask(preset) {
   answerBox.hidden = false;
   answerBox.replaceChildren(el("b", null, q), "\n\n…");
   answerBox.scrollIntoView({ block: "nearest" });
+  working("ask", "Your specialist is thinking…");
   // A turn that reads a page or runs the writer takes a minute or more on
   // a free seat; after a while the wait says so rather than looking stuck.
   const slow = setTimeout(() => { if (/…$/.test(answerBox.textContent)) answerBox.append("\n\nStill working — a turn that reads a page or writes drafts takes a minute or two on the free plan."); }, 20_000);
   try {
     const out = await postJSON("/api/agent", { message: q, thread: "panel" });
     clearTimeout(slow);
+    finished("ask");
     const reply = out.reply ?? (out.how ? `${out.error}.\n${out.how}` : out.error ?? "no answer");
     answerBox.replaceChildren(el("b", null, q), "\n\n", ...said(reply));
     // A turn may have dealt a card — a proposal, a campaign, a question.
@@ -426,6 +516,8 @@ async function ask(preset) {
     else if (dealt.length) answerBox.append(`\n\nA new card is on the deck, behind the one on screen: “${dealt[0].question}”.`);
     answerBox.scrollIntoView({ block: "nearest" });
   } catch {
+    clearTimeout(slow);
+    finished("ask");
     answerBox.textContent = "The server is not running.";
   }
 }

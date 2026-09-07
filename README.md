@@ -24,8 +24,10 @@ writes **three drafts**, each a different move: *Straight* (the answer, short),
 *Deeper* (what is behind their question), *Ask back* (one real thing and a
 question you want answered). Pick a tab, edit it, or comment on it and all
 three are written again. **Insert** puts your words into Reddit's own comment
-box; you read it there and press Reddit's button. Nothing in this repository
-can submit.
+box — the thread's, never under somebody's comment — and reads back that they
+landed; you read them there and press Reddit's button. Everything that runs
+is named at the top of the panel, and the judge runs by itself. Nothing in
+this repository can submit.
 
 **A CMO watches the whole thing.** When somebody writes back, their reply
 lands on your deck before any new person, with the next turn drafted. Once a

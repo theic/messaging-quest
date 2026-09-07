@@ -47,5 +47,5 @@ export default {
   /** Optional: what the deck says when it means this platform, and the
    *  composer the Insert button looks for. Plain fallbacks apply when absent. */
   labels: { account: { question: "Which Example account is yours?", placeholder: "your-handle" } },
-  composer: { opens: ["write a reply"], replies: ["reply"], hosts: [] },
+  composer: { opens: ["write a reply"], replies: ["reply"], hosts: [], comments: [] },
 };

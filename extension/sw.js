@@ -39,7 +39,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     if (!res.ok) throw new Error(String(res.status));
     const { cards } = await res.json();
     // Waits and the quiet card are not asks; everything else is.
-    const asks = (cards ?? []).filter((c) => !/^(onboard\.wait|onboard\.probing|work\.quiet|task\.running)$/.test(c.kind ?? c.id)).length;
+    const asks = (cards ?? []).filter((c) => !/^(onboard\.wait|onboard\.probing|work\.quiet|task\.running)$|\.wait$/.test(c.kind ?? c.id)).length;
     chrome.action.setBadgeText({ text: asks ? String(asks) : "" });
     chrome.action.setBadgeBackgroundColor({ color: "#b45309" });
   } catch {
@@ -52,11 +52,13 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 // The panel's Insert button: the human pressed it, this puts the draft into
 // the composer of the tab the panel just opened, the human presses the
 // platform's own button. The composer's words are the platform's and ride on
-// the card. Only the panel can send this — runtime messages come from this
+// the card, with where the reply belongs; `clipboard` says the panel managed
+// to put the draft on the clipboard, which is the only case a Ctrl+V may be
+// sent. Only the panel can send this — runtime messages come from this
 // extension's own pages.
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg?.type !== "insert") return false;
-  insertDraft(Number(msg.tabId), String(msg.text ?? ""), msg.spec ?? {})
+  insertDraft(Number(msg.tabId), String(msg.text ?? ""), msg.spec ?? {}, { clipboard: Boolean(msg.clipboard) })
     .then(reply, (e) => reply({ ok: false, reason: String(e?.message ?? e) }));
   return true;
 });
