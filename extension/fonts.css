@@ -1,0 +1,47 @@
+/* The three faces the design book names, carried in the extension.
+ *
+ * Until 0.11.0 the panel asked for "Bricolage Grotesque" and took whatever
+ * the machine had, which on a fresh Chrome is Segoe UI: the site looked like
+ * the brand and the panel looked like a settings dialog. They ship now. Three
+ * latin subsets, 68 KB together, the same files next/font serves on the site
+ * — so the two surfaces are not merely similar, they are the same type.
+ *
+ * Nothing is fetched at run time. A store extension that pulled fonts off a
+ * CDN would be making a request per panel open, from the browser of somebody
+ * who was promised the tool does not talk to anyone.
+ *
+ * Licences: SIL OFL 1.1, one file each, beside the fonts in this folder.
+ */
+
+@font-face {
+  font-family: "Bricolage Grotesque";
+  /* One variable file covers the whole range the book uses (400–800). */
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+  src: url("fonts/bricolage-grotesque-latin.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Atkinson Hyperlegible";
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  src: url("fonts/atkinson-hyperlegible-latin-400.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Atkinson Hyperlegible";
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+  src: url("fonts/atkinson-hyperlegible-latin-700.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Press Start 2P";
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  src: url("fonts/press-start-2p-latin.woff2") format("woff2");
+}

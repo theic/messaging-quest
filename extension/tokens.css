@@ -1,0 +1,143 @@
+/* ============================================================================
+   THE DESIGN BOOK. One palette, one type scale, two surfaces.
+
+   THIS FILE IS SHARED, AND IT IS SHARED BY BEING THE SAME BYTES. It lives at
+   extension/tokens.css here and at app/tokens.css in the website's repo
+   (theic/messaging.quest), and a test on each side fails if the two ever
+   differ. Two repos ship to two places — a Chrome listing and Vercel — so
+   there is no package to import; what there is instead is one file that must
+   be copied whole, and a check that says when somebody forgot.
+
+   So: NOTHING SURFACE-SPECIFIC BELOW. No selector but :root, no rule that
+   names a component, no path to a font file — the site loads its faces
+   through next/font and the panel loads its own from extension/fonts.css,
+   and each declares the same family NAMES, which is all this file asks for.
+
+   The palette is paper: an off-white ground with a printed grain, ink rather
+   than black, and one loud lime that means "this is the thing to press".
+   Dark is not a second design — it is the same book on a screen instead of
+   on paper, so every name below keeps its job and only its value moves.
+
+   WHAT LIGHT AND DARK BOTH HOLD, and why they can:
+     --lime        the accent. Unchanged; it was chosen to work on both.
+     --on-lime     what is legible ON the accent. Ink in both themes, which
+                   is the one token dark mode must NOT invert: a near-white
+                   label on a lime button is unreadable, and inheriting
+                   --ink there is exactly how that happens.
+     --ink-rgb     the ink as three numbers, for the rgba() a rule writes
+                   when it wants ink at some opacity. A rule that writes the
+                   numbers itself is a rule that stays light forever.
+   ========================================================================= */
+
+:root {
+  color-scheme: light;
+
+  /* —— paper palette —— */
+  --paper: #e9e2cd;   /* the body's ground */
+  --page: #f2ecda;    /* one step up from the body */
+  --card: #fbf7e8;    /* a raised card, and the panel's own header */
+  --bg: #fffdf2;      /* an inset field or a nested row, sitting on a card */
+  --bg-2: #efe8d3;    /* progress tracks, the ground inside an inset */
+  --ink: #1d1c15;     /* primary text, and every border and pixel shadow */
+  --ink-2: #39362a;   /* text that is still text, one step back */
+  --soft: #5c594c;    /* secondary text */
+  --lime: #c9ff2e;
+  --lime-wash: #ecf5c0;
+  --lime-ink: #5d7a00; /* lime as legible text/link ON the ground */
+  --on-lime: #1d1c15;  /* text ON lime — see the note above */
+  --coral: #ff5c3a;
+  --coral-ink: #b3391f; /* coral as legible text ON the ground */
+  --coral-wash: #f9e8de;
+  --screen: #0a0a0b;   /* the dark glass behind pixel art, in both themes */
+  --warn: #8a6a00;
+
+  --line: rgba(29, 28, 21, .2);    /* a hairline */
+  --line-2: rgba(29, 28, 21, .42); /* a rule you are meant to notice */
+  --dot: rgba(29, 28, 21, .05);    /* the paper's grain */
+  --shadow: rgba(29, 28, 21, .16);
+
+  /* The ink as numbers, for a rule that needs its own opacity. */
+  --ink-rgb: 29, 28, 21;
+  --lime-rgb: 201, 255, 46;
+  --coral-rgb: 255, 92, 58;
+
+  /* —— names older rules use, remapped onto the palette so that every
+        existing rule inherits the skin (and the dark half) for free —— */
+  --panel: var(--card);
+  --panel-2: #f3eeda;
+  --white: var(--ink);
+  --muted: var(--soft);
+  --lime-d: var(--lime-ink);
+  --danger: var(--coral);
+
+  /* —— type —— The site defines --font-disp/--font-body/--font-px through
+     next/font; the panel defines the same families through @font-face. Each
+     var() below falls back to the family name, so this file is right on a
+     surface that has neither and gets the system's nearest face. —— */
+  --disp: var(--font-disp, "Bricolage Grotesque"), "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --sans: var(--font-body, "Atkinson Hyperlegible"), "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --px: var(--font-px, "Press Start 2P"), ui-monospace, monospace;
+  --mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* —— the same book on a screen ——
+   Written twice on purpose: once for the system's own choice, once for a
+   person who overrode it. CSS has no way to give one block two homes, and
+   an @import or a class on <html> would make the two copies of this file
+   stop being copies. Keep the two lists identical. */
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --paper: #0a0a0b;
+    --page: #111113;
+    --card: #161618;
+    --bg: #1d1d20;
+    --bg-2: #232327;
+    --ink: #e8e6da;
+    --ink-2: #cfccbe;
+    --soft: #9a9a94;
+    --lime: #c9ff2e;
+    --lime-wash: #2a3308;
+    --lime-ink: #c9ff2e;
+    --on-lime: #1d1c15;
+    --coral: #ff8a6f;
+    --coral-ink: #ff8a6f;
+    --coral-wash: #3a201a;
+    --screen: #0a0a0b;
+    --warn: #e5b53f;
+    --line: rgba(232, 230, 218, .2);
+    --line-2: rgba(232, 230, 218, .42);
+    --dot: rgba(232, 230, 218, .05);
+    --shadow: rgba(0, 0, 0, .6);
+    --ink-rgb: 232, 230, 218;
+    --panel-2: #1a1a1d;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #0a0a0b;
+  --page: #111113;
+  --card: #161618;
+  --bg: #1d1d20;
+  --bg-2: #232327;
+  --ink: #e8e6da;
+  --ink-2: #cfccbe;
+  --soft: #9a9a94;
+  --lime: #c9ff2e;
+  --lime-wash: #2a3308;
+  --lime-ink: #c9ff2e;
+  --on-lime: #1d1c15;
+  --coral: #ff8a6f;
+  --coral-ink: #ff8a6f;
+  --coral-wash: #3a201a;
+  --screen: #0a0a0b;
+  --warn: #e5b53f;
+  --line: rgba(232, 230, 218, .2);
+  --line-2: rgba(232, 230, 218, .42);
+  --dot: rgba(232, 230, 218, .05);
+  --shadow: rgba(0, 0, 0, .6);
+  --ink-rgb: 232, 230, 218;
+  --panel-2: #1a1a1d;
+}

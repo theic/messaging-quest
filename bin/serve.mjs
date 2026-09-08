@@ -1437,6 +1437,29 @@ const server = createServer((req, res) => {
       "content-security-policy": CSP,
     }).end(APP_JS);
 
+  /* The design book, and the faces it names. One palette for the dashboard,
+   * the panel and the website (extension/tokens.css is the website's
+   * app/tokens.css, byte for byte), and the three faces carried by the
+   * extension — so this machine draws the brand even offline, and the CSP
+   * still never reaches off-origin for a font. */
+  const BOOK = {
+    "/tokens.css": ["tokens.css", "text/css; charset=utf-8"],
+    "/fonts.css": ["fonts.css", "text/css; charset=utf-8"],
+    "/fonts/bricolage-grotesque-latin.woff2": ["fonts/bricolage-grotesque-latin.woff2", "font/woff2"],
+    "/fonts/atkinson-hyperlegible-latin-400.woff2": ["fonts/atkinson-hyperlegible-latin-400.woff2", "font/woff2"],
+    "/fonts/atkinson-hyperlegible-latin-700.woff2": ["fonts/atkinson-hyperlegible-latin-700.woff2", "font/woff2"],
+    "/fonts/press-start-2p-latin.woff2": ["fonts/press-start-2p-latin.woff2", "font/woff2"],
+    "/brand-mark.png": ["icons/icon-128.png", "image/png"],
+  };
+  if (BOOK[url.pathname]) {
+    const [file, type] = BOOK[url.pathname];
+    try {
+      return res.writeHead(200, { "content-type": type, "cache-control": "no-cache" }).end(readFileSync(join(ROOT, "extension", file)));
+    } catch {
+      return res.writeHead(404, JSON_HEAD).end(JSON.stringify({ error: "that is not part of the design book" }));
+    }
+  }
+
   /* The deck as a page: the extension's own panel files, served same-origin.
    * One implementation of the card surface — the extension is where it earns
    * its keep (it can type into Reddit's composer), and this is the same thing
@@ -1447,6 +1470,15 @@ const server = createServer((req, res) => {
     const PANEL = {
       "": ["sidepanel.html", "text/html; charset=utf-8"],
       "card.css": ["card.css", "text/css; charset=utf-8"],
+      "tokens.css": ["tokens.css", "text/css; charset=utf-8"],
+      "fonts.css": ["fonts.css", "text/css; charset=utf-8"],
+      "theme.js": ["theme.js", "text/javascript; charset=utf-8"],
+      "accounts.js": ["accounts.js", "text/javascript; charset=utf-8"],
+      "icons/icon-128.png": ["icons/icon-128.png", "image/png"],
+      "fonts/bricolage-grotesque-latin.woff2": ["fonts/bricolage-grotesque-latin.woff2", "font/woff2"],
+      "fonts/atkinson-hyperlegible-latin-400.woff2": ["fonts/atkinson-hyperlegible-latin-400.woff2", "font/woff2"],
+      "fonts/atkinson-hyperlegible-latin-700.woff2": ["fonts/atkinson-hyperlegible-latin-700.woff2", "font/woff2"],
+      "fonts/press-start-2p-latin.woff2": ["fonts/press-start-2p-latin.woff2", "font/woff2"],
       "card.js": ["card.js", "text/javascript; charset=utf-8"],
       "sidepanel.js": ["sidepanel.js", "text/javascript; charset=utf-8"],
       "suggest.js": ["suggest.js", "text/javascript; charset=utf-8"],
@@ -1462,7 +1494,7 @@ const server = createServer((req, res) => {
         "cache-control": "no-cache",
         // Its own CSP, not the dashboard's: the panel is scripted by design,
         // but only by its own files, and it talks only to this origin.
-        "content-security-policy": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'",
+        "content-security-policy": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'",
       }).end(body);
     } catch {
       return res.writeHead(404, JSON_HEAD).end(JSON.stringify({ error: "panel files missing" }));

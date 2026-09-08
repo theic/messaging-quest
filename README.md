@@ -2,10 +2,16 @@
 
 [![tests](https://github.com/theic/messaging-quest/actions/workflows/ci.yml/badge.svg)](https://github.com/theic/messaging-quest/actions/workflows/ci.yml)
 
-**A marketing colleague that lives in your browser.** It finds the people on
-Reddit who are asking for what you sell, writes the reply three ways in your
-own voice, and puts it in the comment box for you. You press Comment. It never
+**A marketing colleague that lives in your browser.** It finds the people
+asking in public for what you sell, writes the reply three ways in your own
+voice, and puts it in the comment box for you. You press Comment. It never
 does. Free to run: free models, your own Chrome, no server anywhere.
+
+Where it looks is a **skill** — a folder with the mechanics of one place
+(`skills/reddit` ships; `skills/README.md` is the contract for the next).
+Nothing in the engine or the panel knows a platform by name: the words on
+screen, the rooms, the composer and even how the browser tells you are signed
+in all come from the skill.
 
 ## TL;DR
 
@@ -20,9 +26,10 @@ the extension.
 2. On the panel's **Settings** tab, paste the OpenRouter key. The free plan is
    the default: the scout, the judge and the writer run on free models, with
    nothing to choose.
-3. The first cards ask for your Reddit username and your site's address. The
-   first time a read opens reddit.com, a card asks you to allow the site —
-   click it once.
+3. The first cards ask for your site's address and your account on the place
+   it watches — and the panel offers to **find that in this browser** rather
+   than have you type it. The first time a read opens the site, a card asks
+   you to allow it; click it once.
 4. Optional: sign in on the Settings tab (a 6-digit code by email, or
    **Connect this browser** on [messaging.quest/link](https://messaging.quest/link))
    and your files — what you sell, the rule, the campaigns, the rooms, the

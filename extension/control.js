@@ -1125,11 +1125,16 @@ function findInPage(query) {
 }
 
 function pageText(maxChars) {
+  /* A hyphen in a tag name is the web platform's own definition of a custom
+     element. Every site that ships components has some and they are all
+     called something different; naming one site's is how a toolkit becomes
+     one site's toolkit. */
+  const custom = (e) => Boolean(e?.tagName?.includes("-"));
   // innerText stops at a shadow boundary, and Reddit is made of them, so
   // this walks the flat tree itself: text nodes of visible elements, a line
   // break at each block.
   const SKIP = /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|SVG|PATH|LINK|META|HEAD)$/;
-  const BLOCK = /^(P|DIV|LI|TR|H[1-6]|SECTION|ARTICLE|HEADER|FOOTER|NAV|MAIN|ASIDE|BLOCKQUOTE|PRE|BR|HR|DETAILS|SUMMARY|FORM|UL|OL|TABLE|DD|DT|DL|FIGURE|FIGCAPTION|SHREDDIT-POST|SHREDDIT-COMMENT)$/;
+  const BLOCK = /^(P|DIV|LI|TR|H[1-6]|SECTION|ARTICLE|HEADER|FOOTER|NAV|MAIN|ASIDE|BLOCKQUOTE|PRE|BR|HR|DETAILS|SUMMARY|FORM|UL|OL|TABLE|DD|DT|DL|FIGURE|FIGCAPTION)$/;
   const parts = [];
   const visible = (el) => { if (el.getAttribute("aria-hidden") === "true" || el.hidden) return false; const cs = getComputedStyle(el); return cs.display !== "none" && cs.visibility !== "hidden"; };
   const walk = (node) => {
@@ -1140,7 +1145,10 @@ function pageText(maxChars) {
       return;
     }
     if (!(node instanceof Element) || SKIP.test(node.tagName) || !visible(node)) return;
-    const block = BLOCK.test(node.tagName) || /^(shreddit|faceplate)-/i.test(node.tagName);
+    // A hyphen in a tag name is the web platform's own definition of a custom
+    // element; every site that ships components has some, and none of them are
+    // this file's business to know by name.
+    const block = BLOCK.test(node.tagName) || custom(node);
     if (block) parts.push("\n");
     if (node.shadowRoot) for (const k of node.shadowRoot.childNodes) walk(k);
     for (const k of node.childNodes) walk(k);
@@ -1229,6 +1237,11 @@ function scrollState() {
  *  actionable ancestor's, through shadow hosts, against the words the
  *  extension will not press. Does not scroll — the wheel does that. */
 function resolveRef(ref, screenSrc) {
+  /* A hyphen in a tag name is the web platform's own definition of a custom
+     element. Every site that ships components has some and they are all
+     called something different; naming one site's is how a toolkit becomes
+     one site's toolkit. */
+  const custom = (e) => Boolean(e?.tagName?.includes("-"));
   const W = globalThis;
   const el = W.__mq?.refs?.[Number(String(ref).replace(/^ref_/, "")) - 1];
   if (!el || !el.isConnected) return { error: `${ref} is not on this page — read_page or find again` };
@@ -1249,7 +1262,7 @@ function resolveRef(ref, screenSrc) {
   // text is its label; a container's is a post. Only the short one is
   // screened, or every title would be refused for the words around it.
   const actionable = (e) => e instanceof Element && (e.matches("button, a, summary, label, input, [role=button], [role=menuitem], [role=tab], [role=link], [role=option]") || e.hasAttribute("onclick") ||
-    (/^(shreddit|faceplate)-/i.test(e.tagName) && (e.hasAttribute("aria-label") || deepText(e, 120).length <= 40)));
+    (custom(e) && (e.hasAttribute("aria-label") || deepText(e, 120).length <= 40)));
   let e = el;
   for (let i = 0; e && i < 10; i++) {
     if (actionable(e)) {
@@ -1271,6 +1284,11 @@ function resolveRef(ref, screenSrc) {
 /** The same screen for a coordinate: whatever is under that point, through
  *  shadow roots, and its actionable ancestors. */
 function screenAt(x, y, screenSrc) {
+  /* A hyphen in a tag name is the web platform's own definition of a custom
+     element. Every site that ships components has some and they are all
+     called something different; naming one site's is how a toolkit becomes
+     one site's toolkit. */
+  const custom = (e) => Boolean(e?.tagName?.includes("-"));
   const SCREEN = new RegExp(screenSrc, "i");
   const deepest = (root, px, py) => {
     let el = root.elementFromPoint(px, py);
@@ -1296,7 +1314,7 @@ function screenAt(x, y, screenSrc) {
   // text is its label; a container's is a post. Only the short one is
   // screened, or every title would be refused for the words around it.
   const actionable = (e) => e instanceof Element && (e.matches("button, a, summary, label, input, [role=button], [role=menuitem], [role=tab], [role=link], [role=option]") || e.hasAttribute("onclick") ||
-    (/^(shreddit|faceplate)-/i.test(e.tagName) && (e.hasAttribute("aria-label") || deepText(e, 120).length <= 40)));
+    (custom(e) && (e.hasAttribute("aria-label") || deepText(e, 120).length <= 40)));
   let e = el;
   for (let i = 0; e && i < 10; i++) {
     if (actionable(e)) {
@@ -1317,6 +1335,15 @@ function screenAt(x, y, screenSrc) {
  *  click screen, Enter in a form's input would submit it, ctrl/cmd+Enter is
  *  the chord that submits a composer). Reads only. */
 function screenActive(screenSrc, mode, stroke) {
+  /* A hyphen in a tag name is the web platform's own definition of a custom
+     element. Every site that ships components has some and they are all
+     called something different; naming one site's is how a toolkit becomes
+     one site's toolkit. */
+  const custom = (e) => Boolean(e?.tagName?.includes("-"));
+  /* A component whose own name says "composer" is one, whoever built it.
+     Refusing too much here costs a click the human makes anyway; refusing
+     too little is the thing this guard exists to prevent. */
+  const isComposerElement = (e) => custom(e) && /(composer|comment|editor|compose|reply|message)/i.test(e.tagName);
   const SCREEN = new RegExp(screenSrc, "i");
   const COMPOSER = /\b(comment|reply|post|message|chat|compose|composer)\b/i;
   let el = document.activeElement;
@@ -1334,7 +1361,7 @@ function screenActive(screenSrc, mode, stroke) {
   // text is its label; a container's is a post. Only the short one is
   // screened, or every title would be refused for the words around it.
   const actionable = (e) => e instanceof Element && (e.matches("button, a, summary, label, input, [role=button], [role=menuitem], [role=tab], [role=link], [role=option]") || e.hasAttribute("onclick") ||
-    (/^(shreddit|faceplate)-/i.test(e.tagName) && (e.hasAttribute("aria-label") || deepText(e, 120).length <= 40)));
+    (custom(e) && (e.hasAttribute("aria-label") || deepText(e, 120).length <= 40)));
   const hosts = (e) => { const out = []; for (let i = 0; e && i < 10; i++) { out.push(e); e = e.parentNode instanceof ShadowRoot ? e.parentNode.host : e.parentElement; } return out; };
   const clickScreen = (e) => {
     for (const a of hosts(e)) {
@@ -1351,7 +1378,7 @@ function screenActive(screenSrc, mode, stroke) {
     for (const a of hosts(e)) {
       const l = clean(a.getAttribute?.("aria-label") || a.getAttribute?.("placeholder") || a.getAttribute?.("title") || a.getAttribute?.("name") || "");
       if (COMPOSER.test(l)) return l;
-      if (/^(shreddit-composer|comment-composer-host|shreddit-composer-host)$/i.test(a.tagName)) return a.tagName.toLowerCase();
+      if (isComposerElement(a)) return a.tagName.toLowerCase();
     }
     return null;
   };
@@ -1383,6 +1410,15 @@ function screenActive(screenSrc, mode, stroke) {
  *  same two refusals as everywhere (a button is not a value; a composer is
  *  never written on an agent's behalf). Reads only; the hands do the rest. */
 function formTarget(ref, screenSrc) {
+  /* A hyphen in a tag name is the web platform's own definition of a custom
+     element. Every site that ships components has some and they are all
+     called something different; naming one site's is how a toolkit becomes
+     one site's toolkit. */
+  const custom = (e) => Boolean(e?.tagName?.includes("-"));
+  /* A component whose own name says "composer" is one, whoever built it.
+     Refusing too much here costs a click the human makes anyway; refusing
+     too little is the thing this guard exists to prevent. */
+  const isComposerElement = (e) => custom(e) && /(composer|comment|editor|compose|reply|message)/i.test(e.tagName);
   const el = globalThis.__mq?.refs?.[Number(String(ref).replace(/^ref_/, "")) - 1];
   if (!el || !el.isConnected) return { error: `${ref} is not on this page — read_page or find again` };
   void screenSrc;
@@ -1394,7 +1430,7 @@ function formTarget(ref, screenSrc) {
   let e = el;
   for (let i = 0; e && i < 10; i++) {
     const l = clean(e.getAttribute?.("aria-label") || e.getAttribute?.("placeholder") || e.getAttribute?.("title") || e.getAttribute?.("name") || "");
-    if (COMPOSER.test(l) || /^(shreddit-composer|comment-composer-host|shreddit-composer-host)$/i.test(e.tagName))
+    if (COMPOSER.test(l) || isComposerElement(e))
       return { refused: true, why: `form_input refused — "${l || e.tagName.toLowerCase()}" is a composer, and nothing here writes into one on an agent's behalf. The Insert button on the panel does, for the human.` };
     e = e.parentNode instanceof ShadowRoot ? e.parentNode.host : e.parentElement;
   }

@@ -1,6 +1,6 @@
 {
   "name": "messaging-quest",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "A marketing colleague in your browser: finds the people asking for what you sell, drafts the reply three ways in your own voice, tracks who wrote back. Free models, your own Chrome, nothing hosted. You press Post; it never does.",
   "keywords": [
     "reddit",

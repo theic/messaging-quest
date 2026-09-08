@@ -18,6 +18,7 @@
 import { renderCard } from "./card.js";
 import { suggestionsFor } from "./suggest.js";
 import { SITE } from "./account.js";
+import { detect as detectAccounts, ask as askToLook } from "./accounts.js";
 
 // Where the engine is (0.10.0), one of two: HOSTED — inside this extension's
 // own worker, reached over chrome.runtime messages, no server anywhere (the
@@ -35,6 +36,11 @@ let mode = "local";
 // says copy-paste instead of typing it in.
 const ext = typeof chrome !== "undefined" && chrome.storage ? chrome : null;
 const hosted = () => Boolean(ext) && mode === "hosted";
+
+/** What this panel says when it means the platform — the adapter's words,
+ *  handed over with the state (lib/platform.mjs labelsOf). Never a platform
+ *  by name in this file: a second skill changes these and nothing else. */
+const PLAT = () => state?.settings?.platform ?? { name: "the platform", room: { placeholder: "a-room", example: "a room" }, account: { question: "Which account is yours?", help: "", placeholder: "your-username" } };
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, className, text) => {
@@ -625,7 +631,7 @@ function drawCampaigns() {
 
   const top = section("Campaigns", camps.length ? "What you are trying, each a direction the writer applies in its own words — never a template. Focus the deck on one, pause a saturated one, search a room under it." : "A campaign is what you are trying — an angle, a room, a rule about naming what you built. Start one here, or tell your specialist below and it proposes one as cards.");
   top.append(errLine());
-  const nameBox = input("Name the campaign — e.g. Launch posts in r/sideproject");
+  const nameBox = input(`Name the campaign — e.g. Launch posts in ${PLAT().room.example}`);
   const start = btn("Start it on the deck", async () => {
     const name = nameBox.value.trim();
     if (!name) { tabError("a campaign needs a name"); return; }
@@ -680,7 +686,7 @@ function drawCampaigns() {
 
     const search = el("div", "es-form");
     search.hidden = true;
-    const place = input(`a room — e.g. ${state.settings.platform.id === "reddit" ? "sideproject" : "a-room"}`);
+    const place = input(`a room — e.g. ${PLAT().room.example}`);
     const q = input("the phrase somebody types when they have the problem");
     search.append(el("p", "es-sub", "One read in a tab of your own browser, then the judge. Its cards deal on Next: the rules once, then watch it or try another."));
     search.append(fieldOf("Room", place), fieldOf("Phrase (empty: its new posts)", q));
@@ -700,8 +706,23 @@ function drawRooms() {
   const due = srcs.filter((s) => s.due).length;
   const running = (state.running ?? []).map((r) => r.label);
 
-  const top = section("Rooms", "What is watched, read in a tab of your own browser at a person's pace — and a room to try. Nothing is watched until its rules were recorded and a probe cleared the floor.");
+  const top = section("Rooms", `What is watched on ${PLAT().name}, read in a tab of your own browser at a person's pace — and a room to try. Nothing is watched until its rules were recorded and a probe cleared the floor.`);
   top.append(errLine());
+  // More than one platform skill active: which one the forms below mean.
+  // One, today — so this is not drawn at all rather than drawn as a lone
+  // button that does nothing.
+  const places = state.platforms ?? [];
+  if (places.length > 1) {
+    const which = el("div", "es-plans");
+    for (const p of places) {
+      const on = p.id === PLAT().id;
+      const b = btn(p.name, () => panelDo({ do: "settings.platform", id: p.id }), `es-plan${on ? " es-on" : ""}`);
+      b.setAttribute("aria-pressed", String(on));
+      which.append(b);
+    }
+    top.append(el("p", "es-sub", "Which place a room named below is in:"));
+    top.append(which);
+  }
   const acts = el("div", "es-item-actions");
   const tickBtn = btn(due ? `Read what is due (${due})` : "Read what is due", () => panelDo({ do: "tick" }, { then: "deck" }), due ? "es-primary es-small" : "es-small");
   acts.append(tickBtn);
@@ -746,11 +767,33 @@ function drawRooms() {
   }
 
   const tryIt = section("Try a room", "One read, no commitment. A scoped search runs 42% fit against 29% for just new posts, so the phrase is worth writing. Its cards deal on Next.");
-  const place = input(state.settings.platform.id === "reddit" ? "a subreddit — e.g. smallbusiness" : "a room");
+  const place = input(`a room — e.g. ${PLAT().room.example}`);
   const q = input("the phrase somebody types when they have the problem");
   tryIt.append(fieldOf("Room", place), fieldOf("Phrase (empty: its new posts)", q));
   tryIt.append(row(btn("Probe it", () => panelDo({ do: "probe", place: place.value, q: q.value }, { then: "deck" }), "es-primary es-small")));
   host.append(tryIt);
+}
+
+/**
+ * Which platforms this browser is signed in on, said under the account line.
+ *
+ * Nothing is read and nothing is sent: the extension asks Chrome whether it
+ * is holding a cookie the platform sets when you are signed in (extension/
+ * accounts.js). Chrome has to allow that first, and it is asked for on a
+ * press rather than at install — so the honest state before that press is
+ * "this browser has not let it look", and that is what it says.
+ */
+async function sayWhoIsSignedIn(line, actions) {
+  const list = (state.platforms ?? []).filter((p) => p.cookies);
+  if (!ext || !list.length) { line.hidden = true; return; }
+  line.textContent = "Looking at what this browser is signed into…";
+  const seen = await detectAccounts(list).catch(() => ({}));
+  const say = { in: "signed in", out: "signed out", unknown: "not looked at" };
+  line.textContent = list.map((p) => `${p.name}: ${say[seen[p.id]] ?? say.unknown}`).join(" · ");
+  if (list.some((p) => seen[p.id] === "unknown")) {
+    line.textContent += " — this browser has not let the extension look yet.";
+    actions.append(btn("Let it look", async () => { await askToLook(list); drawView(); }, "es-small"));
+  }
 }
 
 /* ---- Settings */
@@ -815,17 +858,37 @@ function drawSettings() {
   }
 
   const you = section("You", "");
+  const P = st.platform;
   const acc = el("div", "es-form");
-  acc.append(el("p", "es-sub", state.account ? `Your ${st.platform.name} account: ${state.account}. Your own public profile is read the way a stranger reads it — nothing is posted.` : `No ${st.platform.name} account named yet. The visibility half needs one; the finding half does not.`));
-  const name = input("your-username", "");
+  acc.append(el("p", "es-sub", state.account
+    ? `Your ${P.name} account: ${state.account}. ${P.account.help}`
+    : `No ${P.name} account named yet. The visibility half needs one; the finding half does not.`));
+  // What this browser already knows, filled in after the tab is drawn:
+  // asking Chrome is a promise and drawing is not.
+  const known = el("p", "es-note", "");
+  const accActions = el("div", "es-item-actions");
+  if (P.whoami) accActions.append(btn(state.account ? "Find it again" : "Find it in my browser", () => panelDo({ do: "account" }, { then: "deck" }), "es-primary es-small"));
+  acc.append(known, accActions);
+  const name = input(P.account.placeholder, "");
   acc.append(row(name, btn(state.account ? "Change it" : "That's me", () => panelDo({ do: "account", name: name.value }), "es-small")));
   you.append(acc);
+  sayWhoIsSignedIn(known, accActions);
   const setup = state.setup;
   if (setup) you.append(el("p", "es-sub", `Memory: ${setup.done} of ${setup.total} files written — what you sell, who it is for, the fit rule, what is true about you. Edit them on the dashboard's You page.`));
 
   const projects = section("Projects", "One brand, one isolated context each: its own memory files, store, voice, campaigns and deck. The picker at the top switches; a new one starts its setup on Next.");
   const pn = input("The other product");
   projects.append(row(pn, btn("Make it and switch", async () => { const n = pn.value.trim(); if (!n) { tabError("name the project"); return; } const out = await switchProjectJSON(n); if (out?.error) tabError(out.error); }, "es-small")));
+
+  const look = section("Appearance", "The panel follows this browser's own light or dark. Sometimes the page beside it decides for you, so it can be told.");
+  const themes = el("div", "es-plans");
+  for (const [value, label] of [["", "System"], ["light", "Light"], ["dark", "Dark"]]) {
+    const on = (globalThis.mqTheme?.get?.() ?? "") === value;
+    const b = btn(label, () => { globalThis.mqTheme?.set?.(value); drawView(); }, `es-plan${on ? " es-on" : ""}`);
+    b.setAttribute("aria-pressed", String(on));
+    themes.append(b);
+  }
+  look.append(themes);
 
   const browser = section("This browser", "");
   const srv = el("div", "es-form");
@@ -920,7 +983,7 @@ function drawSettings() {
     acct2.append(box);
   }
 
-  host.append(models, seats, you, projects, ...(acct2 ? [acct2] : []), browser);
+  host.append(models, seats, you, projects, ...(acct2 ? [acct2] : []), look, browser);
 }
 
 async function switchProjectJSON(name) {
