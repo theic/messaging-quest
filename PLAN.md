@@ -67,6 +67,9 @@ brain       agent/ — the CMO (strategist.mjs) and its runtime (tasks.mjs:
             by grant, paced per site.
 surfaces    the Chrome extension (primary: the deck in a side panel, and the
             only surface that can type a draft into Reddit's real composer;
+            from 0.10.0 also the ENGINE's own host — lib/ in its service
+            worker on a memory filesystem, no server, the files mirrored to
+            the account (extension/engine.js, extension/account.js);
             from milestone 1 also the control lane — a browser toolkit like
             Claude in Chrome's, on tabs a task leased; from 0.6.0 the only
             way anything here reads a platform, in the operator's own
@@ -431,6 +434,46 @@ the campaign in the browser, 7 judged and 4 fit, the room watched under it,
 and a draft that disclosed once, linked nothing, offered and asked — with the
 claims guard firing because me.md was empty.
 
+**The engine moves into the extension; the site keeps the account
+(2026-09-08, 0.10.0).** The goal set on 2026-09-08: replace the old
+messaging.quest backend/extension pair with this engine, no local server,
+the extension from the store, the files synced with the account, the old
+database's users and quests untouched, KISS. Two ways to have no local
+server: run the engine on messaging.quest (a stateful broker in Postgres,
+every act a round trip, a per-user process for anything long, our compute
+on every read) or run it inside the extension. The second is the one:
+the engine is plain files with a filesystem underneath, so `lib/fs.mjs` is
+now the one door to that filesystem, installed by a HOST — `lib/node.mjs`
+(the real modules) or `lib/fs-memory.mjs` (a Map, POSIX paths, a change
+hook; IndexedDB keeps it between the worker's lives) — and the same
+`lib/` runs in the extension's service worker with no server anywhere: the
+deck dealt there, the verbs run there (`lib/verbs.mjs`, the CLI's bodies as
+a factory), the models called from there with the operator's own key, and
+every read through the control lane's broker IN THE SAME WORKER — the
+tabs, the mouse, the pauses, the refusals as audited, minus the HTTP
+between a verb and its tab. `lib/engine.mjs` is the middle of the old
+bin/serve.mjs as a factory (the deck, the jobs, the panel's tabs, the
+broker, one route table); the dashboard serves that table over HTTP and
+keeps its HTML views, the worker serves it over chrome.runtime messages.
+The manifest is at the repo root so Load unpacked on the checkout is the
+extension and `git archive` is the package. Two modes, one setting: hosted
+(default) and local (a `mq serve` — the dashboard, the CMO; an install from
+before saved a server address and stays local). Supabase directly, no API
+of ours between: the 6-digit code the site already uses, or the site's
+/link handing the extension a one-time token hash (externally
+connectable); the data directory mirrored to one table, `mq_files`, under
+row-level security, last writer wins per file, pulled once a minute; the
+key never leaves the browser it was typed into. The site keeps auth,
+/link, /files (the mirror, read-only), the Quest Board, billing, the MCP
+connector; its extension backend (api/ext, lib/ext, lib/signals' watcher,
+the Fly drains for it) goes. Two facts measured on the way: a service
+worker may not await at the top of a module, and may not import() at run
+time — so nothing in lib/ loads at import (every entry point calls
+loadPlatforms first) and skills/index.mjs imports the built-in adapters
+statically for the worker to hand in. Not in the hosted product: the CMO
+(agent/ needs Node — local mode has it), the dashboard's pages, a second
+way to read anything.
+
 **One Chrome profile at a time on the lane (2026-09-07, 0.9.2).** The
 retest after 0.9.1 merged: every probe ended within a second with "that tab
 is gone", alternating with a good answer. The extension was loaded in two
@@ -763,6 +806,27 @@ Reddit stays the only scout built.
   broker refusal, debugger screenshot and release passed live; reads waited
   on the reddit.com grant. The grant ask now outlives the lease that hit
   the wall (it vanished with the smoke test's tab before).
+- 0.10.0 (2026-09-08), built — the engine inside the extension, and the
+  account. lib/fs.mjs the one filesystem door (lib/node.mjs, lib/fs-memory.mjs
+  the hosts; sha256 checked against node:crypto, paths against POSIX);
+  lib/verbs.mjs the CLI's bodies as a factory, bin/mq.mjs argv/usage/stdin;
+  lib/jobs.mjs start() (a verb in-process with the job's log); lib/engine.mjs
+  the deck, the jobs, the panel's tabs, the broker and one route table out of
+  bin/serve.mjs (the dashboard keeps the views); lib/browse.mjs takes a lane
+  object (laneOf(broker)); nothing in lib/ loads at import. manifest.json at
+  the repo root; extension/engine.js boots the engine on the memory host
+  (extension/disk.js: IndexedDB, every change as it happens; the built-in
+  skills out of the package; skills/index.mjs hands the adapters in
+  statically); sw.js hosts it, two modes (hosted/local), the panel over
+  messages or fetch; extension/account.js: Supabase directly — the code
+  sign-in, the site's connect (externally connectable), mq_files mirrored
+  last-writer-wins, the key never. The site (theic/messaging.quest, branch
+  claude/one-account): the mq_files migration, POST /api/ext/session (a
+  one-time token hash for the signed-in user), /link rewritten, /files as
+  the signed-in home, the old extension backend removed. Verified in
+  Chrome for Testing with the repo loaded unpacked (the worker boots, the
+  panel deals from it, IndexedDB holds the files, a probe reaches the grant
+  wall). Tests: 572 engine, 34 voice, 37 runtime.
 - 0.9.2 (2026-09-07), built — one Chrome profile at a time on the lane.
   lib/control.mjs: `claim(wait, instance)` binds a lease to the instance
   that ran its first job and hands its jobs to that instance only; a job
@@ -1024,12 +1088,15 @@ Reddit stays the only scout built.
    `agent.md` + `SKILL.md`, nothing in the engine.
 8. **GEO skill.** The checks ledger: cited / not cited / could not ask,
    dated, no score.
-9. **Merge into messaging-quest — the final milestone.** The engine as the
-   package the app imports; the store over Postgres; the seat's base URL on
-   the metered proxy; the extension pairs with the website and points at
-   either backend; the local dashboard narrows to runtime plus panel. Done
-   when a signed-in user pairs a local runtime, runs the CMO, and reads the
-   trace on messaging.quest. Not before 2 has happened.
+9. **Merge into messaging-quest — the final milestone.** Built 2026-09-08
+   as 0.10.0, the other way round from how this line first read: not the
+   engine as a package the app imports with the store over Postgres, but
+   the engine inside the extension with the files mirrored to one table —
+   no local server, no server of ours reading anything. What is left of
+   this item: the store listing (the package is `git archive`), the
+   extension id on the site (`NEXT_PUBLIC_MQ_EXTENSION_ID`), the seat's base
+   URL on a metered proxy as the paid plan, and a later migration that
+   drops the old extension's tables once nobody reads them.
 
 ## Milestone 1, for the next agent
 

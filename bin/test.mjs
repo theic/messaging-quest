@@ -10,6 +10,7 @@
 // with a 48-hour retention rule should not ship somebody's comments in its
 // own test directory.
 
+import "../lib/node.mjs";   // the Node host for lib/fs.mjs — first, before anything in lib/
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -38,10 +39,23 @@ import { allowed, memoryProgress, memoryContext, writeMemory, seedMissing } from
 import { proposable } from "../lib/cards.mjs";
 import { store } from "../lib/store.mjs";
 import { voiceQuestions } from "../lib/voice.mjs";
+import { install as installHost, host as hostNow } from "../lib/fs.mjs";
+import { memoryHost, sha256 as sha256js, join as pjoin, basename as pbasename, dirname as pdirname } from "../lib/fs-memory.mjs";
+import { engine } from "../lib/engine.mjs";
+import { verbs } from "../lib/verbs.mjs";
+import { BUILTIN_SKILLS, BUILTIN_ADAPTERS } from "../skills/index.mjs";
+import { account, LOCAL_ONLY } from "../extension/account.js";
+import { createHash } from "node:crypto";
+import { readdirSync } from "node:fs";
+import { posix } from "node:path";
+import { pathToFileURL } from "node:url";
 import { conversationRows, bindConversations, recordReturn, recordTurn, closeConversation, waiting as waitingRows, yourTurns, dueConversations, unbound, campaignDigest, digestText } from "../lib/conversations.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ES = join(here, "mq.mjs");
+// The built-in platform loads when an entry point asks, not at import
+// (lib/platform.mjs, 0.10.0) — this suite is one.
+await loadPlatforms(null);
 const box = mkdtempSync(join(tmpdir(), "mq-test-"));
 const env = { ...process.env, MQ_DIR: join(box, ".mq") };
 const es = (args) => execFileSync(process.execPath, [ES, ...args], { env, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
@@ -1275,7 +1289,9 @@ check("a proposal with a verb outside the law never renders",
 // and the finding verbs never do. If one of these moves, somebody added a
 // second way to read — that must be a decision, not a drive-by.
 {
-  const cli = readFileSync(ES, "utf8");
+  // The CLI is bin/mq.mjs (argv, usage, stdin) over lib/verbs.mjs (the verbs
+  // themselves, 0.10.0): the rule holds over both.
+  const cli = [ES, join(here, "..", "lib", "verbs.mjs")].map((f) => readFileSync(f, "utf8")).join("\n");
   check("the CLI fetches nothing but the hub (pull) — every platform read is a lease in the browser",
     (cli.match(/\bfetch\(/g) ?? []).length, 1);
   // sync, check, back — and the tick's return pass (0.7.0): four seats.
@@ -1905,6 +1921,142 @@ check("a proposal with a verb outside the law never renders",
   check("without a specialist installed there is nothing to ask, only places to go", suggestionsFor({ state: st, card: null, brain: false }).map((c) => c.label), ["Try a room", "The campaigns"]);
   check("no state, no chips", suggestionsFor({ state: null }), []);
   check("every question chip is a full sentence for the specialist, not a label", busy.filter((c) => c.ask).every((c) => c.ask.length > 40 && /[?.]$/.test(c.ask)), true);
+}
+
+/* ------------------------------------------ the hosted product (0.10.0) */
+
+// The engine runs where there is no disk and no Node: the extension's
+// worker, on a memory host, the same lib/. These hold the seam — nothing in
+// lib/ reaches Node directly, the memory host answers like a disk, the
+// engine deals and acts on it, the built-in ring is named for the worker
+// that cannot list a folder, and the manifest at the repo root points at
+// files that exist.
+{
+  const LIB = join(here, "..", "lib");
+  const offenders = readdirSync(LIB).filter((f) => f.endsWith(".mjs") && f !== "node.mjs" && f !== "fs.mjs")
+    .filter((f) => /from "node:|require\(|\bBuffer\.|__dirname|process\.(env|cwd|argv)\b/.test(readFileSync(join(LIB, f), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "").replace(/host\(\)\.spawn\(process\.execPath[\s\S]*?\}\);/, "")));
+  check("nothing in lib/ but the door and the Node host imports node: or reaches process — the extension loads the same files", offenders, []);
+  check("the skill files reach Node nowhere either", readdirSync(join(here, "..", "skills", "reddit")).filter((f) => f.endsWith(".mjs") && /from "node:/.test(readFileSync(join(here, "..", "skills", "reddit", f), "utf8"))), []);
+
+  for (const s of ["", "abc", "ünïcødé ✓ 日本語", "a".repeat(55), "a".repeat(56), "a".repeat(64), "x".repeat(1000)])
+    check(`the memory host's sha256 is node:crypto's (${s.length} chars)`, sha256js(s), createHash("sha256").update(s).digest("hex"));
+  check("the memory host's paths are POSIX's", [pjoin("/a", "..", "b"), pjoin(".mq", "rooms", "x.md"), pbasename("/x/y.md", ".md"), pdirname("/"), pdirname("a")], [posix.join("/a", "..", "b"), posix.join(".mq", "rooms", "x.md"), posix.basename("/x/y.md", ".md"), posix.dirname("/"), posix.dirname("a")]);
+
+  const folder = readdirSync(join(here, "..", "skills"), { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith("_")).map((e) => e.name).sort();
+  check("skills/index.mjs names every built-in skill — the worker cannot list the folder", [...BUILTIN_SKILLS].sort(), folder);
+  check("...and carries each one's adapter, imported statically — a service worker may not import() at run time", Object.keys(BUILTIN_ADAPTERS).sort(), folder.filter((id) => existsSync(join(here, "..", "skills", id, "adapter.mjs"))));
+  check("the adapter handed in is the real one", BUILTIN_ADAPTERS.reddit.default?.id, "reddit");
+
+  const manifest = JSON.parse(readFileSync(join(here, "..", "manifest.json"), "utf8"));
+  const pkg = JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8"));
+  check("the manifest at the repo root carries the package's version", manifest.version, pkg.version);
+  const named = [manifest.background.service_worker, manifest.side_panel.default_path, ...Object.values(manifest.icons ?? {}), ...Object.values(manifest.action?.default_icon ?? {})];
+  check("...and every file it names exists — Load unpacked on the checkout IS the extension", named.filter((p) => !existsSync(join(here, "..", p))), []);
+  check("...with the site, and only the site, allowed to talk to it", manifest.externally_connectable?.matches, ["https://messaging.quest/*", "https://www.messaging.quest/*"]);
+  check("no manifest is left under extension/ to load by mistake", existsSync(join(here, "..", "extension", "manifest.json")), false);
+
+  // The engine on the memory host, under Node: what the worker does.
+  const nodeHost = hostNow();
+  const SK = join(here, "..", "skills");
+  const changes = [];
+  const mem = memoryHost({ onChange: (p, c) => changes.push([p, c === null ? null : c.length]), moduleUrl: (p) => pathToFileURL(join(SK, p.replace(/^\/skills\//, ""))).href });
+  const walk = (dir, rel = "") => { for (const e of readdirSync(dir, { withFileTypes: true })) { const p = join(dir, e.name); if (e.isDirectory()) walk(p, rel + "/" + e.name); else mem.load([["/skills" + rel + "/" + e.name, readFileSync(p, "utf8")]]); } };
+  walk(SK);
+  installHost(mem);
+  await loadPlatforms("/mq", { modules: BUILTIN_ADAPTERS });
+  check("the reddit adapter is handed to the door on the memory host", first()?.id, "reddit");
+  const said = [];
+  await verbs({ root: "/mq", dir: "/mq", log: (l) => said.push(String(l)), warn: (l) => said.push(String(l)) }).init([]);
+  check("init made the data directory in memory, and said so", [mem.existsSync("/mq/rule.md"), said.some((l) => /\/mq/.test(l))], [true, true]);
+  const E = engine({ root: "/mq" });
+  const cards = await E.handle("GET", "/api/cards", {}, null);
+  check("the deck deals from memory: the account card first, no lane, no brain", [cards.status, cards.body.cards[0]?.id, cards.body.control.attached, cards.body.tasks, cards.body.brain], [200, "onboard.account", false, [], false]);
+  const panel = await E.handle("GET", "/api/panel", {}, null);
+  check("the panel's tabs are served: free plan, no server address, reddit", [panel.status, panel.body.settings.server, panel.body.settings.plan, panel.body.settings.platform.id], [200, null, "free", "reddit"]);
+  const keyed = await E.handle("POST", "/api/panel/act", {}, { do: "settings.key", key: "sk-or-v1-test-key-1234567890" });
+  check("a key is saved into the memory fs, and the change hook saw it", [keyed.status, mem.readFileSync("/mq/openrouter.key").trim(), changes.some(([p]) => p === "/mq/openrouter.key")], [200, "sk-or-v1-test-key-1234567890", true]);
+  await E.handle("POST", "/api/cards/act", {}, { card: "onboard.account", action: "skip" });
+  check("a card is acted on, and the deck moves", (await E.handle("GET", "/api/cards", {}, null)).body.cards[0]?.id !== "onboard.account", true);
+  const proj = await E.handle("POST", "/api/projects", {}, { action: "new", name: "Second brand" });
+  check("a project is made in memory, and switched back", [proj.status, proj.body.project.id, mem.existsSync("/mq/projects/second-brand/rule.md"), (await E.handle("POST", "/api/projects", {}, { action: "use", id: "default" })).body.project.id], [200, "second-brand", true, "default"]);
+  check("an unknown route is 404; the table knows its own", [(await E.handle("GET", "/api/nope", {}, null)).status, E.routes("GET", "/api/cards"), E.routes("POST", "/api/cards")], [404, true, false]);
+  const started = E.J.start("probe", ["saas", "--q", "x"], { label: "probe" });
+  await new Promise((r) => setTimeout(r, 1500));
+  const job = E.J.get(started.id);
+  check("a probe runs in-process and, with no browser on the lane, says so", [typeof started.id, job.status !== "running", /not attached|no server/.test(job.lines.join("\n"))], ["string", true, true]);
+  check("the strategist is not on this host", [(await E.handle("POST", "/api/agent", {}, { message: "hi" })).status], [503]);
+  E.stop();
+  installHost(nodeHost);
+  await loadPlatforms(null);
+
+  // The account (extension/account.js) against a mock of Supabase's two
+  // endpoints: the code sign-in, the site's door, last-writer-wins, and what
+  // never leaves this browser.
+  {
+    const calls = [];
+    const table = new Map();
+    let clock = 1_700_000_000_000;
+    const USER = { id: "u-1", email: "sam@example.com" };
+    const mockFetch = async (url, init = {}) => {
+      const u = new URL(url);
+      const body = init.body ? JSON.parse(init.body) : null;
+      calls.push([init.method ?? "GET", u.pathname, body]);
+      const json = (status, obj) => new Response(JSON.stringify(obj), { status, headers: { "content-type": "application/json" } });
+      const authed = /^Bearer (good|fresh)$/.test(init.headers?.authorization ?? "");
+      if (u.pathname === "/auth/v1/otp") {
+        if (body.email === "captcha@example.com") return json(400, { code: "captcha_failed", msg: "captcha protection: request disallowed (invalid-input-response)" });
+        if (body.email === "shut@example.com") return json(422, { code: "signup_disabled", msg: "Signups not allowed for this instance" });
+        return json(200, {});
+      }
+      if (u.pathname === "/auth/v1/verify") {
+        if ((body.type === "email" && body.token === "123456") || (body.type === "magiclink" && body.token_hash === "hash-ok")) return json(200, { access_token: "good", refresh_token: "r1", expires_in: 3600, user: USER });
+        return json(403, { msg: "Token has expired or is invalid" });
+      }
+      if (u.pathname === "/auth/v1/token") return body.refresh_token === "r1" ? json(200, { access_token: "fresh", refresh_token: "r2", expires_in: 3600, user: USER }) : json(400, { error: "invalid" });
+      if (u.pathname === "/auth/v1/logout") return new Response(null, { status: 204 });
+      if (u.pathname === "/rest/v1/mq_files") {
+        if (!authed) return json(401, { message: "JWT" });
+        if ((init.method ?? "GET") === "GET") { const since = (u.searchParams.get("updated_at") ?? "").replace(/^gt\./, ""); return json(200, [...table.entries()].map(([path, r]) => ({ path, ...r })).filter((r) => !since || r.updated_at > since).sort((a, b) => a.updated_at.localeCompare(b.updated_at))); }
+        for (const r of body) table.set(r.path, { content: r.content, updated_at: r.updated_at });
+        return new Response(null, { status: 201 });
+      }
+      return json(404, {});
+    };
+    const kept = {};
+    const storage = { get: async (k) => (k in kept ? { [k]: kept[k] } : {}), set: async (o) => { Object.assign(kept, o); } };
+    const A = account({ storage, fetch: mockFetch, now: () => new Date(clock), url: "https://x.supabase.co", key: "pk" });
+    const h = memoryHost();
+    h.mkdirs("/mq/rooms");
+    h.writeFileSync("/mq/rule.md", "local rule");
+    h.writeFileSync("/mq/openrouter.key", "sk-or-secret");
+    h.writeFileSync("/mq/jobs.jsonl", "{}");
+    h.writeFileSync("/mq/rooms/saas.md", "saas");
+    const S2 = await A.attach(h);
+    check("signed out, a sync is skipped and a bad address refused before any request", [(await A.status()).signedIn, await A.syncNow(), await A.signInStart("nope")], [false, { skipped: "signed out" }, { error: "that is not an email address" }]);
+    check("the code is asked for, with create_user, the address lowercased", [await A.signInStart("Sam@Example.com"), calls.at(-1)], [{ ok: true, email: "sam@example.com" }, ["POST", "/auth/v1/otp", { email: "sam@example.com", create_user: true }]]);
+    check("the site's human check and its shut door are named, with the connect page as the way in", [(await A.signInStart("captcha@example.com")).door, /messaging\.quest\/link/.test((await A.signInStart("captcha@example.com")).error), (await A.signInStart("shut@example.com")).door, /Google/.test((await A.signInStart("shut@example.com")).error)], ["captcha", true, "closed", true]);
+    check("a wrong code is the server's sentence; the right one signs in, spaces and all", [await A.signInVerify("sam@example.com", "000000"), await A.signInVerify("sam@example.com", "123 456"), (await A.status()).email], [{ error: "Token has expired or is invalid" }, { ok: true, email: "sam@example.com" }, "sam@example.com"]);
+    table.set("/mq/rule.md", { content: "account rule", updated_at: "2023-11-14T22:13:00.000Z" });
+    table.set("/mq/project.md", { content: "what we sell", updated_at: "2023-11-14T22:13:01.000Z" });
+    clock += 1000;
+    const firstSync = await A.syncNow();
+    check("first sync: the account's files come down and win; what only this browser had goes up", [firstSync.pulled, firstSync.pushed, h.readFileSync("/mq/rule.md"), h.readFileSync("/mq/project.md"), table.has("/mq/rooms/saas.md")], [2, 1, "account rule", "what we sell", true]);
+    check("the key and the job log never go up", [table.has("/mq/openrouter.key"), table.has("/mq/jobs.jsonl")], [false, false]);
+    check("every row carries the user id and a stamp", calls.filter((c) => c[0] === "POST" && c[1] === "/rest/v1/mq_files").at(-1)[2].every((r) => r.user_id === "u-1" && r.updated_at), true);
+    check("LOCAL_ONLY: the key, the job log, the hub tokens, the screenshots, the threads — and nothing else", [["/mq/openrouter.key", "/mq/projects/x/jobs.jsonl", "/mq/feed-tokens.json", "/mq/tasks/t1.png", "/mq/threads.sqlite-wal"].every((p) => LOCAL_ONLY.test(p)), ["/mq/rule.md", "/mq/found.jsonl", "/mq/campaigns/x.md", "/mq/cards.json", "/mq/inbox.jsonl", "/mq/models.json"].some((p) => LOCAL_ONLY.test(p))], [true, false]);
+    clock += 5000;
+    h.writeFileSync("/mq/icp.md", "who it is for");
+    S2.changed("/mq/icp.md");
+    check("a local change is pushed", [(await A.syncNow()).pushed, table.get("/mq/icp.md")?.content], [1, "who it is for"]);
+    clock += 5000;
+    table.set("/mq/rule.md", { content: "account rule v2", updated_at: new Date(clock).toISOString() });
+    clock += 1000;
+    check("a change in the account comes down; unchanged files are not re-applied", [(await A.syncNow()).pulled, h.readFileSync("/mq/rule.md")], [1, "account rule v2"]);
+    kept.account.expires_at = Math.floor(clock / 1000) + 10;
+    check("an expiring token is refreshed and remembered", [await A.token(), kept.account.access_token], ["fresh", "fresh"]);
+    check("the site's door: a bad hash refused, the minted one a session", [(await A.connect("nope")).error, (await A.connect("hash-ok")).ok], ["Token has expired or is invalid", true]);
+    check("sign out clears the session and the sync state", [(await A.signOut()).ok, (await A.status()).signedIn, kept.sync.since], [true, false, null]);
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

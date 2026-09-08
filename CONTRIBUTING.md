@@ -60,6 +60,15 @@ is about honesty more than style:
   `<img onerror>` payload, and your screen is part of that promise.
 - **Tests for what would break quietly.** Loud breaks announce themselves;
   add checks for the failure that would keep working and start lying.
+- **lib/ runs where there is no Node.** The extension loads the same files
+  in its service worker (0.10.0), so nothing in `lib/` imports `node:*`,
+  reaches `process`, `Buffer` or `__dirname`, or does anything at import
+  time — the filesystem is `lib/fs.mjs`, installed by a host after the
+  modules evaluate, and a service worker may neither `await` at the top of a
+  module nor `import()` at run time (a new built-in skill goes into
+  `skills/index.mjs` for that reason). `bin/test.mjs` fails on the first
+  `node:` import; `bin/hosted-smoke.mjs` runs the extension in a Chrome of
+  its own.
 
 ## Core changes
 

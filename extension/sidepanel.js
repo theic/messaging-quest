@@ -17,18 +17,24 @@
 
 import { renderCard } from "./card.js";
 import { suggestionsFor } from "./suggest.js";
+import { SITE } from "./account.js";
 
-// In the extension the server is looked up in storage (8787 unless changed);
-// served as a page (/panel/ on the server itself), the server is by definition
-// the origin that served it.
+// Where the engine is (0.10.0), one of two: HOSTED — inside this extension's
+// own worker, reached over chrome.runtime messages, no server anywhere (the
+// store install); LOCAL — a `mq serve` on this machine, reached over HTTP
+// (the dashboard, the CMO). The worker holds the setting (sw.js settings);
+// served as a page (/panel/ on the server itself), the server is by
+// definition the origin that served it, and the mode is local.
 const DEFAULT_BASE = location.protocol.startsWith("http") ? location.origin : "http://127.0.0.1:8787";
 let base = DEFAULT_BASE;
+let mode = "local";
 
 // The panel also opens as a plain page (development, and the server's own
 // smoke tests). Everything chrome-only degrades: storage falls back to the
 // default base, opening tabs falls back to window.open, and the insert flow
 // says copy-paste instead of typing it in.
 const ext = typeof chrome !== "undefined" && chrome.storage ? chrome : null;
+const hosted = () => Boolean(ext) && mode === "hosted";
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, className, text) => {
@@ -58,6 +64,8 @@ const VIEWS = { deck: $("view-deck"), campaigns: $("view-campaigns"), rooms: $("
 let current = null;      // the card on screen
 let shownSig = null;     // the card as drawn — redrawn only when the deck's first card changes
 let INSTANCE = null;     // this profile's worker on the lane; the deck poll carries it so new tabs open where the panel is
+let accountStatus = null; // hosted: who is signed in and how the sync stands (sw.js account.status)
+let accountEmail = null;  // hosted: the address a code was sent to, while the code is being typed
 let deckCards = [];      // every card dealt, the one on screen first
 let pollTimer = null;
 let projectShown = null; // the project key the picker was last drawn for
@@ -66,23 +74,44 @@ let view = "deck";
 
 /* ------------------------------------------------------------------ fetch */
 
+/** One request to the engine, wherever it is: { status, body }. Hosted, the
+ *  worker answers the same routes over a message (lib/engine.mjs handle);
+ *  local, the server answers them over HTTP. */
+const api = async (method, pathQ, body = null) => {
+  if (hosted()) {
+    const [path, qs = ""] = String(pathQ).split("?");
+    const out = await ext.runtime.sendMessage({ type: "api", method, path, query: Object.fromEntries(new URLSearchParams(qs)), body });
+    if (!out || typeof out.status !== "number") throw new Error("the engine did not answer");
+    return out;
+  }
+  const res = await fetch(`${base}${pathQ}`, method === "GET"
+    ? { signal: AbortSignal.timeout(8000) }
+    : { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body ?? {}) });
+  let json = null;
+  try { json = await res.json(); } catch { json = null; }
+  return { status: res.status, body: json };
+};
 const getJSON = async (path) => {
-  const res = await fetch(`${base}${path}`, { signal: AbortSignal.timeout(8000) });
-  if (!res.ok) throw new Error(`server said ${res.status}`);
-  return res.json();
+  const out = await api("GET", path);
+  if (out.status >= 400) throw new Error(`server said ${out.status}`);
+  return out.body;
 };
 const postJSON = async (path, body) => {
-  const res = await fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-  let out = null;
-  try { out = await res.json(); } catch { out = { error: `server said ${res.status}` }; }
-  return out ?? {};
+  const out = await api("POST", path, body);
+  return out.body ?? (out.status >= 400 ? { error: `server said ${out.status}` } : {});
 };
 
 /* ------------------------------------------------------------------- deck */
 
+/** Hosted: the account's standing, for the Settings tab. */
+const refreshAccount = async () => {
+  if (!hosted()) { accountStatus = null; return; }
+  try { accountStatus = await ext.runtime.sendMessage({ type: "account.status" }); } catch { accountStatus = null; }
+};
+
 async function load() {
   try {
-    const [deck, st] = await Promise.all([getJSON(INSTANCE ? `/api/cards?instance=${encodeURIComponent(INSTANCE)}` : "/api/cards"), getJSON("/api/panel").catch(() => null)]);
+    const [deck, st] = await Promise.all([getJSON(INSTANCE ? `/api/cards?instance=${encodeURIComponent(INSTANCE)}` : "/api/cards"), getJSON("/api/panel").catch(() => null), refreshAccount()]);
     const { cards, jobs, control, tasks, project, brain, recent } = deck;
     if (st) state = st;
     deckCards = cards ?? [];
@@ -113,7 +142,7 @@ function show(card) {
     return;
   }
   // A screenshot rides as a server path; the panel knows which server.
-  if (card.image && !/^(https?:|data:)/i.test(card.image)) card = { ...card, image: absolute(card.image) };
+  if (card.image && !/^(https?:|data:)/i.test(card.image)) card = { ...card, image: absolute(card.image) ?? undefined };
   renderCard(cardHost, card, act);
   cardHost.firstChild?.classList.toggle("es-waiting", /wait|probing/.test(card.kind ?? ""));
 }
@@ -126,13 +155,20 @@ function showDown() {
   suggestBox.hidden = true;
   LOCAL.clear();
   showStatus([], null, [], []);
-  renderCard(cardHost, {
-    id: "panel.down", kind: "panel.down",
-    question: "The Messaging Quest server is not running.",
-    help: `In the folder that holds .mq/:\n\n  node bin/mq.mjs serve\n\nThe panel talks only to ${base} — your own machine, nothing else.`,
-    primary: { id: "retry", label: "Try again" },
-  }, () => load());
-  for (const [k, node] of Object.entries(VIEWS)) if (k !== "deck") node.replaceChildren(el("p", "es-help", "The server is not running — the Next tab says how to start it."));
+  renderCard(cardHost, hosted()
+    ? {
+        id: "panel.down", kind: "panel.down",
+        question: "The engine did not answer.",
+        help: "It runs inside this extension. Reload the extension (chrome://extensions → Messaging Quest → the reload arrow) and open the panel again.",
+        primary: { id: "retry", label: "Try again" },
+      }
+    : {
+        id: "panel.down", kind: "panel.down",
+        question: "The Messaging Quest server is not running.",
+        help: `In the folder that holds .mq/:\n\n  node bin/mq.mjs serve\n\nThe panel talks only to ${base} — your own machine, nothing else.`,
+        primary: { id: "retry", label: "Try again" },
+      }, () => load());
+  for (const [k, node] of Object.entries(VIEWS)) if (k !== "deck") node.replaceChildren(el("p", "es-help", hosted() ? "The engine did not answer — the Next tab says what to do." : "The server is not running — the Next tab says how to start it."));
 }
 
 /* -------------------------------------------------------------- the strip */
@@ -250,9 +286,7 @@ function updateGrantHint(control) {
     b.addEventListener("click", async () => {
       const ok = await ext.permissions.request({ origins: [`${origin}/*`] }).catch(() => false);
       if (!ok) return;
-      await fetch(`${base}/api/control/granted`, {
-        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ origin }),
-      }).catch(() => {});
+      await postJSON("/api/control/granted", { origin }).catch(() => {});
       errorLine.hidden = true;
       load();
     });
@@ -340,14 +374,13 @@ async function act({ action, choice, choices, text, tab }) {
     const origin = current.data.origin;
     const ok = await ext.permissions.request({ origins: [`${origin}/*`] }).catch(() => false);
     if (!ok) { sayError(`Chrome did not grant ${origin.replace(/^https?:\/\//, "")} — the task stays paused until it is allowed.`); return; }
-    await fetch(`${base}/api/control/granted`, {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ origin }),
-    }).catch(() => {});
+    await postJSON("/api/control/granted", { origin }).catch(() => {});
     load();
     return;
   }
   if (action === "open" && current.links?.[0]) {
-    openTab(absolute(current.links[0].href));
+    const u = absolute(current.links[0].href);
+    if (u) openTab(u); else sayError("That page is the dashboard's, and there is no dashboard when the engine runs inside the extension.");
     return;
   }
   // A paused worker's tab, brought to the front — only a browser can do it,
@@ -373,7 +406,9 @@ async function act({ action, choice, choices, text, tab }) {
   }
 }
 
-const absolute = (href) => (/^https?:\/\//i.test(href) ? href : base + href);
+/** A card's link or image as a URL. A server path (/queue, a task's
+ *  screenshot) belongs to the server; hosted, there is none — null. */
+const absolute = (href) => (/^https?:\/\//i.test(href) ? href : hosted() ? null : base + href);
 const openTab = (url) => (ext ? ext.tabs.create({ url }) : window.open(url, "_blank", "noopener"));
 const originOf = (url) => { try { return new URL(url).origin; } catch { return null; } };
 
@@ -794,10 +829,26 @@ function drawSettings() {
 
   const browser = section("This browser", "");
   const srv = el("div", "es-form");
-  srv.append(el("p", "es-sub", `Server: ${base} — your own machine, nothing else.`));
-  if (ext) {
+  if (hosted()) {
+    srv.append(el("p", "es-sub", "The engine runs inside this extension — no server, nothing to install. Your files live in this browser."));
+    srv.append(el("p", "es-sub", "For the dashboard and the colleagues (the CMO), run `mq serve` on this machine and point the panel at it:"));
     const addr = input("http://127.0.0.1:8787", base);
-    srv.append(row(addr, btn("Change", async () => { const next = addr.value.trim().replace(/\/$/, ""); if (!/^https?:\/\//.test(next)) { tabError("the address starts with http://"); return; } base = next; await ext.storage.local.set({ base }); projectShown = null; state = null; load(); }, "es-small")));
+    srv.append(row(addr, btn("Use that server", async () => {
+      const next = addr.value.trim().replace(/\/$/, "");
+      if (!/^https?:\/\//.test(next)) { tabError("the address starts with http://"); return; }
+      await ext.runtime.sendMessage({ type: "mode", mode: "local", base: next }).catch(() => {});
+    }, "es-small")));
+    srv.append(el("p", "es-note", "Switching reloads the extension; open the panel again after. The files here stay in this browser."));
+  } else if (ext) {
+    srv.append(el("p", "es-sub", `Server: ${base} — your own machine, nothing else.`));
+    const addr = input("http://127.0.0.1:8787", base);
+    srv.append(row(addr, btn("Change", async () => { const next = addr.value.trim().replace(/\/$/, ""); if (!/^https?:\/\//.test(next)) { tabError("the address starts with http://"); return; } base = next; await ext.storage.local.set({ base, mode: "local" }); projectShown = null; state = null; load(); }, "es-small")));
+    srv.append(row(btn("Run inside the extension instead — no server", () => ext.runtime.sendMessage({ type: "mode", mode: "hosted" }).catch(() => {}), "es-small")));
+    srv.append(el("p", "es-note", "Switching reloads the extension; open the panel again after. The server's data stays where it is."));
+  } else {
+    srv.append(el("p", "es-sub", `Server: ${base} — your own machine, nothing else.`));
+  }
+  if (ext) {
     const inc = el("p", "es-sub", "Incognito: checking…");
     srv.append(inc);
     try {
@@ -812,11 +863,64 @@ function drawSettings() {
     srv.append(el("p", "es-sub", "This is the panel served as a page. In Chrome, load the extension (chrome://extensions → Load unpacked → the repo's extension/ folder) to type drafts into the composer and to read pages."));
   }
   browser.append(srv);
-  const dash = el("a", "es-link", "Open the dashboard ↗");
-  dash.href = `${base}/`; dash.target = "_blank"; dash.rel = "noreferrer noopener";
-  browser.append(dash);
+  if (!hosted()) {
+    const dash = el("a", "es-link", "Open the dashboard ↗");
+    dash.href = `${base}/`; dash.target = "_blank"; dash.rel = "noreferrer noopener";
+    browser.append(dash);
+  }
 
-  host.append(models, seats, you, projects, browser);
+  /* Hosted: the account — the code sign-in, the connect link, the sync. A
+   * local install's files are its server's; nothing to sign into. */
+  let acct2 = null;
+  if (hosted()) {
+    acct2 = section("Your account", "Sign in and your files — what you sell, the rule, the campaigns, the rooms, the ledgers — follow you to any browser with the extension. The key stays in this one.");
+    acct2.append(errLine());
+    const box = el("div", "es-form");
+    const a = accountStatus;
+    if (a?.signedIn) {
+      const stood = a.error ? `Last sync failed: ${a.error}` : a.lastSync ? `Synced ${ago(a.lastSync)}.` : "Not synced yet.";
+      box.append(el("p", "es-sub", `Signed in as ${a.email}. ${stood}${a.dirty ? ` ${a.dirty} change${a.dirty === 1 ? "" : "s"} to send.` : ""}`));
+      box.append(row(
+        btn("Sync now", async () => { const out = await ext.runtime.sendMessage({ type: "account.sync" }).catch((e) => ({ error: String(e?.message ?? e) })); if (out?.error) { tabError(out.error); return; } tabError(""); await refreshAccount(); drawView(); }),
+        btn("Sign out", async () => { await ext.runtime.sendMessage({ type: "account.out" }).catch(() => {}); await refreshAccount(); drawView(); }),
+      ));
+    } else if (!accountEmail) {
+      // The site's door first: it signs you in there (Google works for an
+      // account that exists) and hands this extension a session of its own.
+      // The code by email is the second door, and only while the site's
+      // email door is open — it has a human check the panel cannot show, and
+      // is shut altogether until the launch.
+      const link = el("a", "es-link", "Connect this browser on messaging.quest ↗");
+      link.href = `${SITE}/link`; link.target = "_blank"; link.rel = "noreferrer noopener";
+      box.append(el("p", "es-sub", "Sign in there, press Connect this browser, and this extension gets a session of its own."));
+      box.append(link);
+      const email = input("you@example.com", "", "email");
+      email.setAttribute("aria-label", "email address");
+      box.append(el("p", "es-sub", "Or, when the site's email door is open: a 6-digit code, mailed to you, typed here."));
+      box.append(row(email, btn("Send a code", async () => {
+        const out = await ext.runtime.sendMessage({ type: "account.start", email: email.value }).catch((e) => ({ error: String(e?.message ?? e) }));
+        if (out?.error) { tabError(out.error); return; }
+        accountEmail = out.email; tabError(""); drawView();
+      }, "es-small")));
+    } else {
+      const code = input("the 6-digit code from the email", "");
+      code.setAttribute("aria-label", "the code from the email");
+      code.inputMode = "numeric";
+      box.append(el("p", "es-sub", `A code went to ${accountEmail}. Type it here — it never leaves this panel.`));
+      box.append(row(
+        code,
+        btn("Sign in", async () => {
+          const out = await ext.runtime.sendMessage({ type: "account.verify", email: accountEmail, code: code.value }).catch((e) => ({ error: String(e?.message ?? e) }));
+          if (out?.error) { tabError(out.error); return; }
+          accountEmail = null; tabError(""); await refreshAccount(); drawView();
+        }, "es-primary es-small"),
+        btn("Another address", () => { accountEmail = null; drawView(); }),
+      ));
+    }
+    acct2.append(box);
+  }
+
+  host.append(models, seats, you, projects, ...(acct2 ? [acct2] : []), browser);
 }
 
 async function switchProjectJSON(name) {
@@ -835,12 +939,26 @@ $("send").addEventListener("click", () => ask());
 $("ask").addEventListener("keydown", (e) => { if (e.key === "Enter") ask(); });
 for (const b of document.querySelectorAll(".es-tabs button")) b.addEventListener("click", () => showView(b.dataset.view));
 
-const savedBase = ext ? ext.storage.local.get({ base: DEFAULT_BASE }) : Promise.resolve({ base: DEFAULT_BASE });
-savedBase.then(async ({ base: saved }) => {
-  base = saved;
+/** The mode and the server address: the worker's word, or storage read the
+ *  worker's way when it is not answering yet; a page has neither. */
+const settingsOf = async () => {
+  if (!ext) return { mode: "local", base: DEFAULT_BASE };
+  try {
+    const s = await ext.runtime.sendMessage({ type: "settings" });
+    if (s?.mode) return s;
+  } catch { /* the worker is starting; storage says the same */ }
+  const s = await ext.storage.local.get({ mode: null, base: null });
+  return { mode: s.mode === "local" || s.mode === "hosted" ? s.mode : s.base ? "local" : "hosted", base: s.base ?? DEFAULT_BASE };
+};
+settingsOf().then(async (s) => {
+  mode = s.mode;
+  base = s.base;
   const dash = $("dash");
-  dash.href = `${base}/`;
-  dash.addEventListener("click", (e) => { e.preventDefault(); openTab(`${base}/`); });
+  if (hosted()) dash.hidden = true;
+  else {
+    dash.href = `${base}/`;
+    dash.addEventListener("click", (e) => { e.preventDefault(); openTab(`${base}/`); });
+  }
   // The worker's name on the lane: while this panel is the one open, the
   // engine opens its tabs in THIS profile (two open: the first keeps it).
   if (ext) { try { INSTANCE = (await ext.runtime.sendMessage({ type: "instance" }))?.instance ?? null; } catch { INSTANCE = null; } }

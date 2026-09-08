@@ -37,6 +37,7 @@
 // thread runs long, and the same skills/<id>/SKILL.md files that teach every
 // other surface.
 
+import "../lib/node.mjs";   // the Node host for lib/fs.mjs — first, before anything in lib/
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

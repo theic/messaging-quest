@@ -22,6 +22,7 @@
 // If the lane is dark (no extension, no Chrome) each step says so and the
 // script exits non-zero: "unanswered" is the honest answer, not a hang.
 
+import "../lib/node.mjs";   // the Node host for lib/fs.mjs — first, before anything in lib/
 import { createServer } from "node:http";
 import { controlClient } from "../lib/control.mjs";
 import { CLICK_SCREEN } from "../extension/screen.js";

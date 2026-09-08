@@ -102,22 +102,45 @@ export async function instanceId() {
 
 let looping = false;
 
-/** Start the claim loop if it is not running. Idempotent, so the alarm, the
- *  install hook and the worker's own start can all call it. */
-export function ensureControlLoop(base) {
-  if (looping) return;
-  looping = true;
-  loop(base).catch(() => {}).finally(() => { looping = false; });
+/**
+ * Where the jobs come from and where the answers go. Two lanes (0.10.0):
+ * a server's — `mq serve` on this machine, long-polled over HTTP — and the
+ * engine's own broker inside this worker (extension/sw.js hands in
+ * `{ jobs, answer }` over lib/control.mjs claim/answer directly). The loop
+ * below cannot tell them apart, which is the point.
+ */
+export function httpLane(base) {
+  return {
+    jobs: async (instance) => {
+      const res = await fetch(`${base}/api/control/jobs?wait=15000&instance=${encodeURIComponent(instance)}`, { signal: AbortSignal.timeout(23_000) });
+      if (!res.ok) throw new Error(String(res.status));
+      return (await res.json()).jobs ?? [];
+    },
+    answer: async (id, answer) => {
+      await fetch(`${base}/api/control/answer`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id, ...answer }),
+        signal: AbortSignal.timeout(8000),
+      });
+    },
+  };
 }
 
-async function loop(base) {
+/** Start the claim loop if it is not running. Idempotent, so the alarm, the
+ *  install hook and the worker's own start can all call it. */
+export function ensureControlLoop(lane) {
+  if (looping) return;
+  looping = true;
+  loop(lane).catch(() => {}).finally(() => { looping = false; });
+}
+
+async function loop(lane) {
   const instance = await instanceId();
   for (;;) {
     let jobs = [];
     try {
-      const res = await fetch(`${base}/api/control/jobs?wait=15000&instance=${encodeURIComponent(instance)}`, { signal: AbortSignal.timeout(23_000) });
-      if (!res.ok) throw new Error(String(res.status));
-      jobs = (await res.json()).jobs ?? [];
+      jobs = (await lane.jobs(instance)) ?? [];
     } catch {
       await sleep(4000);   // the server is down or restarting; keep the loop, back off
       continue;
@@ -128,13 +151,8 @@ async function loop(base) {
     for (const job of jobs) {
       const answer = await run(job).catch((e) => ({ error: String(e?.message ?? e) }));
       try {
-        await fetch(`${base}/api/control/answer`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ id: job.id, ...answer }),
-          signal: AbortSignal.timeout(8000),
-        });
-      } catch { /* the job times out server-side; a lost answer is just late */ }
+        await lane.answer(job.id, answer);
+      } catch { /* the job times out broker-side; a lost answer is just late */ }
       if (job.tool === "reload") { await sleep(300); chrome.runtime.reload(); }
     }
   }

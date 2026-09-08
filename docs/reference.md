@@ -68,8 +68,14 @@ a time in a side panel: who to answer, the drafted reply, and the reason when
 the answer is "not yet".
 
 1. `chrome://extensions` → Developer mode → **Load unpacked** → pick this
-   repo's `extension/` folder.
-2. Keep `node bin/mq.mjs serve` running; pin the icon and click it.
+   repo's folder itself (the manifest is at its root, so the package the
+   store gets is `git archive`) — or install it from the Chrome Web Store.
+2. Pin the icon and click it. From 0.10.0 the engine runs INSIDE the
+   extension (hosted mode, the default): no server, the files in this
+   browser and, once you sign in on the Settings tab, in your account. For
+   this dashboard and the CMO, keep `node bin/mq.mjs serve` running and
+   press **Use that server** on the Settings tab (local mode); the extension
+   reloads itself.
 
 The panel deals the next action: setup runs as cards (your account, your URL
 — the scout reads your site while you answer nine one-tap questions about how
@@ -96,6 +102,25 @@ puts its reason on the card and offers once more.
 No Chrome? The same deck is served at `http://127.0.0.1:8787/panel/` —
 everything works there except typing into the composer (you get the draft on
 your clipboard instead).
+
+### The account (hosted mode)
+
+Hosted, the files live in the browser — a memory filesystem the extension
+keeps in IndexedDB between sessions — and, once you sign in on the Settings
+tab, in your account: one table (`mq_files`, a row per file) under
+row-level security on messaging.quest's Supabase, reached directly with your
+own token, no API of ours in between. Two ways in: a 6-digit code mailed to
+you and typed into the panel (the site's own sign-in; never a link to
+click), or **Connect this browser** on
+[messaging.quest/link](https://messaging.quest/link) while signed in there
+— the site hands the extension a one-time token and it gets a session of
+its own. The rules are plain: every change goes up a moment after it is
+made, the account is pulled at start and once a minute for what another
+browser wrote, and per file the last writer wins — the account wins over a
+browser joining it. What never goes up: the OpenRouter key (it stays in the
+browser it was typed into, so a database is never a file of keys), the job
+log, the task screenshots, the hub's tokens. Sign out and the account keeps
+its files; this browser keeps its own.
 
 ### Colleagues: the specialist at work in your browser
 
@@ -239,8 +264,9 @@ node bin/mq.mjs projects  # every project; * is the one the verbs act on
 node bin/mq.mjs waiting   # who wrote back and is waiting on you
 ```
 
-The CLI is still the one implementation of every verb — the dashboard's buttons
-spawn it rather than reimplementing it, so the two can never drift.
+The verbs are one implementation (`lib/verbs.mjs`) — the CLI, the dashboard's
+buttons and the extension's worker call the same functions in-process rather
+than reimplementing them, so the three can never drift.
 
 `check` opens each thread in an Incognito tab of your own browser — the
 stranger's seat — a page turn every few seconds, at a person's pace, and it
@@ -755,6 +781,7 @@ node bin/test.mjs                # the engine, the cards, the seams, the control
 node --test bin/voice-test.mjs   # the voice fingerprint
 node agent/test.mjs              # the runtime (needs npm run brain): workers on a scripted model
 node bin/control-smoke.mjs       # the control lane by hand, against your own Chrome
+MQ_CHROME=<chrome-for-testing> node bin/hosted-smoke.mjs   # the hosted extension end to end, in a Chrome of its own
 ```
 
 They cover only the things that would break quietly — a body that gets

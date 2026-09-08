@@ -33,6 +33,7 @@
 // the broker, and against the label screen in the extension. Every engine
 // action goes through the CLI's verbs (agent/verbs.mjs).
 
+import "../lib/node.mjs";   // the Node host for lib/fs.mjs — first, before anything in lib/
 import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createDeepAgent } from "deepagents";
