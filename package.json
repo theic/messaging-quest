@@ -32,7 +32,8 @@
     "hub": "node bin/hub.mjs",
     "mcp": "node bin/mcp.mjs",
     "brain": "npm --prefix agent install",
-    "test": "node bin/test.mjs && node --test bin/voice-test.mjs"
+    "test": "node bin/test.mjs && node --test bin/voice-test.mjs",
+    "pack": "git archive --format=zip -o messaging-quest-extension.zip HEAD"
   },
   "license": "Elastic-2.0",
   "engines": {

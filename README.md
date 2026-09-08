@@ -90,6 +90,10 @@ runs in two places on the same files:
 Either way every read of a platform is a real tab in your own Chrome, at a
 person's pace, and the click that submits is yours.
 
+The package the store gets is the checkout: `npm run pack` writes
+`messaging-quest-extension.zip` with `git archive` — the manifest at its
+root, `lib/` and `skills/` inside, nothing built.
+
 ## What free means here
 
 Every seat — the scout that reads your site, the judge, the writer — runs on
