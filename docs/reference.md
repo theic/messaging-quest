@@ -103,6 +103,25 @@ No Chrome? The same deck is served at `http://127.0.0.1:8787/panel/` —
 everything works there except typing into the composer (you get the draft on
 your clipboard instead).
 
+### The account (hosted mode)
+
+Hosted, the files live in the browser — a memory filesystem the extension
+keeps in IndexedDB between sessions — and, once you sign in on the Settings
+tab, in your account: one table (`mq_files`, a row per file) under
+row-level security on messaging.quest's Supabase, reached directly with your
+own token, no API of ours in between. Two ways in: a 6-digit code mailed to
+you and typed into the panel (the site's own sign-in; never a link to
+click), or **Connect this browser** on
+[messaging.quest/link](https://messaging.quest/link) while signed in there
+— the site hands the extension a one-time token and it gets a session of
+its own. The rules are plain: every change goes up a moment after it is
+made, the account is pulled at start and once a minute for what another
+browser wrote, and per file the last writer wins — the account wins over a
+browser joining it. What never goes up: the OpenRouter key (it stays in the
+browser it was typed into, so a database is never a file of keys), the job
+log, the task screenshots, the hub's tokens. Sign out and the account keeps
+its files; this browser keeps its own.
+
 ### Colleagues: the specialist at work in your browser
 
 From 0.5.0 the specialist is a CMO: it does not only talk, it puts
