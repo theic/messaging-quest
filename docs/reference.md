@@ -762,6 +762,7 @@ node bin/test.mjs                # the engine, the cards, the seams, the control
 node --test bin/voice-test.mjs   # the voice fingerprint
 node agent/test.mjs              # the runtime (needs npm run brain): workers on a scripted model
 node bin/control-smoke.mjs       # the control lane by hand, against your own Chrome
+MQ_CHROME=<chrome-for-testing> node bin/hosted-smoke.mjs   # the hosted extension end to end, in a Chrome of its own
 ```
 
 They cover only the things that would break quietly — a body that gets
