@@ -642,6 +642,29 @@ Two skills may serve one purpose — declare the same `provides:` slot, and
 the screen says exactly that: a guess there would be your dashboard quietly
 running code you did not pick.
 
+**Nothing on any screen names a platform either.** The words the panel and the
+dashboard use when they mean the place — the account question, the room
+placeholder, the example room, the rules note, the name of the button you
+press — all come from the adapter's `labels`, with plain English where a skill
+declares none. A room typed with its own decoration ("r/saas") is the same
+room as "saas", because `labelsOf().bare()` undoes whatever `roomLabel` adds
+rather than knowing about an "r/". When two platform skills are active, the
+Rooms tab shows both and the one you pick is what a probe, a new campaign and
+every word on screen mean (`preferred()`, stored per project). One is active
+today, so that row is not drawn at all.
+
+**And the browser answers about your account before you are asked.** A skill
+can declare `account.cookies` — the names the site sets when you are signed in
+— and the panel asks Chrome whether one is there. Presence only: no value is
+read, nothing is fetched, no page is opened, and the `cookies` permission is
+optional and asked for on a press rather than at install. It can also declare
+`account.whoami`, an address that redirects to your own profile while you are
+signed in; `mq me` with no argument opens it on the lane like any other page,
+at a person's pace, in a tab you can watch, and takes the handle off the
+address it landed on without parsing the page. Reddit declares both, so the
+panel offers **Find it in my browser** instead of a blank field. A skill that
+declares neither simply asks, as everything did before 0.11.0.
+
 Your own skills load from `.mq/skills/` without touching the repo (on a name
 collision, yours wins); the version for everybody is a pull request adding
 one folder to `skills/`. The contract is [skills/README.md](../skills/README.md),

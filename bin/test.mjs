@@ -1439,6 +1439,11 @@ check("a proposal with a verb outside the law never renders",
   check("...with the element that holds one comment, so a comment on the post never lands under the first comment's Reply", composerOf("https://www.reddit.com/r/x/comments/1/t/").comments, ["shreddit-comment"]);
   const generic = nextCards({ ...snap({ account: { name: "x" }, stash: allVoice, memory: memDone, sources: [{ place: "saas" }], rooms: [{ place: "saas", state: "unanswered" }] }) })[0];
   check("a card without a platform names the room plainly", [generic.eyebrow, generic.links], ["saas", undefined]);
+  // The first question of all: a platform that can be asked who you are is
+  // asked, and the field is what is left for the platform that cannot.
+  const askBrowser = nextCards(snap({ platform: L }))[0];
+  const askYou = nextCards(snap({ platform: G }))[0];
+  check("the first card asks the browser where it can, and you where it cannot", [askBrowser.id, askBrowser.primary.label, (askBrowser.actions ?? []).map((a) => a.id), /off the address/.test(askBrowser.help), askYou.primary.label, askYou.actions], ["onboard.account", "Find it in my browser", ["save"], true, "That's me", undefined]);
   const labelled = nextCards({ ...snap({ platform: L, account: { name: "x" }, stash: allVoice, memory: memDone, sources: [{ place: "saas" }], rooms: [{ place: "saas", state: "unanswered" }] }) })[0];
   check("...and with one, the platform's words and its rules page", [labelled.eyebrow, labelled.links[0].href], ["r/saas", "https://www.reddit.com/r/saas/about/rules"]);
   const reply = nextCards(snap({ platform: L, account: { name: "x" }, stash: { ...allVoice, welcomed: true }, memory: memDone, sources: [{ place: "saas" }], rooms: [{ place: "saas", state: "allowed" }], queue: [{ ...qItem, campaign: "honest-comments", composer: composerOf(qItem.url) }] }))[0];

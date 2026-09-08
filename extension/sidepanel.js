@@ -76,6 +76,7 @@ let deckCards = [];      // every card dealt, the one on screen first
 let pollTimer = null;
 let projectShown = null; // the project key the picker was last drawn for
 let state = null;        // /api/panel — what the other tabs show
+let signedIn = null;     // which platforms this browser holds a session cookie for, once Chrome has said
 let view = "deck";
 
 /* ------------------------------------------------------------------ fetch */
@@ -711,7 +712,7 @@ function drawRooms() {
   // More than one platform skill active: which one the forms below mean.
   // One, today — so this is not drawn at all rather than drawn as a lone
   // button that does nothing.
-  const places = state.platforms ?? [];
+  const places = state.settings?.platforms ?? [];
   if (places.length > 1) {
     const which = el("div", "es-plans");
     for (const p of places) {
@@ -783,16 +784,23 @@ function drawRooms() {
  * press rather than at install — so the honest state before that press is
  * "this browser has not let it look", and that is what it says.
  */
-async function sayWhoIsSignedIn(line, actions) {
-  const list = (state.platforms ?? []).filter((p) => p.cookies);
+function sayWhoIsSignedIn(line, actions) {
+  const list = (state.settings?.platforms ?? []).filter((p) => p.cookies);
   if (!ext || !list.length) { line.hidden = true; return; }
-  line.textContent = "Looking at what this browser is signed into…";
-  const seen = await detectAccounts(list).catch(() => ({}));
+  // Asking Chrome is a promise and drawing is not, and this tab is redrawn
+  // every time the state comes back — so the answer is kept and rendered
+  // from memory, and the asking happens once. Filling the line in place
+  // instead would flicker it away on the next poll.
+  if (!signedIn) {
+    line.textContent = "Looking at what this browser is signed into…";
+    detectAccounts(list).then((seen) => { signedIn = seen; drawView(); }, () => { signedIn = {}; });
+    return;
+  }
   const say = { in: "signed in", out: "signed out", unknown: "not looked at" };
-  line.textContent = list.map((p) => `${p.name}: ${say[seen[p.id]] ?? say.unknown}`).join(" · ");
-  if (list.some((p) => seen[p.id] === "unknown")) {
+  line.textContent = list.map((p) => `${p.name}: ${say[signedIn[p.id]] ?? say.unknown}`).join(" · ");
+  if (list.some((p) => signedIn[p.id] === "unknown")) {
     line.textContent += " — this browser has not let the extension look yet.";
-    actions.append(btn("Let it look", async () => { await askToLook(list); drawView(); }, "es-small"));
+    actions.append(btn("Let it look", async () => { await askToLook(list); signedIn = null; drawView(); }, "es-small"));
   }
 }
 

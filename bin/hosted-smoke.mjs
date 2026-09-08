@@ -93,6 +93,17 @@ try {
   await sleep(1500);
   const settingsText = await pc.eval(`document.getElementById("view-settings").textContent`);
   check("the Settings tab offers the account and says where the engine runs", [/Your account/.test(settingsText), /Send a code/.test(settingsText), /messaging\.quest/.test(settingsText), /runs inside this extension/.test(settingsText)], [true, true, true, true]);
+  // 0.11.0: the panel can be told which theme to wear, and it says what this
+  // browser knows about the account rather than only asking for a name. A
+  // fresh profile has granted nothing, so the honest answer is that it has
+  // not looked — which is the answer that has to be on screen.
+  check("...and the appearance control, and what this browser has not been allowed to look at yet",
+    [/Appearance/.test(settingsText), /System/.test(settingsText) && /Light/.test(settingsText) && /Dark/.test(settingsText), /Find it in my browser/.test(settingsText), /has not let the extension look yet/.test(settingsText)],
+    [true, true, true, true]);
+  check("the panel wears the theme it is told to, and remembers it in this browser only",
+    await pc.eval(`(() => { const b = [...document.querySelectorAll('#view-settings button')].find((x) => x.textContent === 'Dark'); b.click(); return [document.documentElement.dataset.theme, localStorage.getItem('mq.theme'), getComputedStyle(document.body).backgroundColor]; })()`),
+    ["dark", "dark", "rgb(10, 10, 11)"]);
+  await pc.eval(`(() => { const b = [...document.querySelectorAll('#view-settings button')].find((x) => x.textContent === 'System'); b.click(); })()`);
   check("account.status: signed out", (await msg(pc, { type: "account.status" })).signedIn, false);
   await pc.eval(`document.querySelector('.es-tabs [data-view="deck"]').click()`);
 
