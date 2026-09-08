@@ -83,6 +83,23 @@ const think = (kind) => pause(...THINK[kind]);
 
 /* ------------------------------------------------------------------- loop */
 
+/** This worker's name on the lane — one per Chrome profile the extension is
+ *  loaded in, kept in session storage so it survives the worker's restarts
+ *  (not Chrome's). The broker binds every tab to the instance that opened it
+ *  and opens new ones where the panel is, so two profiles with the extension
+ *  loaded no longer split one task's jobs between them (measured 2026-09-07). */
+let INSTANCE = null;
+export async function instanceId() {
+  if (INSTANCE) return INSTANCE;
+  try {
+    const { instance } = await chrome.storage.session.get({ instance: null });
+    if (instance) return (INSTANCE = String(instance));
+  } catch { /* no session storage: the worker's own life is the instance */ }
+  INSTANCE = globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  try { await chrome.storage.session.set({ instance: INSTANCE }); } catch { /* fine */ }
+  return INSTANCE;
+}
+
 let looping = false;
 
 /** Start the claim loop if it is not running. Idempotent, so the alarm, the
@@ -94,10 +111,11 @@ export function ensureControlLoop(base) {
 }
 
 async function loop(base) {
+  const instance = await instanceId();
   for (;;) {
     let jobs = [];
     try {
-      const res = await fetch(`${base}/api/control/jobs?wait=15000`, { signal: AbortSignal.timeout(23_000) });
+      const res = await fetch(`${base}/api/control/jobs?wait=15000&instance=${encodeURIComponent(instance)}`, { signal: AbortSignal.timeout(23_000) });
       if (!res.ok) throw new Error(String(res.status));
       jobs = (await res.json()).jobs ?? [];
     } catch {

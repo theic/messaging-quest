@@ -301,6 +301,8 @@ main input:focus, main textarea:focus, main select:focus { outline: none; box-sh
 .es-status-failed .es-status-dot { border-color: var(--coral); background: var(--coral); }
 .es-status-quiet { color: var(--dim); }
 .es-status-quiet .es-status-dot { border-color: var(--line); }
+.es-status-warn { color: var(--coral); }
+.es-status-warn .es-status-dot { border-color: var(--coral); background: transparent; }
 .es-error { color: var(--coral); font-size: 13.5px; white-space: pre-wrap; }
 
 .es-said {

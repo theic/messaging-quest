@@ -7,6 +7,30 @@ Reddit who are asking for what you sell, writes the reply three ways in your
 own voice, and puts it in the comment box for you. You press Comment. It never
 does. Free to run: free models, your own Chrome, nothing hosted, no account.
 
+## TL;DR
+
+Node 18 or newer, Chrome, and a free OpenRouter key from
+[openrouter.ai/keys](https://openrouter.ai/keys) — no card.
+
+1. Clone, initialise, start the engine, and keep it running:
+
+   ```bash
+   git clone https://github.com/theic/messaging-quest && cd messaging-quest && node bin/mq.mjs init && node bin/mq.mjs serve
+   ```
+
+2. In Chrome: `chrome://extensions` → **Developer mode** → **Load unpacked** →
+   this repo's `extension/` folder — in **one** Chrome profile. Pin the icon
+   and click it: the panel opens.
+3. On the panel's **Settings** tab, paste the OpenRouter key. The free plan is
+   the default: the scout, the judge and the writer run on free models, with
+   nothing to choose.
+4. The first cards ask for your Reddit username and your site's address. The
+   first time a read opens reddit.com, a card asks you to allow the site —
+   click it once.
+5. Optional: tick **Allow in Incognito** on the extension's details page, so
+   the stranger's reads of your own profile can run; and `npm run brain`
+   installs the CMO.
+
 ## The idea, in three paragraphs
 
 **You tell it once what you sell.** Paste your site's address on the first
@@ -39,22 +63,9 @@ eight words twice is flagged before you post.
 
 <p align="center"><img src="docs/how-it-works.svg" alt="How it works: you and the side panel on the left, the engine on your machine in the middle, your Chrome reading Reddit and the free models on the right. Only you press Comment." width="820"></p>
 
-## Install
+## What free means here
 
-Node 18 or newer, and Chrome.
-
-```bash
-git clone https://github.com/theic/messaging-quest && cd messaging-quest && node bin/mq.mjs init && node bin/mq.mjs serve
-```
-
-1. `chrome://extensions` → **Developer mode** → **Load unpacked** → this
-   repo's `extension/` folder. Pin the icon and click it: the panel opens.
-2. The first cards ask for your Reddit username, your site's address, and a
-   **free OpenRouter key** — [openrouter.ai/keys](https://openrouter.ai/keys),
-   no card. Everything runs on free models unless you choose otherwise.
-3. Keep `node bin/mq.mjs serve` running while you use it. That is all.
-
-**What free means here.** Every seat — the scout that reads your site, the
+Every seat — the scout that reads your site, the
 judge, the writer — runs on OpenRouter's free models by default, and nothing
 is ever charged. The platform's limits, read off its docs on 2026-09-01: 20
 requests a minute and 50 a day on a fresh account (1,000 a day once $10 of
