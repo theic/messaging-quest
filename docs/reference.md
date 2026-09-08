@@ -68,8 +68,14 @@ a time in a side panel: who to answer, the drafted reply, and the reason when
 the answer is "not yet".
 
 1. `chrome://extensions` → Developer mode → **Load unpacked** → pick this
-   repo's `extension/` folder.
-2. Keep `node bin/mq.mjs serve` running; pin the icon and click it.
+   repo's folder itself (the manifest is at its root, so the package the
+   store gets is `git archive`) — or install it from the Chrome Web Store.
+2. Pin the icon and click it. From 0.10.0 the engine runs INSIDE the
+   extension (hosted mode, the default): no server, the files in this
+   browser and, once you sign in on the Settings tab, in your account. For
+   this dashboard and the CMO, keep `node bin/mq.mjs serve` running and
+   press **Use that server** on the Settings tab (local mode); the extension
+   reloads itself.
 
 The panel deals the next action: setup runs as cards (your account, your URL
 — the scout reads your site while you answer nine one-tap questions about how
@@ -239,8 +245,9 @@ node bin/mq.mjs projects  # every project; * is the one the verbs act on
 node bin/mq.mjs waiting   # who wrote back and is waiting on you
 ```
 
-The CLI is still the one implementation of every verb — the dashboard's buttons
-spawn it rather than reimplementing it, so the two can never drift.
+The verbs are one implementation (`lib/verbs.mjs`) — the CLI, the dashboard's
+buttons and the extension's worker call the same functions in-process rather
+than reimplementing them, so the three can never drift.
 
 `check` opens each thread in an Incognito tab of your own browser — the
 stranger's seat — a page turn every few seconds, at a person's pace, and it
