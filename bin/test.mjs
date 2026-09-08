@@ -34,7 +34,7 @@ import { parseCampaign, campaignFile, writeCampaign, readCampaigns, readCampaign
 import { createProject, useProject, listProjects, currentDir, slug as projectSlug } from "../lib/projects.mjs";
 import { sharedDir, isChildProject } from "../lib/dirs.mjs";
 import { signalWritingRules } from "../lib/writing.mjs";
-import { labelsOf, composerOf, first } from "../lib/platform.mjs";
+import { labelsOf, composerOf, first, preferred, accountOf, whoamiOf } from "../lib/platform.mjs";
 import { allowed, memoryProgress, memoryContext, writeMemory, seedMissing } from "../lib/memory.mjs";
 import { proposable } from "../lib/cards.mjs";
 import { store } from "../lib/store.mjs";
@@ -52,6 +52,9 @@ import { pathToFileURL } from "node:url";
 import { conversationRows, bindConversations, recordReturn, recordTurn, closeConversation, waiting as waitingRows, yourTurns, dueConversations, unbound, campaignDigest, digestText } from "../lib/conversations.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
+// The design book, pinned. The website repo pins the same number for its
+// copy of extension/tokens.css; if you change the palette, both move.
+const TOKENS_SHA = "d40154c3be7f03064377b9940dd8604b3886e5dd264a1a30c4233b021a970339";
 const ES = join(here, "mq.mjs");
 // The built-in platform loads when an entry point asks, not at import
 // (lib/platform.mjs, 0.10.0) — this suite is one.
@@ -1390,6 +1393,30 @@ check("a proposal with a verb outside the law never renders",
   check("a paused campaign says so", [/off honest-comments/.test((esK(["campaign", "pause", "honest-comments"]), esK(["campaigns"]))), readCampaign(DK, "honest-comments").status], [true, "paused"]);
 }
 
+// The design book (extension/tokens.css) is SHARED WITH THE WEBSITE, and it
+// is shared by being the same bytes: app/tokens.css in theic/messaging.quest
+// is a copy, and its own test pins this same digest. Changing the palette
+// means changing both files and this number, in one pass — which is the
+// point. A palette that drifts apart is two designs wearing one name.
+{
+  const book = readFileSync(join(here, "..", "extension", "tokens.css"), "utf8").replace(/\r\n/g, "\n");
+  check("the design book is the bytes the website pins too", sha256js(book), TOKENS_SHA);
+  const rules = book.replace(/\/\*[\s\S]*?\*\//g, "").trim();
+  check("...and nothing in it is surface-specific: only :root, no font file, no component", [/@font-face/.test(rules), /url\(/.test(rules), rules.startsWith(":root")], [false, false, true]);
+  // The dark values are written twice — once for the system's choice, once
+  // for a person who overrode it — because CSS gives one block one home.
+  // Two copies that disagree is a theme that changes when you touch a
+  // switch, so they are compared here rather than by eye.
+  const declares = (block) => Object.fromEntries([...block.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
+  const media = /@media \(prefers-color-scheme: dark\) \{\s*:root:not\(\[data-theme="light"\]\) \{([\s\S]*?)\n  \}/.exec(rules);
+  const attr = /:root\[data-theme="dark"\] \{([\s\S]*?)\n\}/.exec(rules);
+  check("the two ways of asking for dark say exactly the same thing", [Boolean(media), Boolean(attr), JSON.stringify(declares(media?.[1] ?? "")) === JSON.stringify(declares(attr?.[1] ?? ""))], [true, true, true]);
+  // Every name the dark half moves must exist in the light half, or a theme
+  // is inventing a token nothing declared.
+  const light = declares(/^:root \{([\s\S]*?)\n\}/.exec(rules)?.[1] ?? "");
+  check("...and every name it moves was declared light first", Object.keys(declares(attr?.[1] ?? "")).filter((k) => !(k in light)), []);
+}
+
 // The heart carries no platform word: labels come from the adapter, with
 // plain fallbacks, and the composer's words ride on the reply card.
 {
@@ -1397,10 +1424,26 @@ check("a proposal with a verb outside the law never renders",
   check("the platform's labels come from its adapter", [L.id, L.room("saas"), L.rulesUrl("saas"), /Reddit/.test(L.account.question)], ["reddit", "r/saas", "https://www.reddit.com/r/saas/about/rules", true]);
   const G = labelsOf(null);
   check("...and a platform with none still reads as English", [G.room("saas"), G.rulesUrl("saas"), G.account.question, G.submit], ["saas", null, "Which account is yours?", "the platform's own button"]);
+  // A room, typed however a person types it, is one room. Whatever roomLabel
+  // decorates it with is what bare() takes off — no core file knows "r/".
+  check("a room typed with the platform's own decoration is the same room", [L.bare("r/saas"), L.bare(" R/SaaS "), L.bare("saas"), L.bare("r/sa as!"), L.bare(""), G.bare("r/saas")], ["saas", "SaaS", "saas", "saas", "", "rsaas"]);
+  // What the browser can say about the account before anything is read.
+  const A = accountOf(first());
+  check("the platform declares how this browser can tell it is signed in", [A.cookies.url, A.cookies.names.includes("reddit_session"), A.whoami], ["https://www.reddit.com/", true, "https://www.reddit.com/user/me/"]);
+  check("...and reads the handle off the address it landed on, or refuses to guess", [whoamiOf(first(), "https://www.reddit.com/user/theic/"), whoamiOf(first(), "https://www.reddit.com/user/me/"), whoamiOf(first(), "https://www.reddit.com/login/?dest=%2Fuser%2Fme"), whoamiOf(first(), ""), whoamiOf(null, "https://www.reddit.com/user/theic/")], ["theic", null, null, null, null]);
+  check("a platform that declares nothing is not asked to", [accountOf(null).cookies, accountOf(null).whoami], [null, null]);
+  // The default platform is the first active skill until an instance says
+  // otherwise; an id naming a skill that is gone falls back rather than dies.
+  check("the platform an instance prefers, and the fallback when it is gone", [preferred(null)?.id, preferred("reddit")?.id, preferred("linkedin")?.id], ["reddit", "reddit", "reddit"]);
   check("the composer the Insert flow looks for is the platform's, off the url", composerOf("https://www.reddit.com/r/x/comments/1/t/").hosts, ["shreddit-composer", "comment-composer-host"]);
   check("...with the element that holds one comment, so a comment on the post never lands under the first comment's Reply", composerOf("https://www.reddit.com/r/x/comments/1/t/").comments, ["shreddit-comment"]);
   const generic = nextCards({ ...snap({ account: { name: "x" }, stash: allVoice, memory: memDone, sources: [{ place: "saas" }], rooms: [{ place: "saas", state: "unanswered" }] }) })[0];
   check("a card without a platform names the room plainly", [generic.eyebrow, generic.links], ["saas", undefined]);
+  // The first question of all: a platform that can be asked who you are is
+  // asked, and the field is what is left for the platform that cannot.
+  const askBrowser = nextCards(snap({ platform: L }))[0];
+  const askYou = nextCards(snap({ platform: G }))[0];
+  check("the first card asks the browser where it can, and you where it cannot", [askBrowser.id, askBrowser.primary.label, (askBrowser.actions ?? []).map((a) => a.id), /off the address/.test(askBrowser.help), askYou.primary.label, askYou.actions], ["onboard.account", "Find it in my browser", ["save"], true, "That's me", undefined]);
   const labelled = nextCards({ ...snap({ platform: L, account: { name: "x" }, stash: allVoice, memory: memDone, sources: [{ place: "saas" }], rooms: [{ place: "saas", state: "unanswered" }] }) })[0];
   check("...and with one, the platform's words and its rules page", [labelled.eyebrow, labelled.links[0].href], ["r/saas", "https://www.reddit.com/r/saas/about/rules"]);
   const reply = nextCards(snap({ platform: L, account: { name: "x" }, stash: { ...allVoice, welcomed: true }, memory: memDone, sources: [{ place: "saas" }], rooms: [{ place: "saas", state: "allowed" }], queue: [{ ...qItem, campaign: "honest-comments", composer: composerOf(qItem.url) }] }))[0];
@@ -1876,7 +1919,11 @@ check("a proposal with a verb outside the law never renders",
     check("a campaign is edited from the panel: the voice and the mention, the idea untouched", [(await PP("/api/panel/act", { do: "campaign.save", id: "launch-posts", voice: "dry", mention: "disclosed" })).status, readCampaign(DP, "launch-posts").voice, readCampaign(DP, "launch-posts").mention, readCampaign(DP, "launch-posts").idea, (await PP("/api/panel/act", { do: "campaign.save", id: "nope", voice: "x" })).status], [200, "dry", "disclosed", "one true observation", 400]);
     check("a new campaign from the panel needs a name, refuses a name already taken, and starts the walk on the deck", [(await PP("/api/panel/act", { do: "campaign.new", name: "" })).status, (await PP("/api/panel/act", { do: "campaign.new", name: "Launch posts" })).status, (await PP("/api/panel/act", { do: "campaign.new", name: "Roast me threads" })).status, (await deckP())[0].id, /Roast me threads/.test((await deckP())[0].eyebrow), (await deckP())[0].field.value], [400, 400, 200, "campaign.idea", true, ""]);
     await PP("/api/cards/act", { card: "campaign.idea", action: "drop" });
-    check("a room needs a name before it is probed, under a campaign or not; a source has to be watched to be stopped", [(await PP("/api/panel/act", { do: "campaign.probe", id: "launch-posts", place: "" })).status, (await PP("/api/panel/act", { do: "probe", place: "" })).status, (await PP("/api/panel/act", { do: "unwatch", id: "saas:new" })).status, (await PP("/api/panel/act", { do: "account", name: "" })).status], [400, 400, 400, 400]);
+    check("a room needs a name before it is probed, under a campaign or not; a source has to be watched to be stopped", [(await PP("/api/panel/act", { do: "campaign.probe", id: "launch-posts", place: "" })).status, (await PP("/api/panel/act", { do: "probe", place: "" })).status, (await PP("/api/panel/act", { do: "unwatch", id: "saas:new" })).status], [400, 400, 400]);
+    // An empty username is no longer a mistake: it means "look in this
+    // browser". The finder starts as a job and fails honestly when there is
+    // no lane, which is what this host has.
+    check("no username means the browser is asked rather than refused", (await PP("/api/panel/act", { do: "account", name: "" })).status, 200);
     check("a room's rules are recorded from the panel", [(await PP("/api/panel/act", { do: "room.rules", place: "founder", answer: "yes" })).status, SP.roomState("founder").state !== "unanswered", (await PP("/api/panel/act", { do: "room.rules", place: "founder", answer: "maybe" })).status], [200, true, 400]);
     check("a project is made and switched from the panel, and switched back", [(await PP("/api/panel/act", { do: "project.new", name: "Other thing" })).status, (await GP("/api/cards")).json.project.id, (await PP("/api/panel/act", { do: "project.use", id: "default" })).status, (await GP("/api/cards")).json.project.id], [200, "other-thing", 200, "default"]);
     const top = (await deckP())[0];

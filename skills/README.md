@@ -111,6 +111,21 @@ Optional, and simply absent elsewhere:
   placeholder}`, `phrase {placeholder}`, `rules`, `submit` ("Reddit's own
   Comment button"), `appeals`. The heart's cards carry no platform word of
   their own; a platform that declares none still reads as plain English.
+- `account` — how the browser can answer for the person, so nobody types a
+  name the machine could have found:
+  - `cookies {url, names}` — the cookies this site sets when you are signed
+    in. Checked for **presence only**: the panel asks Chrome whether one is
+    there, never what is in it, and nothing is fetched or opened. That is the
+    honest limit of a cookie — a session does not carry a handle — so this
+    answers "signed in here" and no more. Needs the `cookies` permission,
+    which is optional in the manifest and asked for on a press.
+  - `whoami {url, of(finalUrl)}` — an address that **redirects** to your own
+    profile while you are signed in. The engine opens it on the lane like any
+    other page, at a person's pace, in a tab you can watch, and reads the
+    handle out of where it landed with `of()`. The page itself is never
+    parsed. Return `null` from `of()` for anything that is not a profile —
+    a login page is what a signed-out browser gets, and guessing there would
+    record a stranger as you.
 - `composer` — `{opens, replies, hosts, comments}`: the labels that open a
   composer, the labels on a reply box, the custom elements that host one,
   and the custom element that holds one comment (so a comment on the post

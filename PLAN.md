@@ -1062,6 +1062,31 @@ Reddit stays the only scout built.
   live fixture and Reddit passes with the reloaded extension, then the
   "done when" run.
 
+**0.11.0 — one book, no platform in the furniture, the browser answers for
+you.** Three surfaces (the website, the panel, the local dashboard) now share
+`extension/tokens.css` — the palette, the type and both themes, one file whose
+copy in the website's repo is checked byte for byte by a digest pinned in both
+suites (`docs/design.md`). No rule on any surface names a colour any more; the
+panel and the dashboard carry no literal at all, and `--on-lime` exists so the
+one colour dark must not invert cannot be. The three faces ship with the
+extension (68 KB, SIL OFL) and the dashboard serves them, so the brand draws
+offline and nothing is fetched. The logo is the site's Q, one 512px file, and
+the toolbar sizes are its downscales. The panel gained System/Light/Dark
+(`extension/theme.js`, before first paint, this browser only). Platform words
+left the furniture: the panel's placeholders, the room forms and the account
+question are the adapter's (`labelsOf`, plus a new `bare()` that undoes
+whatever `roomLabel` decorates a room with), an instance can prefer one active
+platform over another (`preferred()`, the stash's `platform`), and the page
+toolkit stopped knowing two custom-element prefixes by name — a hyphen in a
+tag is the web platform's own definition of a component. And the browser now
+answers for you: an adapter may declare `account.cookies` (presence only,
+optional `cookies` permission, asked on a press) so the panel can say which
+platforms this browser is signed into, and `account.whoami` — an address that
+redirects to your own profile — so `mq me` with no argument reads the handle
+off the URL bar instead of your memory. Left: a live whoami against a
+signed-in Reddit (the redirect is measured off Reddit's documented behaviour,
+not off a run here).
+
 ## Next, in order
 
 1. **The CMO, v1 — milestone 1.** The brief is the next section. Built

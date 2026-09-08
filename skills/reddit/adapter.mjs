@@ -61,6 +61,26 @@ export default {
   /** Reddit's own convention for parody communities. */
   parody: isParody,
 
+  /* ------------------------------------------------------------- account */
+
+  /** What the browser already knows, so nobody has to type their own name.
+   *  The cookies are checked for PRESENCE only — Reddit's carry a session,
+   *  not a handle, so they answer "signed in here" and nothing more. The
+   *  handle comes from /user/me/, which Reddit redirects to your own profile
+   *  when you are signed in and to a login page when you are not: the answer
+   *  is in the address, and the page itself is never parsed. */
+  account: {
+    cookies: { url: "https://www.reddit.com/", names: ["reddit_session", "token_v2"] },
+    whoami: {
+      url: "https://www.reddit.com/user/me/",
+      of: (url) => {
+        const m = /^https?:\/\/(?:[a-z0-9-]+\.)?reddit\.com\/user\/([^/?#]+)/i.exec(String(url ?? ""));
+        const name = m ? decodeURIComponent(m[1]) : "";
+        return /^[\w-]{3,20}$/.test(name) && !/^me$/i.test(name) ? name : null;
+      },
+    },
+  },
+
   /* -------------------------------------------------------------- labels */
 
   /** What the deck and the dashboard say when they mean this platform. The
