@@ -10,6 +10,7 @@
 // with a 48-hour retention rule should not ship somebody's comments in its
 // own test directory.
 
+import "../lib/node.mjs";   // the Node host for lib/fs.mjs — first, before anything in lib/
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -42,6 +43,9 @@ import { conversationRows, bindConversations, recordReturn, recordTurn, closeCon
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ES = join(here, "mq.mjs");
+// The built-in platform loads when an entry point asks, not at import
+// (lib/platform.mjs, 0.10.0) — this suite is one.
+await loadPlatforms(null);
 const box = mkdtempSync(join(tmpdir(), "mq-test-"));
 const env = { ...process.env, MQ_DIR: join(box, ".mq") };
 const es = (args) => execFileSync(process.execPath, [ES, ...args], { env, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
@@ -1275,7 +1279,9 @@ check("a proposal with a verb outside the law never renders",
 // and the finding verbs never do. If one of these moves, somebody added a
 // second way to read — that must be a decision, not a drive-by.
 {
-  const cli = readFileSync(ES, "utf8");
+  // The CLI is bin/mq.mjs (argv, usage, stdin) over lib/verbs.mjs (the verbs
+  // themselves, 0.10.0): the rule holds over both.
+  const cli = [ES, join(here, "..", "lib", "verbs.mjs")].map((f) => readFileSync(f, "utf8")).join("\n");
   check("the CLI fetches nothing but the hub (pull) — every platform read is a lease in the browser",
     (cli.match(/\bfetch\(/g) ?? []).length, 1);
   // sync, check, back — and the tick's return pass (0.7.0): four seats.

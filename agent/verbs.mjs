@@ -7,6 +7,7 @@
 // verb, shared with the dashboard's buttons and the MCP tools. The refusals,
 // the governor and the rubric hash all live down there, which is exactly why.
 
+import "../lib/node.mjs";   // the Node host for lib/fs.mjs — first, before anything in lib/
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";

@@ -24,6 +24,7 @@
 // Cloudflare Tunnel if they are customers) and hand each client a token from
 // the dashboard's Settings page.
 
+import "../lib/node.mjs";   // the Node host for lib/fs.mjs — first, before anything in lib/
 import { existsSync } from "node:fs";
 import { createServer } from "node:http";
 import { store, dataDir } from "../lib/store.mjs";

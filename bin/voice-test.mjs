@@ -18,6 +18,7 @@
 //
 //   node bin/voice-test.mjs
 
+import "../lib/node.mjs";   // the Node host for lib/fs.mjs — first, before anything in lib/
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {

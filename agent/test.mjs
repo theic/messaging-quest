@@ -12,6 +12,7 @@
 // and every one of those said into the inbox. The control lane is a stub
 // that remembers what it was asked to do.
 
+import "../lib/node.mjs";   // the Node host for lib/fs.mjs — first, before anything in lib/
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";

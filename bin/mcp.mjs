@@ -28,6 +28,7 @@
 // Zero dependencies, like everything else here: MCP over stdio is
 // newline-delimited JSON-RPC, and that is thirty lines of plumbing.
 
+import "../lib/node.mjs";   // the Node host for lib/fs.mjs — first, before anything in lib/
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
