@@ -75,7 +75,18 @@ export function account({ storage, fetch = globalThis.fetch, url = SUPABASE_URL,
       const e = String(email ?? "").trim().toLowerCase();
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return { error: "that is not an email address" };
       const res = await fetch(`${url}/auth/v1/otp`, { method: "POST", headers: headers(), body: JSON.stringify({ email: e, create_user: true }) });
-      if (!res.ok) return { error: said(await parse(res), `Supabase said ${res.status}`) };
+      if (!res.ok) {
+        const body = await parse(res);
+        const why = said(body, `Supabase said ${res.status}`);
+        // The site guards this door: a human check (Cloudflare Turnstile,
+        // 2026-09-05) that only its own page can show, and, until the launch,
+        // no new accounts and no auth mail at all (2026-09-07). The panel
+        // cannot pass either; the site's connect page can, for an account
+        // that exists — say so instead of quoting GoTrue.
+        if (body?.code === "captcha_failed" || /captcha/i.test(why)) return { error: `the site asks for a human check before it mails a code, and only its own page can show one — sign in on ${SITE}/link and press Connect this browser instead`, door: "captcha" };
+        if (/signup|sign-up|sign up|disabled|not allowed/i.test(why)) return { error: `the site is not making new accounts or sending sign-in mail right now — sign in on ${SITE}/link (Google works for an account that exists) and press Connect this browser`, door: "closed" };
+        return { error: why };
+      }
       return { ok: true, email: e };
     },
 

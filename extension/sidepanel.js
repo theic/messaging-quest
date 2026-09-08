@@ -885,17 +885,23 @@ function drawSettings() {
         btn("Sign out", async () => { await ext.runtime.sendMessage({ type: "account.out" }).catch(() => {}); await refreshAccount(); drawView(); }),
       ));
     } else if (!accountEmail) {
+      // The site's door first: it signs you in there (Google works for an
+      // account that exists) and hands this extension a session of its own.
+      // The code by email is the second door, and only while the site's
+      // email door is open — it has a human check the panel cannot show, and
+      // is shut altogether until the launch.
+      const link = el("a", "es-link", "Connect this browser on messaging.quest ↗");
+      link.href = `${SITE}/link`; link.target = "_blank"; link.rel = "noreferrer noopener";
+      box.append(el("p", "es-sub", "Sign in there, press Connect this browser, and this extension gets a session of its own."));
+      box.append(link);
       const email = input("you@example.com", "", "email");
       email.setAttribute("aria-label", "email address");
+      box.append(el("p", "es-sub", "Or, when the site's email door is open: a 6-digit code, mailed to you, typed here."));
       box.append(row(email, btn("Send a code", async () => {
         const out = await ext.runtime.sendMessage({ type: "account.start", email: email.value }).catch((e) => ({ error: String(e?.message ?? e) }));
         if (out?.error) { tabError(out.error); return; }
         accountEmail = out.email; tabError(""); drawView();
-      }, "es-primary es-small")));
-      box.append(el("p", "es-note", "A 6-digit code, mailed to you, typed here. No password, no link to click."));
-      const link = el("a", "es-link", "Or connect this browser on messaging.quest ↗");
-      link.href = `${SITE}/link`; link.target = "_blank"; link.rel = "noreferrer noopener";
-      box.append(link);
+      }, "es-small")));
     } else {
       const code = input("the 6-digit code from the email", "");
       code.setAttribute("aria-label", "the code from the email");

@@ -2003,7 +2003,11 @@ check("a proposal with a verb outside the law never renders",
       calls.push([init.method ?? "GET", u.pathname, body]);
       const json = (status, obj) => new Response(JSON.stringify(obj), { status, headers: { "content-type": "application/json" } });
       const authed = /^Bearer (good|fresh)$/.test(init.headers?.authorization ?? "");
-      if (u.pathname === "/auth/v1/otp") return json(200, {});
+      if (u.pathname === "/auth/v1/otp") {
+        if (body.email === "captcha@example.com") return json(400, { code: "captcha_failed", msg: "captcha protection: request disallowed (invalid-input-response)" });
+        if (body.email === "shut@example.com") return json(422, { code: "signup_disabled", msg: "Signups not allowed for this instance" });
+        return json(200, {});
+      }
       if (u.pathname === "/auth/v1/verify") {
         if ((body.type === "email" && body.token === "123456") || (body.type === "magiclink" && body.token_hash === "hash-ok")) return json(200, { access_token: "good", refresh_token: "r1", expires_in: 3600, user: USER });
         return json(403, { msg: "Token has expired or is invalid" });
@@ -2030,6 +2034,7 @@ check("a proposal with a verb outside the law never renders",
     const S2 = await A.attach(h);
     check("signed out, a sync is skipped and a bad address refused before any request", [(await A.status()).signedIn, await A.syncNow(), await A.signInStart("nope")], [false, { skipped: "signed out" }, { error: "that is not an email address" }]);
     check("the code is asked for, with create_user, the address lowercased", [await A.signInStart("Sam@Example.com"), calls.at(-1)], [{ ok: true, email: "sam@example.com" }, ["POST", "/auth/v1/otp", { email: "sam@example.com", create_user: true }]]);
+    check("the site's human check and its shut door are named, with the connect page as the way in", [(await A.signInStart("captcha@example.com")).door, /messaging\.quest\/link/.test((await A.signInStart("captcha@example.com")).error), (await A.signInStart("shut@example.com")).door, /Google/.test((await A.signInStart("shut@example.com")).error)], ["captcha", true, "closed", true]);
     check("a wrong code is the server's sentence; the right one signs in, spaces and all", [await A.signInVerify("sam@example.com", "000000"), await A.signInVerify("sam@example.com", "123 456"), (await A.status()).email], [{ error: "Token has expired or is invalid" }, { ok: true, email: "sam@example.com" }, "sam@example.com"]);
     table.set("/mq/rule.md", { content: "account rule", updated_at: "2023-11-14T22:13:00.000Z" });
     table.set("/mq/project.md", { content: "what we sell", updated_at: "2023-11-14T22:13:01.000Z" });
