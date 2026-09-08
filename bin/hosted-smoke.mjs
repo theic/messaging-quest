@@ -96,6 +96,13 @@ try {
   check("account.status: signed out", (await msg(pc, { type: "account.status" })).signedIn, false);
   await pc.eval(`document.querySelector('.es-tabs [data-view="deck"]').click()`);
 
+  // An install from before 0.10.0 saved a server address and no mode: it
+  // stays local, so an upgrade does not hide the data its server holds.
+  await pc.eval(`chrome.storage.local.set({ base: "http://127.0.0.1:8787" })`);
+  check("a saved server address and no mode reads as local", (await msg(pc, { type: "settings" })), { mode: "local", base: "http://127.0.0.1:8787" });
+  await pc.eval(`chrome.storage.local.remove(["base", "mode"])`);
+  check("...and a fresh install as hosted", (await msg(pc, { type: "settings" })).mode, "hosted");
+
   check("a probe starts in the worker", (await msg(pc, { type: "api", method: "POST", path: "/api/panel/act", query: {}, body: { do: "probe", place: "saas", q: "cold outreach" } })).status, 200);
   let seen = null;
   for (let i = 0; i < 25 && !seen; i++) { await sleep(1000); const d = (await msg(pc, { type: "api", method: "GET", path: "/api/cards", query: {}, body: null })).body; if (d.control.grants.length || d.recent.length) seen = d; }
