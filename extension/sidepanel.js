@@ -923,7 +923,7 @@ function drawSettings() {
       });
     } catch { inc.textContent = ""; }
   } else {
-    srv.append(el("p", "es-sub", "This is the panel served as a page. In Chrome, load the extension (chrome://extensions → Load unpacked → the repo's extension/ folder) to type drafts into the composer and to read pages."));
+    srv.append(el("p", "es-sub", "This is the panel served as a page. Install the extension — from the Chrome Web Store, or chrome://extensions → Load unpacked → the repo folder itself — to type drafts into the composer and to read pages."));
   }
   browser.append(srv);
   if (!hosted()) {

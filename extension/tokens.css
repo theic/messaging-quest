@@ -48,8 +48,21 @@
   --coral: #ff5c3a;
   --coral-ink: #b3391f; /* coral as legible text ON the ground */
   --coral-wash: #f9e8de;
-  --screen: #0a0a0b;   /* the dark glass behind pixel art, in both themes */
+  --on-coral: #ffffff;  /* text ON coral — see the note above, same reason */
   --warn: #8a6a00;
+
+  /* The dark glass. --screen does not move between themes (it is a material,
+     not a ground), so what is legible on it does not move either. */
+  --screen: #0a0a0b;
+  --on-screen: #f6f6f2;
+  --on-screen-soft: #9a9a94;
+
+  /* A second ground, for a surface that wants a clean sheet rather than the
+     kraft paper: no grain, a whiter card, hairlines a shade lighter. */
+  --sheet: #faf9f5;
+  --sheet-card: #ffffff;
+  --sheet-bg: #f7f6f1;
+  --sheet-2: #f3f1ea;
 
   --line: rgba(29, 28, 21, .2);    /* a hairline */
   --line-2: rgba(29, 28, 21, .42); /* a rule you are meant to notice */
@@ -60,6 +73,7 @@
   --ink-rgb: 29, 28, 21;
   --lime-rgb: 201, 255, 46;
   --coral-rgb: 255, 92, 58;
+  --warn-rgb: 255, 207, 92;
 
   /* —— names older rules use, remapped onto the palette so that every
         existing rule inherits the skin (and the dark half) for free —— */
@@ -104,13 +118,19 @@
     --coral: #ff8a6f;
     --coral-ink: #ff8a6f;
     --coral-wash: #3a201a;
-    --screen: #0a0a0b;
+    --on-coral: #1d1c15;
     --warn: #e5b53f;
+    --sheet: #101012;
+    --sheet-card: #17171a;
+    --sheet-bg: #1b1b1e;
+    --sheet-2: #141416;
     --line: rgba(232, 230, 218, .2);
     --line-2: rgba(232, 230, 218, .42);
     --dot: rgba(232, 230, 218, .05);
     --shadow: rgba(0, 0, 0, .6);
     --ink-rgb: 232, 230, 218;
+    --coral-rgb: 255, 138, 111;
+    --warn-rgb: 229, 181, 63;
     --panel-2: #1a1a1d;
   }
 }
@@ -132,12 +152,18 @@
   --coral: #ff8a6f;
   --coral-ink: #ff8a6f;
   --coral-wash: #3a201a;
-  --screen: #0a0a0b;
+  --on-coral: #1d1c15;
   --warn: #e5b53f;
+  --sheet: #101012;
+  --sheet-card: #17171a;
+  --sheet-bg: #1b1b1e;
+  --sheet-2: #141416;
   --line: rgba(232, 230, 218, .2);
   --line-2: rgba(232, 230, 218, .42);
   --dot: rgba(232, 230, 218, .05);
   --shadow: rgba(0, 0, 0, .6);
   --ink-rgb: 232, 230, 218;
+  --coral-rgb: 255, 138, 111;
+  --warn-rgb: 229, 181, 63;
   --panel-2: #1a1a1d;
 }

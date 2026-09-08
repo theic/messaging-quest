@@ -54,7 +54,7 @@ import { conversationRows, bindConversations, recordReturn, recordTurn, closeCon
 const here = dirname(fileURLToPath(import.meta.url));
 // The design book, pinned. The website repo pins the same number for its
 // copy of extension/tokens.css; if you change the palette, both move.
-const TOKENS_SHA = "f6015d2a9f6caf19b7894c5eb3a5f498a237751e963ddd726bb3dc79bf660ae2";
+const TOKENS_SHA = "d40154c3be7f03064377b9940dd8604b3886e5dd264a1a30c4233b021a970339";
 const ES = join(here, "mq.mjs");
 // The built-in platform loads when an entry point asks, not at import
 // (lib/platform.mjs, 0.10.0) — this suite is one.
@@ -1403,6 +1403,18 @@ check("a proposal with a verb outside the law never renders",
   check("the design book is the bytes the website pins too", sha256js(book), TOKENS_SHA);
   const rules = book.replace(/\/\*[\s\S]*?\*\//g, "").trim();
   check("...and nothing in it is surface-specific: only :root, no font file, no component", [/@font-face/.test(rules), /url\(/.test(rules), rules.startsWith(":root")], [false, false, true]);
+  // The dark values are written twice — once for the system's choice, once
+  // for a person who overrode it — because CSS gives one block one home.
+  // Two copies that disagree is a theme that changes when you touch a
+  // switch, so they are compared here rather than by eye.
+  const declares = (block) => Object.fromEntries([...block.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
+  const media = /@media \(prefers-color-scheme: dark\) \{\s*:root:not\(\[data-theme="light"\]\) \{([\s\S]*?)\n  \}/.exec(rules);
+  const attr = /:root\[data-theme="dark"\] \{([\s\S]*?)\n\}/.exec(rules);
+  check("the two ways of asking for dark say exactly the same thing", [Boolean(media), Boolean(attr), JSON.stringify(declares(media?.[1] ?? "")) === JSON.stringify(declares(attr?.[1] ?? ""))], [true, true, true]);
+  // Every name the dark half moves must exist in the light half, or a theme
+  // is inventing a token nothing declared.
+  const light = declares(/^:root \{([\s\S]*?)\n\}/.exec(rules)?.[1] ?? "");
+  check("...and every name it moves was declared light first", Object.keys(declares(attr?.[1] ?? "")).filter((k) => !(k in light)), []);
 }
 
 // The heart carries no platform word: labels come from the adapter, with
