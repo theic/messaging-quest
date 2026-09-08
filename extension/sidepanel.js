@@ -57,6 +57,7 @@ const VIEWS = { deck: $("view-deck"), campaigns: $("view-campaigns"), rooms: $("
 
 let current = null;      // the card on screen
 let shownSig = null;     // the card as drawn — redrawn only when the deck's first card changes
+let INSTANCE = null;     // this profile's worker on the lane; the deck poll carries it so new tabs open where the panel is
 let deckCards = [];      // every card dealt, the one on screen first
 let pollTimer = null;
 let projectShown = null; // the project key the picker was last drawn for
@@ -81,7 +82,7 @@ const postJSON = async (path, body) => {
 
 async function load() {
   try {
-    const [deck, st] = await Promise.all([getJSON("/api/cards"), getJSON("/api/panel").catch(() => null)]);
+    const [deck, st] = await Promise.all([getJSON(INSTANCE ? `/api/cards?instance=${encodeURIComponent(INSTANCE)}` : "/api/cards"), getJSON("/api/panel").catch(() => null)]);
     const { cards, jobs, control, tasks, project, brain, recent } = deck;
     if (st) state = st;
     deckCards = cards ?? [];
@@ -174,6 +175,11 @@ function drawStatus() {
   // tab each holds is one click away in the "Messaging Quest" group.
   for (const t of served.tasks) lines.push({ text: `${t.title} — ${t.status === "blocked" ? "needs you on the card" : "reading in its tab"}`, since: null, live: t.status !== "blocked" });
   if (!served.tasks.length) for (const l of served.control?.leases ?? []) lines.push({ text: `${l.task || "a task"} holds ${l.tabs.length === 1 ? "a tab" : `${l.tabs.length} tabs`}`, since: null, live: true });
+  // The extension loaded in more than one Chrome profile: every worker is on
+  // the lane, and a tab is reachable only from the profile that opened it.
+  // The engine opens its tabs where the panel is; this says so, in both.
+  const profiles = served.control?.instances ?? 0;
+  if (profiles > 1) lines.push({ text: `The extension is loaded in ${profiles} Chrome profiles — tabs open in the one whose panel is open (the first, when both are). Load it in one.`, since: null, live: false, warn: true });
   const busy = lines.some((l) => l.live);
   if (!busy) {
     const r = served.recent[0];
@@ -183,7 +189,7 @@ function drawStatus() {
   statusBox.replaceChildren();
   statusBox.classList.toggle("es-status-busy", busy);
   for (const l of lines) {
-    const line = el("div", `es-status-line${l.failed ? " es-status-failed" : ""}${l.quiet ? " es-status-quiet" : ""}`);
+    const line = el("div", `es-status-line${l.failed ? " es-status-failed" : ""}${l.quiet ? " es-status-quiet" : ""}${l.warn ? " es-status-warn" : ""}`);
     const dot = el("span", `es-status-dot${l.live ? " es-live" : ""}`);
     dot.setAttribute("aria-hidden", "true");
     line.append(dot, el("span", "es-status-text", l.text));
@@ -830,10 +836,13 @@ $("ask").addEventListener("keydown", (e) => { if (e.key === "Enter") ask(); });
 for (const b of document.querySelectorAll(".es-tabs button")) b.addEventListener("click", () => showView(b.dataset.view));
 
 const savedBase = ext ? ext.storage.local.get({ base: DEFAULT_BASE }) : Promise.resolve({ base: DEFAULT_BASE });
-savedBase.then(({ base: saved }) => {
+savedBase.then(async ({ base: saved }) => {
   base = saved;
   const dash = $("dash");
   dash.href = `${base}/`;
   dash.addEventListener("click", (e) => { e.preventDefault(); openTab(`${base}/`); });
+  // The worker's name on the lane: while this panel is the one open, the
+  // engine opens its tabs in THIS profile (two open: the first keeps it).
+  if (ext) { try { INSTANCE = (await ext.runtime.sendMessage({ type: "instance" }))?.instance ?? null; } catch { INSTANCE = null; } }
   load();
 });

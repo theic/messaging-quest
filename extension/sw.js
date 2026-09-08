@@ -16,7 +16,7 @@
 // the alarm restarts the loop once Chrome has killed the worker anyway.
 // Neither alone is enough (the predecessor's bridge learned this the hard way).
 
-import { ensureControlLoop, insertDraft } from "./control.js";
+import { ensureControlLoop, insertDraft, instanceId } from "./control.js";
 
 const DEFAULT_BASE = "http://127.0.0.1:8787";
 
@@ -57,6 +57,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 // sent. Only the panel can send this — runtime messages come from this
 // extension's own pages.
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
+  // `instance`: the worker's name on the lane, which the panel puts on its
+  // deck poll so the engine opens its tabs in this profile.
+  if (msg?.type === "instance") { instanceId().then((instance) => reply({ instance }), () => reply({ instance: null })); return true; }
   if (msg?.type !== "insert") return false;
   insertDraft(Number(msg.tabId), String(msg.text ?? ""), msg.spec ?? {}, { clipboard: Boolean(msg.clipboard) })
     .then(reply, (e) => reply({ ok: false, reason: String(e?.message ?? e) }));

@@ -431,6 +431,32 @@ the campaign in the browser, 7 judged and 4 fit, the room watched under it,
 and a draft that disclosed once, linked nothing, offered and asked — with the
 claims guard firing because me.md was empty.
 
+**One Chrome profile at a time on the lane (2026-09-07, 0.9.2).** The
+retest after 0.9.1 merged: every probe ended within a second with "that tab
+is gone", alternating with a good answer. The extension was loaded in two
+Chrome profiles, both workers long-polling the one lane; a job went to
+whichever answered first, and a tab is visible only to the profile that
+opened it. The rule, in the broker: each worker names itself (a random id
+in session storage — a worker restart keeps it, a Chrome restart does not)
+and every poll carries the name; a lease is bound to the instance that ran
+its first job, and every later job on it — the reads, the release — goes
+to that instance only; a job that opens a new tab goes to the OWNER: the
+instance whose panel the operator has open (the panel puts the name on its
+deck poll), else the first to arrive; a second panel does not take the lane
+from one seen within the minute, so two open panels are stable; an instance
+silent for ninety seconds is off the lane (a worker does not poll while it
+runs a job, so one with a job in hand is busy, not silent), and a call on
+its tab is answered out of reach at once instead of after the job's
+timeout; the owner role moves after thirty seconds without a poll, so a
+reloaded or closed profile does not stall the next tab until the job's own
+timeout — measured on the first live run: a lease unanswered for sixty
+seconds while the old owner aged out at ninety. `/api/cards`
+carries `control.instances`; the strip says, in both profiles, that the
+extension is loaded in two and where tabs open. Not chosen: refusing the
+second worker outright (a profile the operator just switched to would be
+dark until the other closed), or the server picking a profile itself (it
+cannot see them; the panel can).
+
 **Where a reply lands, the strip at the top, the judge on its own clock
 (2026-09-07, 0.9.1).** Three things the operator hit on the first day with
 the extension in hand. ONE: "Open the thread & type it in" put the words
@@ -737,6 +763,21 @@ Reddit stays the only scout built.
   broker refusal, debugger screenshot and release passed live; reads waited
   on the reddit.com grant. The grant ask now outlives the lease that hit
   the wall (it vanished with the smoke test's tab before).
+- 0.9.2 (2026-09-07), built — one Chrome profile at a time on the lane.
+  lib/control.mjs: `claim(wait, instance)` binds a lease to the instance
+  that ran its first job and hands its jobs to that instance only; a job
+  that opens a tab goes to the owner — the instance whose panel was seen
+  last (`panelSeen`, fed by `/api/cards?instance=`), else the first
+  poller; an instance silent for 90 s is dropped, `act` on its lease fails
+  at once and `release` does not wait; `instances()`, `owner()`.
+  extension/control.js `instanceId()` (chrome.storage.session) on every
+  poll; sw.js answers `{type: "instance"}`; sidepanel.js sends it on the
+  deck poll, and the strip warns when `control.instances > 1`. Found on
+  the 0.9.1 retest: the extension in two profiles, every probe "that tab is
+  gone" within a second. Tests: the two-profile block in bin/test.mjs.
+  README: a TL;DR at the top — the install in five steps, with the free
+  OpenRouter key and "in one Chrome profile"; the old Install section is
+  now "What free means here".
 - 0.9.1 (2026-09-07), built — where a reply lands, the strip, the judge by
   itself. INSERT: extension/insert.js composerState takes the elements that
   hold a comment and the card's target; a typable box wearing an opener's

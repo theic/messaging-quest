@@ -959,6 +959,74 @@ srvC.kill();
   check("a lease nobody claims dies with its reason", /unanswered/.test((await dead.lease({ task: "t", url: "https://x.y/" })).error), true);
 }
 
+/* ------------------------------------------ two Chrome profiles, one lane */
+
+// Measured 2026-09-07: the extension loaded in two Chrome profiles, both
+// workers polling — a probe's jobs went to whichever answered first, and the
+// tab one profile had opened was "that tab is gone" to the other. A tab is
+// bound to the instance that opened it; a new tab opens where the panel is.
+{
+  const tick = () => new Promise((r) => setTimeout(r, 15));
+  const b = controlBroker({ ttlMs: 60_000, paceMs: 0, silentMs: 200, freshMs: 120, panelMs: 60_000 });
+  check("nobody on the lane yet", b.instances(), 0);
+  const leasing = b.lease({ task: "scout", url: "https://www.reddit.com/r/saas/" });
+  await tick();
+  let jobs = await b.claim(0, "A");
+  check("the first profile to arrive opens the tab", jobs.map((j) => j.tool), ["lease"]);
+  check("the second is on the lane, counted, and gets nothing of it", [(await b.claim(0, "B")).length, b.instances(), b.owner()], [0, 2, "A"]);
+  b.answer(jobs[0].id, { tabId: 12, groupId: 3, windowId: 1 });
+  const L = await leasing;
+  const reading = b.act(L.id, "get_page_text", {});
+  await tick();
+  check("a job on that tab never goes to the profile that cannot see it", (await b.claim(0, "B")).length, 0);
+  jobs = await b.claim(0, "A");
+  check("...it waits for the one that opened it", jobs.map((j) => [j.tool, j.input.tabId]), [["get_page_text", 12]]);
+  b.answer(jobs[0].id, { text: "hi" });
+  check("...and the answer comes back", (await reading).text, "hi");
+  // Where the operator looks: B's panel is open, A's was never seen.
+  check("the open panel takes the lane for NEW tabs", [b.panelSeen("B"), b.owner()], [true, "B"]);
+  const leasing2 = b.lease({ task: "second", url: "https://example.com/" });
+  await tick();
+  check("a new tab opens in the profile whose panel is open", (await b.claim(0, "A")).length, 0);
+  const jb = await b.claim(0, "B");
+  check("...that one", jb.map((j) => j.tool), ["lease"]);
+  b.answer(jb[0].id, { tabId: 40 });
+  const L2 = await leasing2;
+  check("a second panel, opened while the first is still seen, does not take it", [b.panelSeen("A"), b.owner()], [false, "B"]);
+  check("a panel whose worker is not on the lane cannot take it", b.panelSeen("C"), false);
+  // The tab A opened is still A's to close.
+  const releasing = b.release(L.id);
+  await tick();
+  const rb = await b.claim(0, "B");
+  const ra = await b.claim(0, "A");
+  check("closing a tab is the job of the profile that holds it", [rb.length, ra.map((j) => j.tool)], [0, ["release"]]);
+  b.answer(ra[0].id, { ok: true });
+  check("...and the lease closes", (await releasing).ok, true);
+  // B goes silent (that profile closed): its tab is out of reach, the lane is A's alone.
+  await new Promise((r) => setTimeout(r, 250));
+  await b.claim(0, "A");
+  check("a profile silent past the limit is off the lane, and the lane is the other's", [b.instances(), b.owner()], [1, "A"]);
+  check("a tab that profile opened is out of reach, said at once", /not on the lane any more/.test((await b.act(L2.id, "get_page_text", {})).error), true);
+  check("...and releasing it does not wait on a worker that is gone", (await b.release(L2.id)).unreachable, true);
+  // A worker running a long job is busy, not silent: its tab stays reachable and it keeps the lane.
+  const leasing3 = b.lease({ task: "third", url: "https://example.com/y" });
+  await tick();
+  const j3 = await b.claim(0, "A");
+  await new Promise((r) => setTimeout(r, 250));
+  check("a worker with a job in hand is not silent, however long the page takes", [b.instances(), b.owner(), b.attached()], [1, "A", true]);
+  b.answer(j3[0].id, { tabId: 7 });
+  const L3 = await leasing3;
+  check("...and its tab is still its own", L3.tabId, 7);
+  // An extension that names no instance is the lane's, as before.
+  const b2 = controlBroker({ ttlMs: 60_000, paceMs: 0 });
+  const l2 = b2.lease({ task: "old", url: "https://example.com/" });
+  await tick();
+  const j2 = await b2.claim(0);
+  check("an extension that names no instance is served as before", j2.map((j) => j.tool), ["lease"]);
+  b2.answer(j2[0].id, { tabId: 1 });
+  check("...and holds its tab", (await l2).tabId, 1);
+}
+
 /* ---------------------------------------------- findings from the browser */
 
 // The scout reads a search page in the operator's own browser and records
@@ -1811,6 +1879,7 @@ check("a proposal with a verb outside the law never renders",
     const panelHtml = await (await fetch(baseP + "/panel/")).text();
     const deckNow = await (await fetch(baseP + "/api/cards")).json();
     check("...and the strip at the top: on the page, styled, fed by the deck's running and recent jobs", [/id="status"/.test(panelHtml), /id="jobs"/.test(panelHtml), /es-status-dot/.test(await (await fetch(baseP + "/panel/card.css")).text()), Array.isArray(deckNow.recent), Array.isArray(deckNow.jobs)], [true, false, true, true, true]);
+    check("...which also says how many Chrome profiles are on the lane, so the strip can warn when it is more than one", typeof deckNow.control?.instances, "number");
   }
   srvP.kill();
 }

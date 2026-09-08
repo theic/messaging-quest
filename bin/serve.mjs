@@ -2086,6 +2086,7 @@ const controlSummary = () => ({
   attached: CONTROL.attached(),
   leases: CONTROL.leases().map((l) => ({ id: l.id, task: l.task, url: l.url, tabs: l.tabs })),
   grants: CONTROL.grantsNeeded(),
+  instances: CONTROL.instances(),
 });
 
 /* -------------------------------------------------------------- the panel */
@@ -2265,6 +2266,10 @@ const server = createServer((req, res) => {
 
   /* The deck — what the extension's side panel lives on. */
   if (url.pathname === "/api/cards" && req.method === "GET") {
+    // The extension's panel names its worker: the profile whose panel is
+    // open is where the lane opens new tabs (lib/control.mjs panelSeen).
+    const instance = url.searchParams.get("instance");
+    if (instance) CONTROL.panelSeen(instance);
     let body;
     try {
       const cards = nextCards(cardSnapshot());
@@ -2343,7 +2348,7 @@ const server = createServer((req, res) => {
 
   if (url.pathname === "/api/control/jobs" && req.method === "GET") {
     const wait = Math.min(25_000, Math.max(0, Number(url.searchParams.get("wait")) || 0));
-    return CONTROL.claim(wait)
+    return CONTROL.claim(wait, url.searchParams.get("instance"))
       .then((jobs) => res.writeHead(200, JSON_HEAD).end(JSON.stringify({ jobs })))
       .catch(() => res.writeHead(200, JSON_HEAD).end(JSON.stringify({ jobs: [] })));
   }

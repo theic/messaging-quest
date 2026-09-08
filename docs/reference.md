@@ -139,6 +139,16 @@ the conversation" on Reddit — a small textarea that a click swaps for the real
 editor), a real click into the editor, the draft as one piece, a real Ctrl+V
 when the editor ignored that. Reddit's own button is yours.
 
+One Chrome profile at a time. The extension loaded in two profiles is two
+workers on the lane, and a tab is visible only to the profile that opened it.
+So each worker names itself (a random id kept for the browser session), the
+engine binds every tab to the worker that opened it and sends that tab's jobs
+— the reads, the closing — to that worker only, and a new tab opens in the
+profile whose panel is open (the first, when both are). The strip says so in
+both panels when it counts more than one. Measured 2026-09-07, on the 0.9.1
+retest: without this, one probe's jobs went to whichever profile answered
+first, and the tab one had opened was "that tab is gone" to the other.
+
 The extension is also **the only way anything here reads Reddit** (0.6.0).
 There is no feed, no background fetch, no API: a probe, a tick, a colleague's
 search, the site scout — each is a real tab in the "Messaging Quest" window,
