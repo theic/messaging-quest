@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "Messaging Quest",
+  "version": "0.10.0",
+  "description": "Your marketing colleague, one card at a time: who to answer, three ways to say it in your voice, who wrote back. You press Post. It never does.",
+  "icons": {
+    "16": "extension/icons/icon-16.png",
+    "32": "extension/icons/icon-32.png",
+    "48": "extension/icons/icon-48.png",
+    "128": "extension/icons/icon-128.png"
+  },
+  "permissions": ["sidePanel", "storage", "alarms", "scripting", "clipboardWrite", "tabs", "tabGroups", "debugger"],
+  "incognito": "spanning",
+  "host_permissions": ["http://127.0.0.1/*"],
+  "optional_host_permissions": ["https://www.reddit.com/*", "https://old.reddit.com/*", "https://*/*", "http://*/*"],
+  "action": {
+    "default_title": "Messaging Quest",
+    "default_icon": {
+      "16": "extension/icons/icon-16.png",
+      "32": "extension/icons/icon-32.png",
+      "48": "extension/icons/icon-48.png",
+      "128": "extension/icons/icon-128.png"
+    }
+  },
+  "side_panel": {
+    "default_path": "extension/sidepanel.html"
+  },
+  "background": {
+    "service_worker": "extension/sw.js",
+    "type": "module"
+  },
+  "externally_connectable": {
+    "matches": ["https://messaging.quest/*", "https://www.messaging.quest/*"]
+  }
+}
