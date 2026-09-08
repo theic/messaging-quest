@@ -7,6 +7,7 @@
 # package, and the repo's furniture. The upload is the extension — the
 # manifest at the root, extension/, lib/, skills/ — and nothing else.
 store/          export-ignore
+bin/            export-ignore
 research/       export-ignore
 agent/          export-ignore
 docs/           export-ignore
@@ -17,3 +18,4 @@ PLAN.md         export-ignore
 CONTRIBUTING.md export-ignore
 package-lock.json export-ignore
 .gitattributes  export-ignore
+.gitignore      export-ignore
