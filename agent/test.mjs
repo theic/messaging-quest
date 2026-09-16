@@ -20,7 +20,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { AIMessage } from "@langchain/core/messages";
-import { taskManager, normalizeQuestions } from "./tasks.mjs";
+import { taskManager, normalizeQuestions, MAX_WORKERS } from "./tasks.mjs";
 import { loadSkills } from "../lib/skills.mjs";
 import { setPlan } from "../lib/models.mjs";
 
@@ -238,6 +238,122 @@ check("...and capped at twelve", normalizeQuestions(Array.from({ length: 20 }, (
   const done = await until(() => T.get(id).status === "done" && T.get(id));
   check("its findings land in found.jsonl through the CLI", readFileSync(join(DIR, "found.jsonl"), "utf8").includes("t3_zz9"), true);
   check("...and its report quotes the CLI's count, not its own", /1 new post/.test(done?.result ?? ""), true);
+}
+
+/* --------------------------------- the agent keeps its own time (0.12.0) */
+
+// Two colleagues at a time, because there is one browser; a colleague told
+// what time it is and how much budget is left; and a lane that is dark
+// refused up front instead of a timeout that reads like a bug.
+{
+  const control = stubControl();
+  const loop = [() => new AIMessage({ content: "", tool_calls: [{ id: `w${Date.now()}${Math.random()}`, name: "computer", args: { action: "wait", duration: 1 } }] })];
+  const T = taskManager(DIR, { control, modelFor: () => new ScriptedModel(loop) });
+  const a = await T.start("pause-test", { url: "https://example.com/a" }, { title: "first" });
+  const b = await T.start("pause-test", { url: "https://example.com/b" }, { title: "second" });
+  const c = await T.start("pause-test", { url: "https://example.com/c" }, { title: "third" });
+  check("two colleagues may work at once; the third is refused, and the refusal says why in words the CMO can relay",
+    [Boolean(a.id), Boolean(b.id), c.id, /already at work/.test(c.error ?? ""), /one browser between them/.test(c.error ?? ""), /first, second/.test(c.error ?? "")],
+    [true, true, undefined, true, true, true]);
+  check("...and it is the browser that is scarce, so the cap is small and named", MAX_WORKERS, 2);
+  await T.cancel(a.id, "making room");
+  const after = await T.start("pause-test", { url: "https://example.com/d" }, { title: "fourth" });
+  check("...one finishing lets the next one in", Boolean(after.id), true);
+  await T.cancel(b.id, "tidying up");
+  await T.cancel(after.id, "tidying up");
+
+  // What the colleague is told. The scripted model sees every message, so the
+  // brief is read back out of the turn it was built into.
+  const seen = [];
+  const T2 = taskManager(DIR, { control: stubControl(), deadlineMs: 20 * 60_000, modelFor: () => new ScriptedModel([(messages) => { seen.push(messages.map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content))).join("\n")); return new AIMessage({ content: "read it" }); }]) });
+  const { id: told } = await T2.start("pause-test", { url: "https://example.com/" }, { title: "knows the time" });
+  await until(() => T2.get(told).status === "done");
+  check("a colleague is told what time it is, how long it has been at this, and how much running budget is left — as a duration, not a timestamp",
+    [/The clock: /.test(seen[0] ?? ""), /You were started just now/.test(seen[0] ?? ""), /20 minutes of running time left/.test(seen[0] ?? ""), /cancelled where you stand/.test(seen[0] ?? "")],
+    [true, true, true, true]);
+
+  // A lane that says it is dark: refused before a task exists, with the fix.
+  const gone = { ...stubControl(), attached: () => false };
+  const T3 = taskManager(DIR, { control: gone, modelFor: () => new ScriptedModel(loop) });
+  const no = await T3.start("pause-test", { url: "https://example.com/" }, { title: "into the dark" });
+  check("a browser colleague is not started into a dark lane — the answer is the fix, not a timeout",
+    [no.id, /side panel/.test(no.error ?? ""), T3.list().some((t) => t.title === "into the dark")], [undefined, true, false]);
+  check("...and the deck is told something wanted a page", /page-reader/.test(JSON.parse(readFileSync(join(DIR, "cards.json"), "utf8")).browser_wanted?.what ?? ""), true);
+}
+
+/* ------------------------------------ the clock rides in front of the turn */
+
+// The system prompt is fingerprinted over itself (agentFor), so everything
+// that moves between turns — the clock, the lane, the deck — has to ride in
+// the message instead. Here that is a property of two exported functions.
+{
+  const { systemPromptOf, turnPreface } = await import("./strategist.mjs");
+  const first = systemPromptOf(DIR);
+  await sleep(1100);                       // a second of wall clock, so a clock in there would show
+  const second = systemPromptOf(DIR);
+  const preface = await turnPreface(DIR, { wokeBy: "your heartbeat" });
+  check("who the specialist is does not change with the minute — the prompt is stable, so its fingerprint is",
+    // It TELLS the agent it knows the time (the doctrine says so in words);
+    // what it must not carry is a time — a rendered clock or an instant.
+    [first === second, first.length > 200, /The clock: \d|The clock: [A-Z]\w+day/.test(first), first.includes(new Date().toISOString().slice(0, 13))],
+    [true, true, false, false]);
+  check("...while the turn's own preface carries the clock, the browser and why it woke",
+    [/The clock: /.test(preface), /The browser: /.test(preface), /This turn is your heartbeat/.test(preface)], [true, true, true]);
+}
+
+/* ------------------------------------------- the heartbeat's bookkeeping */
+
+// The loop that decides how often the operator's money is spent, driven with
+// its turn injected (the same reason taskManager takes `modelFor`): the
+// schedule it keeps, the back-off after silence, and what resets it. The
+// intervals are milliseconds here so the whole ladder runs in a second.
+{
+  const { startInboxLoop, strategist } = await import("./strategist.mjs");
+  const stash = () => { try { return JSON.parse(readFileSync(join(DIR, "cards.json"), "utf8")); } catch { return {}; } };
+  const clear = (...keys) => { const s = stash(); for (const k of keys) delete s[k]; writeFileSync(join(DIR, "cards.json"), JSON.stringify(s)); };
+  clear("heartbeat_at", "heartbeat_quiet", "operator_at");
+
+  const said = [];
+  let answer = "noted";
+  const control = stubControl();
+  const T = taskManager(DIR, { control, modelFor: () => new ScriptedModel([() => new AIMessage({ content: "done" })]) });
+  const { attachRuntime } = await import("./strategist.mjs");
+  attachRuntime(DIR, { tasks: T, control });
+  await sleep(200);                                                                 // let the manager finish adopting what is on disk
+  writeFileSync(join(DIR, "cards.json"), JSON.stringify({ ...stash(), cmo_cursor: T.inbox().cursor }));   // start from a quiet inbox
+
+  const stop = startInboxLoop(DIR, {
+    everyMs: 40, heartbeatMs: 120, ceilingMs: 480,
+    speak: async (content, opts) => { said.push([content.slice(0, 20), opts?.wokeBy ?? null]); return answer; },
+  });
+  const woke = (n) => until(() => said.length >= n && said.length, 6000);
+
+  await woke(1);
+  check("with nothing in the inbox the specialist is woken anyway, and told nobody asked",
+    [said.length >= 1, /Nobody asked/.test(said[0]?.[0] ?? ""), /heartbeat/.test(said[0]?.[1] ?? "")], [true, true, true]);
+  check("...and the wake is written down, so a restart neither repeats it nor forgets it", Boolean(stash().heartbeat_at), true);
+  await woke(3);
+  check("...saying nothing counts, and the count is what widens the interval", stash().heartbeat_quiet >= 2, true);
+
+  // A real answer resets it: something is happening again.
+  answer = "I put a search on your deck.";
+  const before = said.length;
+  await until(() => said.length > before && !("heartbeat_quiet" in stash()), 6000);
+  check("a heartbeat that actually says something starts the back-off over", "heartbeat_quiet" in stash(), false);
+
+  // And so does the operator: the worst moment to have decided to wake less
+  // often is the moment somebody starts typing.
+  answer = "noted";
+  await until(() => Number(stash().heartbeat_quiet) > 0, 6000);
+  await strategist(DIR, "").catch(() => {});                    // the empty ping is not somebody typing
+  check("an empty ping is not the operator speaking", Boolean(stash().operator_at), false);
+  // No model answers here, and it does not matter: the stash is written the
+  // moment they speak, before any model is asked.
+  const typing = strategist(DIR, "what should I do next?").catch(() => {});
+  check("...and a word from them resets the back-off, whatever the silence had reached",
+    [Boolean(stash().operator_at), "heartbeat_quiet" in stash()], [true, false]);
+  stop();
+  await typing;
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

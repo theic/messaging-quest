@@ -67,13 +67,16 @@ question you want answered). Pick a tab, edit it, or comment on it and all
 three are written again. **Insert** puts your words into Reddit's own comment
 box — the thread's, never under somebody's comment — and reads back that they
 landed; you read them there and press Reddit's button. Everything that runs
-is named at the top of the panel, and the judge runs by itself. Nothing in
-this repository can submit.
+is named at the top of the panel; the judge runs by itself, and so does the
+reading — what is due is read in tabs you can watch, and one switch on
+Settings turns that off. Nothing in this repository can submit.
 
 **A CMO watches the whole thing** (local mode). When somebody writes back,
 their reply lands on your deck before any new person, with the next turn
 drafted. Once a day it reads the numbers per campaign and proposes: pause the
-one that is saturated, aim a new one at a different kind of person. A
+one that is saturated, aim a new one at a different kind of person. It knows
+what time it is and wakes itself every half hour when nothing is happening —
+twice quiet and it wakes half as often, so an idle day is a cheap one. A
 **campaign** is a direction — an angle, a room, a tone, a rule about naming
 what you built — never a template: the writer applies it to one person at a
 time, and the same eight words twice is flagged before you post.

@@ -721,6 +721,37 @@ reads a platform in the user's own session with the toolkit, and its contract
 is the agent.md shape. LinkedIn is a stub definition until it is measured;
 Reddit stays the only scout built.
 
+**The system prompt is its own cache key; everything that moves rides in the
+turn (2026-09-16).** What a turn is told divides cleanly in two. WHO THE
+AGENT IS — persona, doctrine, the operator's memory files, the campaigns, the
+notebook, what the skills teach — is durable, and is the system prompt;
+`agentFor` hashes that string itself as the fingerprint, so a rebuild happens
+when a file changes and at no other time. WHAT IS TRUE RIGHT NOW — the deck,
+the numbers, the clock, whether the browser is attached — rides in front of
+the message (`turnPreface`). The rule is not stylistic: a line that moves
+every minute in the system prompt rebuilds the agent every minute and throws
+the provider's prompt cache away with it, which on a free seat is the whole
+budget. When something new has to reach the agent, decide which half it is
+in before deciding where to put it.
+
+**Quiet has to get cheaper (2026-09-16).** The heartbeat is the first thing
+in this product that spends the operator's money without being asked, so its
+back-off is part of the feature and not a tuning knob: the first silence is
+free, every silence after doubles the interval to a ceiling, and any real
+event or any word from the operator resets it. The same principle applies to
+anything else that wakes up on its own — a loop that costs the same whether
+it is useful or not will be switched off by the person paying for it, and
+then it protects nobody.
+
+**The browser is a detachable tool; a dark lane is a hold, not a failure
+(2026-09-16).** Chrome closes, profiles get switched, the panel is not opened
+in this one. Three consequences, and they are the shape every future
+browser-facing feature takes: everything that does not need a page keeps
+working (verdicts, drafts, campaigns, the conversation); anything that does
+need one answers immediately with a typed, actionable sentence
+(`laneDark()`), never a timeout; and the fix is offered on the deck as a
+card, once, because a failure in a log nobody opens is the same as silence.
+
 ## Done
 
 - 0.1–0.2: listener, waiting-for-you, find, drafts, the gate; dashboard;
@@ -1086,6 +1117,44 @@ redirects to your own profile — so `mq me` with no argument reads the handle
 off the URL bar instead of your memory. Left: a live whoami against a
 signed-in Reddit (the redirect is measured off Reddit's documented behaviour,
 not off a run here).
+
+**0.12.0 — the agent keeps its own time.** Four things nothing owned before.
+THE CLOCK (`lib/clock.mjs`, zero-dependency and pure): the wall clock with
+its zone, the instant, and how long ago the operator spoke / the CMO woke /
+what was due was read, in words — "three hours ago", never "recently". It
+rides in the TURN (`turnPreface`), never in the system prompt, and that is
+now structural rather than remembered: `systemPromptOf()` is hashed as the
+fingerprint, so anything time-varying in there would rebuild the agent every
+turn and be caught by a test that asks for the same prompt twice a second
+apart. Workers get the same plus their remaining budget as a duration, which
+meant stamping `deadlineAt` before the agent is built. THE HEARTBEAT: the
+mail loop got a second reason to fire — with nothing in the inbox the CMO is
+woken every 30 minutes to look at the deck, and the first silence is free
+while every one after doubles the interval to a four-hour ceiling, reset by
+any real event or any word from the operator (`heartbeatEvery`, persisted as
+`heartbeat_at` / `heartbeat_quiet` in the stash so a restart neither resets
+the schedule nor hands out a free turn). It may read, judge, draft, propose
+and write its notebook; it cannot start a task, because nothing can —
+`propose_tasks` deals the card and the click stays the operator's. THE
+SCHEDULER: `autoTick` beside `autoJudge` in `lib/engine.mjs`, guard for
+guard (a model exists, the verb is free, no other read in flight, something
+actually due by the engine's one `dueNow()`, and half an hour after a
+failure), plus an off switch on the panel's Settings and a hold while no
+browser is on the lane. THE BROWSER AS A DETACHABLE TOOL: the lane says
+`attached`, `since` and `stranded`; a dark lane answers a browser tool
+immediately with `laneDark()` — typed, and carrying the fix — instead of
+waiting out the job's minute for a "navigate unanswered" that read like a
+bug; a colleague is never started into it; the CMO is told in every turn and
+answers from the store; and the deck deals ONE card (`work.browser`, in the
+due card's own slot, snoozeable) that names which fix — nothing attached, or
+tabs stranded on a profile that left (0.9.2). A profile cannot be named more
+precisely than that: the instance id is a random UUID the worker mints, so
+"which profile" is honestly a count and a stranded flag. And two colleagues
+at a time (`MAX_WORKERS`), because the browser is the scarce resource, with
+a refused proposal keeping its card instead of spending it. 607 engine tests
++ 45 runtime tests green. Left: the live run (a real key, Chrome attached) —
+the heartbeat's own back-off and the self-started tick have not been watched
+against a real model here.
 
 ## Next, in order
 

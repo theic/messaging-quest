@@ -43,7 +43,9 @@ import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { seat, hasModel } from "../lib/models.mjs";
 import { activeSeat, agentDefinition } from "../lib/skills.mjs";
-import { grantsOf, TOOLKIT } from "../lib/control.mjs";
+import { grantsOf, TOOLKIT, LANE_DARK, laneDark } from "../lib/control.mjs";
+import { wantBrowser } from "../lib/cards.mjs";
+import { clockText, ago, span } from "../lib/clock.mjs";
 import { threadSaver } from "./threads.mjs";
 import { engineTools, VERBS } from "./verbs.mjs";
 
@@ -171,6 +173,19 @@ const WORKER_RULES = `House rules for a colleague working in the operator's own 
 - Finish with a plain report — what you found, in sentences, no headings — then stop. Nothing posts; there is no code path for that anywhere.`;
 
 /**
+ * How many colleagues may work at once (0.12.0).
+ *
+ * The scarce resource is the BROWSER, not the CPU and not the model: one
+ * Chrome, one lane, a per-site pace shared across every lease, and a person
+ * watching tabs open in their own window. `start()` never consulted
+ * `running()`, so N proposals accepted in a row were N workers contending for
+ * one hand — each waiting out the others' 6-second slots, with the operator's
+ * window filling up. Two overlaps a long read with a short one, which is the
+ * whole benefit; more is queueing with extra steps.
+ */
+export const MAX_WORKERS = 2;
+
+/**
  * @param dir       the data directory (.mq)
  * @param control   the control-lane broker (lib/control.mjs) — tabs
  * @param modelFor  optional (def, task) => chat model; the seats by default
@@ -245,8 +260,14 @@ export function taskManager(dir, { control, modelFor = null, deadlineMs = 30 * 6
 
   /* --------------------------------------------------------------- leases */
 
+  /** Is there a hand at all? Asked before every lease (0.12.0): a lease into
+   *  a dark lane waited out the job's whole minute and came back "lease
+   *  unanswered", which reads like a bug and is not one. */
+  const attached = () => (typeof control.attached === "function" ? Boolean(control.attached()) : true);
+
   const openLease = async (task, url) => {
     if (task.lease?.id) return task.lease;
+    if (!attached()) { wantBrowser(dir, task.title); return laneDark(); }
     const r = await control.lease({ task: task.title, url, project: dir });
     if (r.error) return { error: r.error };
     task.lease = { id: r.id, tabId: r.tabId, url };
@@ -312,8 +333,22 @@ export function taskManager(dir, { control, modelFor = null, deadlineMs = 30 * 6
     return new ChatOpenAI({ model: s.model, apiKey: s.key || "none", configuration: { baseURL: s.baseUrl }, maxTokens: s.maxTokens, timeout: s.timeoutMs });
   };
 
+  /** A colleague's own sense of time (0.12.0): what time it is, how long it
+   *  has been at this, and how much running budget is left — the last one as
+   *  a duration, because "26 minutes left" is a thing a worker can act on and
+   *  a deadline timestamp is a thing it has to work out. Waiting on a person
+   *  does not spend it; the budget is re-armed for each run segment. */
+  const budgetLine = (task) => {
+    const left = task.deadlineAt ? Date.parse(task.deadlineAt) - Date.now() : NaN;
+    const started = task.startedAt ? `You were started ${ago(task.startedAt)}.` : "";
+    if (!Number.isFinite(left)) return started;
+    return `${started} You have ${span(left)} of running time left; when it runs out you are cancelled where you stand, so report what you actually found rather than opening one more page.`.trim();
+  };
+
   const brief = (task) => [
     `Task: ${task.title}`,
+    clockText(),
+    budgetLine(task),
     task.input && Object.keys(task.input).length ? `Input: ${JSON.stringify(task.input)}` : "",
     task.input?.campaign ? `Campaign: ${task.input.campaign} — pass it as \`campaign\` to record_findings, so the judge and the writer apply its direction.` : "",
     task.lease?.tabId ? `Your tab is open at ${task.lease.url}. Read it with read_page or get_page_text.` : "",
@@ -342,9 +377,12 @@ export function taskManager(dir, { control, modelFor = null, deadlineMs = 30 * 6
 
   /* ---------------------------------------------------------------- runs */
 
-  const armDeadline = (task, ctrl) => {
-    task.deadlineAt = new Date(Date.now() + deadlineMs).toISOString();
-    const t = setTimeout(() => api.cancel(task.id, `the ${Math.round(deadlineMs / 60_000)}-minute running budget was spent`), deadlineMs);
+  /** The timer for a budget that was already stamped on the task — stamped
+   *  before the agent is built, so the brief it is built with can say how
+   *  much is left (0.12.0). */
+  const armDeadline = (task) => {
+    const left = Math.max(1_000, Date.parse(task.deadlineAt) - Date.now());
+    const t = setTimeout(() => api.cancel(task.id, `the ${Math.round(deadlineMs / 60_000)}-minute running budget was spent`), left);
     t.unref?.();
     return t;
   };
@@ -368,9 +406,10 @@ export function taskManager(dir, { control, modelFor = null, deadlineMs = 30 * 6
     task.questions = null;
     save();
     let agent;
+    task.deadlineAt = new Date(Date.now() + deadlineMs).toISOString();   // before build(): the brief is written with it
     try { agent = await build(task, def); }
     catch (e) { running.delete(task.id); task.error = String(e.message ?? e).split("\n")[0]; return settle(task, "failed", { error: task.error }); }
-    handle.timer = armDeadline(task, ctrl);
+    handle.timer = armDeadline(task);
     const config = { configurable: { thread_id: task.thread }, recursionLimit: 120, signal: ctrl.signal };
     let interrupts = null;
     try {
@@ -467,6 +506,17 @@ export function taskManager(dir, { control, modelFor = null, deadlineMs = 30 * 6
       if (!hasModel(dir)) return { error: "no model to run it on — add an OpenRouter key or pick Local on Settings" };
       const url = input?.url && /^https?:\/\//i.test(String(input.url)) ? String(input.url) : null;
       if (def.grants.length && !url && !input?.brief) return { error: "a browser colleague needs a url to open, or a brief that names one" };
+      // Two at a time, because there is one browser (MAX_WORKERS above). Only
+      // the ones actually RUNNING count: a colleague paused on a question is
+      // waiting for the operator, and refusing to start work because two
+      // workers are waiting on that same operator is a deadlock, not a limit.
+      const atWork = api.running();
+      if (atWork.length >= MAX_WORKERS) {
+        return { error: `${atWork.length} colleague${atWork.length === 1 ? " is" : "s are"} already at work (${atWork.map((t) => t.title).join(", ")}) and there is one browser between them — wait for one to report, or stop it, and start this after.` };
+      }
+      // And no colleague that needs a page is started into a dark lane: it
+      // would open, fail to lease, and report a timeout as if it were a bug.
+      if (def.grants.length && !attached()) { wantBrowser(dir, `${def.name} — ${short(title || def.name, 60)}`); return { error: LANE_DARK }; }
       const id = `t${Date.now().toString(36)}${(seq++).toString(36)}`;
       const task = {
         id, agent: def.id, title: short(title || def.name, 80), input: { ...input, ...(url ? { url } : {}) },

@@ -241,6 +241,45 @@ specialist answers three questions with cards or silence: who is waiting
 the gap (one new campaign aimed at a different kind of person). `mq waiting`
 lists who is waiting on you.
 
+### The clock (0.12.0)
+
+Until 0.12.0 nothing here knew what time it was, and nothing happened unless
+somebody pressed a button. Both are fixed, and neither one posts anything.
+
+**The specialist keeps its own time.** Every message it gets opens with the
+wall clock and its zone, the instant beside it, and how long ago you last
+spoke, it last woke by itself, and what was due was last read — in words, so
+it says "three hours ago" instead of "recently" or a guess. Colleagues get
+the same, plus how much of their running budget is left as a duration. It
+rides in front of the message and never in the system prompt, which is
+fingerprinted over itself: a clock in there would rebuild the agent every
+turn and throw the provider's prompt cache away with it.
+
+**It wakes up on its own.** With nothing in its inbox, the specialist is
+woken every half hour to look at the deck: propose the next read or
+colleague, judge what is pending, prepare the draft the person at the top of
+the queue will need, write its notebook — or answer "noted" and cost
+nothing. Two silences in a row and it is woken half as often, doubling to
+four hours, and any real event or any word from you puts it back to half an
+hour. It still cannot start work: a card is dealt, the click stays yours.
+
+**What is due is read on its own.** The engine runs `tick` itself when
+something is actually due, a model exists, nothing else is reading, and not
+inside half an hour of a failed one — the judge's own guards, which have
+started the judge by themselves since 0.9.1. **Settings → The clock** turns
+it off per project; the due card still reads early on request.
+
+**The browser is a tool, and tools disconnect.** When no browser is on the
+lane, the clock holds rather than failing, a browser call answers
+immediately with the fix rather than waiting out a timeout, a colleague is
+not started into the dark at all, and the deck deals one card that says
+which fix it is — nothing attached, or tabs stranded on a Chrome profile
+that has left (the 0.9.2 case). Everything that needs no page carries on:
+verdicts against your rule, drafts already written, campaigns, and the
+conversation with your specialist, which now says plainly that the browser
+is not connected instead of relaying a timeout. Two colleagues work at once
+and no more, because the browser is the scarce resource.
+
 ### Four pages
 
 The dashboard asks four questions: **Today** (the next card, who is
