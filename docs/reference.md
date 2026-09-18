@@ -40,8 +40,10 @@ Then open the dashboard and set it up there:
 node bin/mq.mjs serve
 ```
 
-That is `http://127.0.0.1:8787`, and everything this tool does is reachable from
-it — onboarding, the queue, your prospects, the memory files, the models.
+That is `http://127.0.0.1:8787/today`, and everything this tool does is reachable
+from it — onboarding, the queue, your prospects, the memory files, the models.
+The bare address is Quest's front page since 0.13.0 (see
+[Quest](#quest-0130) below).
 (`npm start` does the same thing; the direct form is spelled out because
 Windows PowerShell blocks npm's `.ps1` shim under its default execution
 policy, and there is no reason to make anybody debug that for a tool with
@@ -279,6 +281,62 @@ verdicts against your rule, drafts already written, campaigns, and the
 conversation with your specialist, which now says plainly that the browser
 is not connected instead of relaying a timeout. Two colleagues work at once
 and no more, because the browser is the scarce resource.
+
+### Quest (0.13.0)
+
+Everything above is the operator's own tool. Quest is the side a founder
+sees: they paste their site's address, give an email, and talk to the agent
+in a chat, while the reading happens in the operator's Chrome and the
+posting stays theirs. It is the first stage of a hosted service, and it runs
+whole on one machine for now.
+
+**The front page** (`/`) is one box: an address, a CV as a PDF (under
+1.4 MB, read by the model through OpenRouter's PDF parser, so not on the
+Local plan), or a sentence or two about what they sell — then an email. That
+is the whole sign-up, and it is a stub: no password, no verification, one
+project per email, and the same email again goes back to the same project.
+The project is made without the operator's account, voice, me.md or persona,
+because a draft written for a customer must never carry the operator's
+claims about themselves. What they typed becomes the first message of the
+chat at `/app`. The dashboard moved to `/today`.
+
+**One transcript per customer.** Everything Quest says goes into
+`chat.jsonl` in the customer's project (`lib/chat.mjs`), cards included; a
+card's later state is a row of its own, folded in when the chat is read.
+The web chat is its first reader. Email or Telegram would be the next, and
+the agent would not change.
+
+**Quest never touches a browser.** It is the specialist's seat in a
+customer-facing mode — its own persona and doctrine, plain words, and no
+browser tools. Every read it depends on is an engine step on the lane, taken
+by a ten-second clock (`lib/quest.mjs` holds the shapes):
+
+1. *The offer.* The site is read in a tab — held while no browser is on the
+   lane, and after three reads that open nothing Quest asks for the address
+   again. What the reader understood becomes one card: what they sell, the
+   problem, and the first three communities to look in. "Change something"
+   is answered in words (`revise_offer`). **Looks right** writes
+   `project.md`, `icp.md`, `rule.md` (with a "Leave out" section for what
+   they asked to drop), `me.md` ("I built …") and the campaign `quest`, whose
+   mention is *disclosed*.
+2. *The look.* Each community's rules page is read first. One whose rules
+   forbid promotion is skipped, and the sentence that forbids it goes into
+   its room file, where the operator can overrule it. The rest are probed
+   under the campaign and, if enough of what came back fits, watched every
+   four hours instead of every hour, so one laptop keeps up.
+3. *The delivery.* Every post the judge marks as a fit becomes an
+   opportunity card at once — who, where, their own words, why it fits — at
+   most two per community and five a day. The reply follows when it is
+   written, in three styles. The customer opens the thread, copies the reply
+   and posts it themselves. 👍, 👎 (the post is skipped) and **I replied**
+   (marked sent, and its author leaves every future queue) are recorded from
+   the first day, and each one lands in Quest's inbox.
+
+While the current project is a customer's, the side panel says whose work it
+is doing ("This browser is Quest's hands right now"), and the deck deals only
+what the browser needs. Left for the next stages: more than one customer at
+a time (the engine works on the current project), the sign-up and the files
+on Supabase, the agent off this machine, and more places to look than one.
 
 ### Four pages
 
@@ -591,7 +649,7 @@ number invented for it would be decoration.
 ## The dashboard
 
 ```bash
-node bin/mq.mjs serve      # then open http://127.0.0.1:8787
+node bin/mq.mjs serve      # then open http://127.0.0.1:8787/today
 ```
 
 Everything is here. Not a window onto the CLI — the whole product.

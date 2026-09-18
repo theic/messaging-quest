@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Quest — Messaging Quest</title>
+<link rel="stylesheet" href="/tokens.css">
+<link rel="stylesheet" href="/fonts.css">
+<link rel="stylesheet" href="/web/web.css">
+</head>
+<body class="app">
+<header class="top">
+  <a class="brand" href="/"><img src="/brand-mark.png" width="22" height="22" alt="" aria-hidden="true">Messaging Quest</a>
+  <span class="who" id="who"></span>
+</header>
+
+<main class="chat-layout">
+  <section class="chat" aria-label="Your chat with Quest">
+    <ol class="log" id="log" aria-live="polite"></ol>
+    <p class="thinking" id="thinking" hidden><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><span id="thinking-text">Quest is thinking…</span></p>
+    <form class="say" id="say" autocomplete="off">
+      <label class="sr" for="text">Message Quest</label>
+      <textarea id="text" rows="1" maxlength="4000" placeholder="Ask anything, or tell Quest who to leave out…"></textarea>
+      <button class="go" type="submit" id="send">Send</button>
+    </form>
+  </section>
+  <aside class="found" aria-labelledby="found-h">
+    <h2 id="found-h">Opportunities</h2>
+    <p class="empty" id="found-empty">Nothing yet. When Quest finds someone who needs what you sell, they show up here — and in the chat.</p>
+    <ol class="found-list" id="found-list"></ol>
+  </aside>
+</main>
+
+<script src="/web/chat.js"></script>
+</body>
+</html>

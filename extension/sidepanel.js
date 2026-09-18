@@ -116,24 +116,52 @@ const refreshAccount = async () => {
   try { accountStatus = await ext.runtime.sendMessage({ type: "account.status" }); } catch { accountStatus = null; }
 };
 
+/**
+ * The worker (Stage 1 of the Quest plan, 2026-09-18). When the current
+ * project is a customer's, this browser is Quest's hands: pages open here by
+ * themselves — a customer's site, a community's rules, a search — and the
+ * operator's deck, tabs and specialist are not what this panel is for. It
+ * keeps the status strip (what is being read, and how long), the cards only
+ * a hand here can answer (a site Chrome has not allowed yet, a lane that
+ * dropped), and one card saying whose work this is.
+ */
+let workerFor = null;
+const HANDS_ONLY = /^grant\.|^work\.browser$/;
+const workerCard = (c) => {
+  let host = null;
+  try { host = c.url ? new URL(c.url).host.replace(/^www\./, "") : null; } catch { host = null; }
+  return {
+    id: "worker", kind: "worker",
+    eyebrow: "Working for a customer",
+    question: "This browser is Quest's hands right now.",
+    help: `Reading for ${c.email ?? "a customer"}${host ? ` — ${host}` : ""}. Keep this panel open: pages open here by themselves, one at a time at a person's pace, and close once read. Nothing is ever posted from here.`,
+    primary: { id: "chat", label: "Open their chat" },
+    actions: [{ id: "console", label: "Console" }],
+  };
+};
+
 async function load() {
   try {
     const [deck, st] = await Promise.all([getJSON(INSTANCE ? `/api/cards?instance=${encodeURIComponent(INSTANCE)}` : "/api/cards"), getJSON("/api/panel").catch(() => null), refreshAccount()]);
-    const { cards, jobs, control, tasks, project, brain, recent } = deck;
+    const { jobs, control, tasks, project, brain, recent, customer } = deck;
+    workerFor = customer ?? null;
+    document.body.classList.toggle("es-worker", Boolean(workerFor));
+    const cards = workerFor ? (deck.cards ?? []).filter((c) => HANDS_ONLY.test(c.id)) : deck.cards;
     if (st) state = st;
     deckCards = cards ?? [];
     // The card first: show() clears the notice line, and the hints that
     // follow are allowed to fill it again. Redrawn only when it CHANGED —
     // the panel now polls while idle too, and a poll must never wipe the
     // words the operator is editing in the card's field.
-    const first = cards?.[0] ?? null;
+    const first = cards?.[0] ?? (workerFor ? workerCard(workerFor) : null);
     const sig = JSON.stringify(first);
     if (sig !== shownSig) { show(first); shownSig = sig; }
     showStatus(jobs, control, tasks, recent);
     showProject(project);
     showFocus();
     showBadges(cards);
-    showSuggestions(cards?.[0] ?? null, brain !== false);
+    if (workerFor) { suggestBox.hidden = true; if (view !== "deck") showView("deck"); }
+    else showSuggestions(cards?.[0] ?? null, brain !== false);
     if (view !== "deck") drawView();
     schedule(cards?.[0], jobs, tasks);
   } catch {
@@ -371,6 +399,14 @@ const sayError = (msg) => { errorLine.textContent = msg; errorLine.hidden = fals
 
 async function act({ action, choice, choices, text, tab }) {
   if (!current) return;
+
+  // The worker's own card is the panel's, not the deck's: its buttons open
+  // the customer's chat and the operator's console on the local server.
+  if (current.id === "worker") {
+    if (hosted()) { sayError("The customer's chat runs on the local server — this extension is in hosted mode."); return; }
+    openTab(`${base}${action === "chat" ? "/app" : "/today"}`);
+    return;
+  }
 
   // The client-side actions; the server hears about them at "posted".
   if (action === "insert" && current.data?.url) return insertFlow(current, text, tab);
@@ -958,7 +994,7 @@ function drawSettings() {
   browser.append(srv);
   if (!hosted()) {
     const dash = el("a", "es-link", "Open the dashboard ↗");
-    dash.href = `${base}/`; dash.target = "_blank"; dash.rel = "noreferrer noopener";
+    dash.href = `${base}/today`; dash.target = "_blank"; dash.rel = "noreferrer noopener";
     browser.append(dash);
   }
 
@@ -1049,8 +1085,9 @@ settingsOf().then(async (s) => {
   const dash = $("dash");
   if (hosted()) dash.hidden = true;
   else {
-    dash.href = `${base}/`;
-    dash.addEventListener("click", (e) => { e.preventDefault(); openTab(`${base}/`); });
+    // The console, not the front page: / is the customer's since Stage 1.
+    dash.href = `${base}/today`;
+    dash.addEventListener("click", (e) => { e.preventDefault(); openTab(`${base}/today`); });
   }
   // The worker's name on the lane: while this panel is the one open, the
   // engine opens its tabs in THIS profile (two open: the first keeps it).

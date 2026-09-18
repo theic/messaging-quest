@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Messaging Quest — find people who already need what you sell</title>
+<link rel="stylesheet" href="/tokens.css">
+<link rel="stylesheet" href="/fonts.css">
+<link rel="stylesheet" href="/web/web.css">
+</head>
+<body class="landing">
+<header class="top" id="top">
+  <a class="brand" href="/"><img src="/brand-mark.png" width="22" height="22" alt="" aria-hidden="true">Messaging Quest</a>
+  <nav>
+    <a class="hide-sm" href="#how">How it works</a>
+    <a class="hide-sm" href="#faq">Questions</a>
+    <a id="continue" href="/app" hidden>Your chat →</a>
+  </nav>
+</header>
+
+<main>
+  <section class="hero">
+    <h1>Find people who already need what you sell.</h1>
+    <p class="sub">Paste your website, product page or portfolio. Messaging Quest finds real people asking for what you do — and brings them to you, with a reply you can post.</p>
+    <form class="ask" id="ask" autocomplete="off">
+      <label class="sr" for="what">What do you sell? Paste your site's address, or describe it.</label>
+      <div class="ask-field">
+        <textarea id="what" rows="1" placeholder="https://yourproduct.com" maxlength="4000"></textarea>
+        <p class="attached" id="attached" hidden><span id="attached-name"></span> <button type="button" class="linkish" id="attached-drop">remove</button></p>
+      </div>
+      <button class="go" type="submit">Find my opportunities</button>
+    </form>
+    <p class="fine">No site? <button type="button" class="linkish" id="cv-pick">Upload your CV (PDF)</button>, or just describe what you do.</p>
+    <input type="file" id="cv" accept="application/pdf,.pdf" hidden>
+    <p class="err" id="cv-err" hidden></p>
+    <p class="fine">No credit card. See real opportunities first.</p>
+  </section>
+
+  <section class="band" id="how" aria-labelledby="how-h">
+    <h2 id="how-h">How it works</h2>
+    <ol class="steps">
+      <li><b>Show us what you sell.</b><p>Paste your site — or describe what you do in a sentence.</p></li>
+      <li><b>Quest learns what demand looks like.</b><p>Who needs it, the problem they describe, where they talk about it. You confirm it in one click.</p></li>
+      <li><b>Quest keeps looking.</b><p>When someone asks for what you built, you get their words, why they fit, and a reply you can post yourself.</p></li>
+    </ol>
+  </section>
+
+  <section class="band" aria-labelledby="opp-h">
+    <h2 id="opp-h">Not leads. Opportunities.</h2>
+    <div class="versus">
+      <div class="lead">
+        <h3>A lead</h3>
+        <p class="meta">Jane Doe · Founder · SaaS · 10 people</p>
+        <p>A name on a list. You still have to invent a reason to talk.</p>
+      </div>
+      <div class="opp">
+        <span class="tagline">EXAMPLE</span>
+        <h3>An opportunity</h3>
+        <blockquote>“Launched two weeks ago, zero signups. Is there anything that finds people asking for what I built?”</blockquote>
+        <p>Someone with a reason to talk to you — right now, in their own words.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="band" id="faq" aria-labelledby="faq-h">
+    <h2 id="faq-h">Questions</h2>
+    <div class="faq">
+      <details><summary>Is this another lead database?</summary><p>No. Quest looks for people describing the problem you solve, now — not for static profiles.</p></details>
+      <details><summary>Will it post for me?</summary><p>No. Quest finds the person and drafts a reply; you read it, change what you like, and post it yourself.</p></details>
+      <details><summary>Do I need a SaaS product?</summary><p>No. A product, a service, a portfolio — if people ask for what you do, Quest can look for them.</p></details>
+      <details><summary>Where does it look?</summary><p>Where your buyers already talk about the problem — Reddit communities first. Quest picks them from what you sell.</p></details>
+      <details><summary>Why not just use ChatGPT?</summary><p>Because Quest keeps looking when you are not talking to it, and comes back when it finds someone.</p></details>
+    </div>
+  </section>
+
+  <section class="band again" aria-labelledby="again-h">
+    <h2 id="again-h">Someone is probably looking for what you sell.</h2>
+    <a class="go" href="#top" id="again">Paste your website</a>
+  </section>
+</main>
+
+<dialog id="join" aria-labelledby="join-h">
+  <form id="join-form">
+    <h2 id="join-h">Where should I send what I find?</h2>
+    <p class="sub">Your email is your account — no password.</p>
+    <label class="sr" for="email">Email</label>
+    <input id="email" type="email" placeholder="you@yourproduct.com" autocomplete="email" required>
+    <p class="err" id="join-err" hidden></p>
+    <div class="row">
+      <button class="ghost" type="button" id="join-back">Back</button>
+      <button class="go" type="submit" id="join-go">Start</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="/web/landing.js"></script>
+</body>
+</html>

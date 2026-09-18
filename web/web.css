@@ -1,0 +1,193 @@
+/* The customer's side — the front page and the chat (Stage 1 of the Quest
+   plan, 2026-09-18). No palette here: colours, type and both themes come
+   from /tokens.css, the design book the dashboard, the panel and the website
+   share byte for byte, and the faces from /fonts.css. This file is layout. */
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--sheet);
+  color: var(--ink);
+  font: 17px/1.55 var(--sans);
+  text-rendering: optimizeLegibility;
+}
+[hidden] { display: none !important; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+a { color: var(--ink); text-decoration-color: var(--line-2); text-underline-offset: 3px; }
+a:hover { text-decoration-color: var(--ink); }
+:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+h1, h2, h3 { font-family: var(--disp); text-wrap: balance; margin: 0; }
+
+/* —— the bar across the top —— */
+.top {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 14px 20px; border-bottom: 1.5px solid var(--line-2); background: var(--sheet-card);
+}
+.brand {
+  display: inline-flex; align-items: center; gap: 10px; flex-shrink: 0;
+  font: 12px/1 var(--px); letter-spacing: .06em; text-transform: uppercase;
+  text-decoration: none; color: var(--ink);
+}
+.top nav { display: flex; gap: 18px; align-items: center; font-size: 15px; }
+.top nav a { text-decoration: none; color: var(--ink-2); }
+.top nav a:hover { color: var(--ink); text-decoration: underline; }
+.who { font: 13px var(--mono); color: var(--soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+@media (max-width: 560px) { .top nav a.hide-sm { display: none; } }
+
+/* —— buttons: lime is "the thing to press", and there is one per screen —— */
+.go {
+  font: 700 16px/1.2 var(--sans); padding: 12px 18px; cursor: pointer;
+  border: 2px solid var(--on-lime); background: var(--lime); color: var(--on-lime);
+  box-shadow: 0 3px 0 0 var(--on-lime); text-decoration: none; display: inline-block; white-space: nowrap;
+  transition: transform .05s, box-shadow .05s;
+}
+.go:active { transform: translateY(2px); box-shadow: 0 1px 0 0 var(--on-lime); }
+.go:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; transform: none; }
+.ghost {
+  font: 700 15px/1.2 var(--sans); padding: 11px 16px; cursor: pointer;
+  border: 2px solid var(--ink); background: transparent; color: var(--ink);
+}
+
+/* ================================================================ landing */
+
+.landing main { max-width: 1040px; margin: 0 auto; padding-inline: 20px; }
+.hero { padding-block: 72px 56px; display: grid; gap: 22px; justify-items: start; }
+.hero h1 { font-weight: 800; font-size: clamp(38px, 6.4vw, 68px); line-height: 1.02; letter-spacing: -.03em; max-width: 15ch; }
+.hero .sub { font-size: clamp(17px, 2.1vw, 20px); color: var(--ink-2); max-width: 56ch; margin: 0; }
+.ask {
+  width: 100%; max-width: 760px; display: flex; gap: 10px; align-items: flex-end;
+  background: var(--sheet-card); border: 2px solid var(--ink); box-shadow: 6px 6px 0 0 var(--ink); padding: 10px;
+}
+.ask textarea {
+  flex: 1; min-width: 0; border: 0; background: transparent; color: var(--ink);
+  font: 19px/1.45 var(--sans); resize: none; padding: 10px 8px; max-height: 220px; outline: none;
+}
+.ask textarea::placeholder { color: var(--soft); }
+.ask-field { flex: 1; min-width: 0; display: grid; }
+.ask-field textarea { width: 100%; }
+.attached { margin: 0 8px 6px; font: 14px var(--mono); color: var(--ink-2); }
+.linkish {
+  font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer;
+  text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 3px;
+}
+.linkish:hover { text-decoration-color: var(--ink); }
+.fine { font-size: 14px; color: var(--soft); margin: 0; }
+@media (max-width: 640px) { .ask { flex-direction: column; align-items: stretch; } }
+
+.band { padding-block: 52px; border-top: 1.5px solid var(--line); display: grid; gap: 24px; }
+.band h2 { font-weight: 800; font-size: clamp(26px, 3.6vw, 34px); line-height: 1.12; letter-spacing: -.02em; }
+.steps { list-style: none; margin: 0; padding: 0; counter-reset: step; display: grid; gap: 22px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.steps li { counter-increment: step; display: grid; gap: 8px; align-content: start; }
+.steps li::before { content: counter(step); font: 14px/1 var(--px); color: var(--lime-ink); }
+.steps b { font: 700 19px/1.3 var(--disp); }
+.steps p { margin: 0; color: var(--ink-2); }
+
+.versus { display: grid; gap: 22px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); align-items: start; }
+.versus > div { display: grid; gap: 10px; padding: 18px 20px; }
+.versus .lead { border: 1.5px dashed var(--line-2); color: var(--ink-2); }
+.versus .opp { background: var(--sheet-card); border: 2px solid var(--ink); box-shadow: 5px 5px 0 0 var(--ink); }
+.versus h3 { font-size: 18px; font-weight: 700; }
+.versus p { margin: 0; }
+.versus .meta { font: 13px var(--mono); color: var(--soft); }
+.versus blockquote { margin: 0; font: 600 18px/1.4 var(--disp); }
+.tagline { font: 10px/1 var(--px); letter-spacing: .06em; color: var(--soft); }
+
+.faq { display: grid; gap: 0; max-width: 760px; }
+.faq details { border-bottom: 1.5px solid var(--line); padding-block: 14px; }
+.faq summary { font-weight: 700; cursor: pointer; }
+.faq p { margin: 10px 0 0; color: var(--ink-2); }
+
+.again { justify-items: start; padding-bottom: 88px; }
+
+dialog {
+  width: min(440px, calc(100vw - 32px)); border: 2px solid var(--ink); box-shadow: 8px 8px 0 0 var(--ink);
+  padding: 24px; background: var(--sheet-card); color: var(--ink);
+}
+dialog::backdrop { background: rgba(var(--ink-rgb), .35); }
+dialog form { display: grid; gap: 14px; }
+dialog h2 { font-weight: 800; font-size: 24px; line-height: 1.15; }
+dialog .sub { margin: 0; color: var(--ink-2); font-size: 15px; }
+dialog input {
+  font: 18px var(--sans); padding: 12px; width: 100%;
+  border: 2px solid var(--ink); background: var(--bg); color: var(--ink);
+}
+dialog .row { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+.err { margin: 0; color: var(--coral-ink); font-size: 15px; }
+
+/* =================================================================== chat */
+
+body.app { height: 100vh; height: 100dvh; display: flex; flex-direction: column; }
+.chat-layout {
+  flex: 1; min-height: 0; width: 100%; max-width: 1180px; margin: 0 auto;
+  display: grid; grid-template-columns: minmax(0, 1fr) 320px;
+}
+.chat { display: flex; flex-direction: column; min-height: 0; border-right: 1.5px solid var(--line); }
+.log { list-style: none; margin: 0; padding: 24px 20px; display: flex; flex-direction: column; gap: 14px; overflow-y: auto; flex: 1; }
+.msg { max-width: min(640px, 88%); padding: 12px 14px; border: 1.5px solid var(--line-2); background: var(--sheet-card); overflow-wrap: anywhere; }
+.msg p { margin: 0 0 8px; }
+.msg p:last-of-type { margin-bottom: 0; }
+.msg.you { align-self: flex-end; background: var(--sheet-2); border-color: transparent; }
+.msg.quest { align-self: flex-start; }
+.msg.error { background: var(--coral-wash); border-color: var(--coral-ink); }
+.msg .by { display: block; font: 10px/1 var(--px); letter-spacing: .06em; color: var(--soft); margin-bottom: 8px; }
+.msg time { display: block; font: 12px var(--mono); color: var(--soft); margin-top: 8px; }
+.hello { align-self: stretch; max-width: none; border-style: dashed; color: var(--ink-2); }
+/* A card is the one message that asks for something: lifted, like every
+   pressable thing in the book, until it is answered. */
+.msg.card { border: 2px solid var(--ink); box-shadow: 4px 4px 0 0 var(--ink); }
+.msg.card.replaced { box-shadow: none; border-style: dashed; opacity: .6; }
+.acts { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+.acts .go, .acts .ghost { font-size: 15px; padding: 9px 14px; }
+.acts .thumb { min-width: 46px; }
+.acts .thumb.on { background: var(--lime-wash); }
+.msg .state { margin: 12px 0 0; font: 700 13px var(--sans); color: var(--lime-ink); }
+.msg .state.dim { color: var(--soft); font-weight: 400; }
+.msg .muted { color: var(--soft); }
+
+/* An opportunity: somebody else's words first, quoted; then why; then the
+   reply, set apart as the thing they may copy. */
+.msg.opportunity { max-width: min(680px, 94%); }
+.msg.opportunity.dismissed { box-shadow: none; border-style: dashed; opacity: .6; }
+.opp-title { font: 700 18px/1.35 var(--disp); }
+.opp-quote { margin: 8px 0 0; padding-left: 12px; border-left: 3px solid var(--line-2); color: var(--ink-2); font-size: 16px; }
+.opp-why { margin-top: 10px !important; font-size: 15.5px; }
+.opp-draft { margin-top: 12px; padding: 12px 14px; background: var(--sheet-2); display: grid; gap: 6px; }
+.opp-draft .label { font: 700 12px/1 var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--soft); }
+.opp-draft p { margin: 0; }
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.tab { font: 700 12px/1 var(--sans); letter-spacing: .04em; text-transform: uppercase; padding: 6px 9px; cursor: pointer; border: 1.5px solid var(--line-2); background: transparent; color: var(--ink-2); }
+.tab.on { background: var(--lime); color: var(--on-lime); border-color: var(--on-lime); }
+
+.found-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.found-row { display: grid; gap: 3px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.found-row a { font-weight: 700; text-decoration: none; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.found-row a:hover { text-decoration: underline; }
+.found-row .meta { font: 12px var(--mono); color: var(--soft); }
+.found-row.dim { opacity: .55; }
+
+.thinking { margin: 0 20px 10px; color: var(--soft); font-size: 14px; display: flex; gap: 8px; align-items: center; }
+.dots { display: inline-flex; gap: 4px; }
+.dots i { width: 6px; height: 6px; background: var(--ink-2); display: block; animation: blink 1.2s infinite both; }
+.dots i:nth-child(2) { animation-delay: .2s; }
+.dots i:nth-child(3) { animation-delay: .4s; }
+@keyframes blink { 0%, 80%, 100% { opacity: .2; } 40% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .dots i { animation: none; opacity: .6; } }
+
+.say { display: flex; gap: 10px; align-items: flex-end; padding: 12px 20px 18px; border-top: 1.5px solid var(--line); }
+.say textarea {
+  flex: 1; min-width: 0; font: 17px/1.45 var(--sans); padding: 11px 12px; resize: none; max-height: 200px;
+  border: 2px solid var(--ink); background: var(--sheet-card); color: var(--ink);
+}
+.say textarea:focus { outline: none; box-shadow: 3px 3px 0 0 var(--ink); }
+
+.found { padding: 24px 20px; display: grid; align-content: start; gap: 12px; overflow-y: auto; }
+.found h2 { font-weight: 800; font-size: 20px; line-height: 1.2; }
+.found .empty { color: var(--soft); font-size: 15px; margin: 0; }
+
+@media (max-width: 860px) {
+  .chat-layout { grid-template-columns: 1fr; }
+  .chat { border-right: 0; }
+  .found { display: none; }
+  .msg { max-width: 92%; }
+}

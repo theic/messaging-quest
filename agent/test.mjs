@@ -356,5 +356,41 @@ check("...and capped at twelve", normalizeQuestions(Array.from({ length: 20 }, (
   await typing;
 }
 
+/* ------------------------------------------ Quest, facing a customer */
+
+// Stage 1 of the Quest plan (2026-09-18): the same seat, when the project is
+// a customer's (a customer.json beside the files). Who it is, what its turn
+// is told, and what its heartbeat asks — none of it the operator's.
+{
+  const { systemPromptOf, turnPreface, startInboxLoop, attachRuntime } = await import("./strategist.mjs");
+  const { createProject } = await import("../lib/projects.mjs");
+  const made = createProject(DIR, "acme-com", { inherit: false });
+  const QD = made.dir;
+  writeFileSync(join(QD, "customer.json"), JSON.stringify({ email: "founder@acme.com", url: "https://acme.com" }));
+  const p1 = systemPromptOf(QD);
+  await sleep(1100);
+  const p2 = systemPromptOf(QD);
+  check("a customer's project gets Quest, not the operator's specialist — and a prompt just as stable",
+    [p1 === p2, /You are Quest/.test(p1), /propose_tasks|propose_campaign|deck/.test(p1), /never post|THEY post/.test(p1)], [true, true, false, true]);
+  check("...and none of the operator's own files came with the project", [existsSync(join(QD, "account.json")), existsSync(join(QD, "voice.json"))], [false, false]);
+
+  const pre = await turnPreface(QD, { wokeBy: "your heartbeat" });
+  check("Quest's turn is told the clock, its browser and who the customer is — never the operator's deck",
+    [/The clock: /.test(pre), /Your research browser/.test(pre), /The customer: founder@acme\.com\. Their site: https:\/\/acme\.com\./.test(pre), /deck/.test(pre)],
+    [true, true, true, false]);
+
+  const control = stubControl();
+  const TQ = taskManager(QD, { control, modelFor: () => new ScriptedModel([() => new AIMessage({ content: "done" })]) });
+  attachRuntime(QD, { tasks: TQ, control });
+  await sleep(200);
+  writeFileSync(join(QD, "cards.json"), JSON.stringify({ cmo_cursor: TQ.inbox().cursor }));
+  const woke = [];
+  const stopQ = startInboxLoop(QD, { everyMs: 40, heartbeatMs: 100, ceilingMs: 400, speak: async (content) => { woke.push(content); return "noted"; } });
+  await until(() => woke.length >= 1, 6000);
+  stopQ();
+  check("Quest's heartbeat asks whether the customer should hear something — nothing to propose, no deck to read",
+    [/The customer is not talking/.test(woke[0] ?? ""), /deck|propose/.test(woke[0] ?? "")], [true, false]);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -752,6 +752,28 @@ need one answers immediately with a typed, actionable sentence
 (`laneDark()`), never a timeout; and the fix is offered on the deck as a
 card, once, because a failure in a log nobody opens is the same as silence.
 
+**Quest: the agent is the product, and it is detached (2026-09-18).** Set by
+the user after a strategy review: sell *distribution* to founders who built
+something and have no audience ("Find people who already need what you
+sell"), on one rule — *autopilot for discovery, human-in-the-loop for
+execution*. So the deep agent is what a customer talks to (Quest, the CMO
+seat in a customer-facing mode), and it is detached from its three sides:
+CHANNELS — everything it says goes into one transcript per customer
+(`lib/chat.mjs`, `chat.jsonl`), which the web chat reads today and email or
+Telegram read later; TOOLS — it never touches a browser, every read is an
+engine step on the lane (the site read, a community's rules, a search), which
+is *SearchJob → Source Worker → Candidates* with the operator's own Chrome as
+today's worker; STORAGE — per-customer files behind `lib/fs.mjs`, rows in
+Supabase later. The extension is no longer the customer's: it runs only on
+the operator's laptop as a read-only worker, and its panel shows whose work it
+is doing. Onboarding is a URL or a CV, an email, and one "Looks right" — no
+account, key, voice questions, rooms or phrases; the reader proposes, the
+customer corrects in words. Nothing is posted and no credentials are ever
+asked for: the customer opens the thread and posts the reply themselves.
+Stage 1 (this) runs whole on one laptop with a stub sign-up; Stage 2 moves
+it to the existing Supabase project; Stage 3 is the first ten customers.
+Supersedes "the extension as the primary surface" above for customers.
+
 ## Done
 
 - 0.1–0.2: listener, waiting-for-you, find, drafts, the gate; dashboard;
@@ -1155,6 +1177,47 @@ a refused proposal keeping its card instead of spending it. 607 engine tests
 + 45 runtime tests green. Left: the live run (a real key, Chrome attached) —
 the heartbeat's own back-off and the self-started tick have not been watched
 against a real model here.
+
+**0.13.0 — Quest: a URL, an email, and the people who need it.** Stage 1 of
+the decision of record above (2026-09-18), whole on one laptop. THE FRONT
+PAGE AND THE CHAT: `/` is one box — a site's address, a CV as a PDF, or two
+sentences about what they sell — and an email is the whole sign-up, a stub
+with no password and no verification: one project per email, made with
+`createProject(…, { inherit: false })` so none of the operator's account,
+voice, me.md or persona reaches a customer's drafts. `/app` is the chat with
+the opportunities beside it and `/today` the dashboard that used to be `/`;
+the pages are plain files in `web/` under a strict CSP, kept out of the store
+zip, and the landing is tested against the words the strategy review ruled
+out. ONE TRANSCRIPT PER CUSTOMER (`lib/chat.mjs`): `customer.json` and
+`chat.jsonl`, cards in the same stream and a card's later state a row of its
+own, folded on read — the seam email and Telegram plug into. QUEST: the CMO
+seat in a customer-facing mode whenever the current project has a
+`customer.json` — its own persona, doctrine and turn preface (the clock, the
+lane, where things stand, the communities, the counts), on thread "chat",
+with tools that talk and record (notify, the notebook, `set_site`,
+`describe_offer`, `revise_offer`) and none that browse; a read that waits is
+"in the queue", and the browser is never named. THE CUSTOMER CLOCK: every
+ten seconds `autoOffer` → `autoLook` → `autoDeliver` drive the existing
+verbs (`lib/quest.mjs` holds the shapes). The site is read by the scout —
+held while the lane is dark, three tries — or a CV or description is read
+with no browser (OpenRouter's PDF parser, passed through `lib/llm.mjs`), and
+the proposal becomes the offer card; "Looks right" writes project.md,
+icp.md, rule.md (with the "Leave out" the customer asked for), me.md ("I
+built …") and the campaign `quest`, mention *disclosed*. Each community's
+rules page is read first (`bansPromotion` → its room file, and a room that
+forbids promotion is skipped), then it is probed under the campaign and
+watched every four hours (`watch --every`). Every fit is posted at once as
+an opportunity card, at most two a room and five a day, the three drafts
+follow, and 👍 / 👎 (skip) / I replied (sent) are the feedback. THE EXTENSION
+AS A WORKER: while the current project is a customer's, the deck deals only
+the grants and `work.browser`, and the panel says whose work it is doing.
+645 engine tests + 55 runtime + 34 voice green. Verified live: the landing, the
+sign-up, Quest answering on a real free model, the hold while no browser is
+attached, the opportunity cards and their buttons on a seeded copy, the
+worker panel. Left: the acceptance run through the operator's own Chrome —
+paste a URL, sign up, a first Reddit opportunity — since the site read, the
+rules read, the search and the drafts have not run live here; and one
+customer at a time until Stage 2.
 
 ## Next, in order
 
