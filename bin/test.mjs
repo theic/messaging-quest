@@ -26,9 +26,10 @@ import { conforms } from "../lib/llm.mjs";
 import { loadPlatforms, platform, roomOf } from "../lib/platform.mjs";
 import { longestSharedRun, repeats, claims, inventedLinks, theirs, RUN_LIMIT } from "../lib/guards.mjs";
 import { standing, readiness, burst, mix } from "../lib/ready.mjs";
-import { nextCards, onboarded, questionCards } from "../lib/cards.mjs";
+import { nextCards, onboarded, questionCards, readStash } from "../lib/cards.mjs";
 import { agentDefinition } from "../lib/skills.mjs";
-import { controlBroker, permitted, familiesOf, grantsOf, TOOLKIT } from "../lib/control.mjs";
+import { controlBroker, permitted, familiesOf, grantsOf, TOOLKIT, LANE_DARK, laneDark } from "../lib/control.mjs";
+import { ago, span, localTime, clockText, saidNothing, heartbeatEvery, heartbeatDue, HEARTBEAT_MS, HEARTBEAT_CEILING_MS } from "../lib/clock.mjs";
 import { browser, NOT_ATTACHED } from "../lib/browse.mjs";
 import { parseCampaign, campaignFile, writeCampaign, readCampaigns, readCampaign, writerBlock, judgeLine, campaignDraft, campaignHash, MENTIONS } from "../lib/campaigns.mjs";
 import { createProject, useProject, listProjects, currentDir, slug as projectSlug } from "../lib/projects.mjs";
@@ -38,6 +39,7 @@ import { labelsOf, composerOf, first, preferred, accountOf, whoamiOf } from "../
 import { allowed, memoryProgress, memoryContext, writeMemory, seedMissing } from "../lib/memory.mjs";
 import { proposable } from "../lib/cards.mjs";
 import { store } from "../lib/store.mjs";
+import { setPlan } from "../lib/models.mjs";
 import { voiceQuestions } from "../lib/voice.mjs";
 import { install as installHost, host as hostNow } from "../lib/fs.mjs";
 import { memoryHost, sha256 as sha256js, join as pjoin, basename as pbasename, dirname as pdirname } from "../lib/fs-memory.mjs";
@@ -1968,6 +1970,126 @@ check("a proposal with a verb outside the law never renders",
   check("without a specialist installed there is nothing to ask, only places to go", suggestionsFor({ state: st, card: null, brain: false }).map((c) => c.label), ["Try a room", "The campaigns"]);
   check("no state, no chips", suggestionsFor({ state: null }), []);
   check("every question chip is a full sentence for the specialist, not a label", busy.filter((c) => c.ask).every((c) => c.ask.length > 40 && /[?.]$/.test(c.ask)), true);
+}
+
+/* ------------------------------------ the agent keeps its own time (0.12.0) */
+
+// Four things that were nobody's job before: the WORDS for time (a colleague
+// says "three hours ago", never "recently"), the HEARTBEAT's pacing (quiet
+// has to get cheaper on its own, because a founder on a free seat pays for
+// every idle turn), the SCHEDULER (a tick that starts itself), and what all
+// of them do when the browser — a tool, and tools disconnect — is not there.
+{
+  const T0 = Date.parse("2026-09-16T14:42:00Z");
+  check("how long ago, in the words a person uses — and never a guess about something that never happened",
+    [ago(T0, T0 + 30_000), ago(T0, T0 + 12 * 60_000), ago(T0, T0 + 100 * 60_000), ago(T0, T0 + 3 * 3600_000), ago(T0, T0 + 30 * 3600_000), ago(T0, T0 + 50 * 3600_000), ago(null), ago("not a date")],
+    ["just now", "12 minutes ago", "2 hours ago", "3 hours ago", "1 day ago", "2 days ago", "never", "never"]);
+  check("...and the same span as a length, for a budget that is running out", [span(0), span(26 * 60_000), span(3 * 3600_000), span(50 * 3600_000)], ["less than a minute", "26 minutes", "3 hours", "2 days"]);
+
+  const line = clockText({ now: T0, timeZone: "UTC", operatorAt: T0 - 3 * 3600_000, heartbeatAt: T0 - 28 * 60_000, tickAt: T0 - 6 * 3600_000, wokeBy: "your heartbeat" });
+  check("the turn's clock: the wall clock with its zone, the instant beside it, and every gap in words",
+    [/Wednesday.* 16 September 2026/.test(line), /14:42/.test(line), /in UTC/.test(line), /2026-09-16T14:42:00.000Z/.test(line),
+      /operator last said something 3 hours ago/.test(line), /woke by yourself 28 minutes ago/.test(line), /last read 6 hours ago/.test(line), /This turn is your heartbeat/.test(line)],
+    [true, true, true, true, true, true, true, true]);
+  check("...and a directory with no history claims none of it",
+    [/^The clock: .*16 September 2026.*14:42 in UTC — 2026-09-16T14:42:00\.000Z\.$/.test(clockText({ now: T0, timeZone: "UTC" })), /Since then|This turn/.test(clockText({ now: T0, timeZone: "UTC" }))], [true, false]);
+  check("an unknown zone costs the hour's phrasing, never the hour", /2026-09-16T14:42/.test(localTime(T0, "Mars/Olympus")), true);
+
+  // The back-off ladder. The first silence is free — half an hour of quiet is
+  // not evidence of anything — and from the second it doubles to the ceiling.
+  check("quiet gets cheaper: the first silence is free, then the interval doubles to a ceiling",
+    [0, 1, 2, 3, 4, 5, 9].map((q) => heartbeatEvery(q) / 60_000), [30, 30, 60, 120, 240, 240, 240]);
+  check("...and the ceiling is the ceiling, whatever it is asked", [heartbeatEvery(40) <= HEARTBEAT_CEILING_MS, heartbeatEvery(0) === HEARTBEAT_MS], [true, true]);
+  check("a heartbeat is due when nothing has happened for its interval, and two silent ones widen it",
+    [heartbeatDue(null), heartbeatDue(T0, 0, { now: T0 + 29 * 60_000 }), heartbeatDue(T0, 0, { now: T0 + 31 * 60_000 }),
+      heartbeatDue(T0, 2, { now: T0 + 31 * 60_000 }), heartbeatDue(T0, 2, { now: T0 + 61 * 60_000 })],
+    [true, false, true, false, true]);
+  check("saying nothing is the doctrine's own word for it, however it is punctuated",
+    [saidNothing("noted"), saidNothing("Noted."), saidNothing(""), saidNothing(null), saidNothing("nothing to say"), saidNothing("I put a search on your deck.")],
+    [true, true, true, true, true, false]);
+
+  // The clock rides in the TURN, never in the system prompt: that one is
+  // fingerprinted over its own inputs, so a line that moves every minute
+  // would rebuild the agent every minute and throw the provider's prompt
+  // cache away with it. Pinned by reading the source, the way the
+  // visibility-verbs doctrine is pinned by counting call sites — agent/ needs
+  // its dependencies installed, and this suite must run on a bare Node.
+  {
+    const src = readFileSync(join(here, "..", "agent", "strategist.mjs"), "utf8");
+    const cut = (from, to) => src.slice(src.indexOf(from), src.indexOf(to));
+    const prompt = cut("export function systemPromptOf", "async function agentFor");
+    const preface = cut("export async function turnPreface", "/* ----------------------------------------------------------- the browser */");
+    check("the clock is in the turn's preface and not in the system prompt — which is its own cache key",
+      [prompt.length > 200, preface.length > 100, /clockText\(/.test(preface), /clockText\(|localTime\(|Date\.now\(/.test(prompt), /update\(\[\s*\n?\s*dir, s\.model, systemPrompt/.test(src)],
+      [true, true, true, false, true]);
+  }
+
+  // The scheduler, on a real engine: a room watched and never read is due, a
+  // model exists, and nothing is pressing anything.
+  {
+    const boxK = mkdtempSync(join(tmpdir(), "mq-clock-"));
+    const DK = join(boxK, ".mq");
+    execFileSync(process.execPath, [ES, "init"], { env: { ...process.env, MQ_DIR: DK }, stdio: "ignore" });
+    writeFileSync(join(DK, "sources.jsonl"), JSON.stringify({ id: "saas:new", place: "saas", q: null, url: "https://www.reddit.com/r/saas/new/", cadence_min: 60, added: "2026-09-15T00:00:00Z" }) + "\n");
+    writeFileSync(join(DK, "account.json"), JSON.stringify({ name: "Clock_Tester", added: "2026-09-16T00:00:00Z" }));
+    const E = engine({ root: DK });
+    setPlan(DK, "local");   // a seat that needs no key: the clock only asks whether a model exists
+    check("what is due is computed once and shared — the card, the panel and the clock all ask the same question",
+      [E.dueNow().sources, E.dueNow().running, E.cardSnapshot().due.sources], [1, false, 1]);
+
+    // Detached: it HOLDS. Nothing is started, the ask is recorded, and the
+    // deck offers the reconnect instead of the button that cannot fire.
+    E.autoTick();
+    const held = readStash(DK);
+    check("with no browser on the lane the clock holds, and says so where the operator will see it",
+      [E.J.busy("tick"), Boolean(held.browser_wanted), /clock/.test(held.browser_wanted?.what ?? "")], [false, true, true]);
+    // The card itself on a settled deck (the synthetic snapshot above, so the
+    // room's rules and the onboarding are out of the way): it takes the due
+    // card's place while the lane is dark, and gives it back on a snooze.
+    const done = { voice_done: voiceQuestions(null).map((q) => q.key), welcomed: true };
+    const settled = { account: { name: "x" }, itemCount: 3, sources: [{ id: "s", place: "saas" }], rooms: [{ place: "saas", state: "allowed" }],
+      stash: done, memory: memDone, due: { sources: 2, conversations: 1, unbound: 0, running: false } };
+    const dark = nextCards(snap({ ...settled, control: { attached: false, stranded: 0, instances: 0 } }));
+    check("...as one card that names the fix, in the place of the button that cannot fire",
+      [dark[0].id, dark[0].question, /side panel/.test(dark[0].help), /3 reads are due/.test(dark[0].help), dark.some((c) => c.id === "work.due")],
+      ["work.browser", "No browser is connected.", true, true, false]);
+    check("...naming what wanted a page when something did, and the stranded-profile fix when that is the one",
+      [/Something wanted a page and there was none to open: the clock, reading what is due/.test(nextCards(snap({ ...settled, stash: { ...done, browser_wanted: { at: new Date().toISOString(), what: "the clock, reading what is due" } }, control: { attached: false, stranded: 0 } }))[0].help),
+        /profile that has left/.test(nextCards(snap({ ...settled, control: { attached: false, stranded: 1 } }))[0].help)], [true, true]);
+    check("...it snoozes back to the due card, and a lane that never said deals neither",
+      [nextCards(snap({ ...settled, stash: { ...done, browser_later: new Date().toISOString() }, control: { attached: false } }))[0].id,
+        nextCards(snap({ ...settled, control: { attached: true } }))[0].id,
+        nextCards(snap(settled))[0].id], ["work.due", "work.due", "work.due"]);
+    check("...and the deck's own card snoozes through the engine", [(await E.actCard({ card: "work.browser", action: "later" })).ok, Boolean(readStash(DK).browser_later)], [true, true]);
+
+    // Attached: a browser claims from the lane, so the next pass reads.
+    await E.CONTROL.claim(0, "chrome-1");
+    check("the lane knows a browser is on it, and since when", [E.controlSummary().attached, Boolean(E.controlSummary().since), E.controlSummary().stranded], [true, true, 0]);
+    E.autoTick();
+    check("attached, the clock reads what is due by itself — nobody pressed anything", E.J.busy("tick"), true);
+    check("...and never twice at once", (() => { E.autoTick(); return E.J.running().filter((j) => j.verb === "tick").length; })(), 1);
+
+    // The off switch, and the reason for it: a machine that opens tabs on its
+    // own should be one press away from not.
+    await E.panelAct({ do: "settings.clock", auto: false });
+    check("the off switch is on Settings, and holds the clock", [readStash(DK).auto_tick, E.panelState().settings.clock.auto], [false, false]);
+    check("...and on is the absence of the switch, so a directory that never touched it reads as on",
+      [(await E.panelAct({ do: "settings.clock", auto: true })).ok, "auto_tick" in readStash(DK), E.panelState().settings.clock.auto], [true, false, true]);
+    E.stop();
+  }
+
+  // The lane's own sentence for being dark: typed, and carrying the next step
+  // — the thing an agent can relay without knowing anything else.
+  check("a browser tool into a dark lane answers with the fix, flagged as a disconnection rather than a failure",
+    [laneDark().detached, /side panel/.test(laneDark().error), /Everything that does not need a page still works/.test(LANE_DARK), laneDark("the profile left").error], [true, true, true, "the profile left"]);
+
+  // Degrade, do not fail: everything the CMO holds that needs no page must
+  // keep working with no server and no browser anywhere near it.
+  {
+    const noLane = ["queue", "pending", "waiting", "rooms", "campaigns", "status", "sources"].map((v) => [v, esFails([v])]);
+    check("with no browser at all, every verb the specialist holds still answers — none of them reaches the lane",
+      [noLane.filter(([, out]) => /not attached|no server to reach the browser|usage:/i.test(out)).map(([v]) => v), noLane.filter(([, out]) => !String(out).trim()).map(([v]) => v)], [[], []]);
+  }
 }
 
 /* ------------------------------------------ the hosted product (0.10.0) */

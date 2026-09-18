@@ -50,8 +50,9 @@ import { seat, hasModel } from "../lib/models.mjs";
 import { memoryContext, readOne } from "../lib/memory.mjs";
 import { activeSkills, activeSeat } from "../lib/skills.mjs";
 import { PER_ROOM_24H, OVERALL_24H } from "../lib/ready.mjs";
-import { proposable, patchStash, readStash } from "../lib/cards.mjs";
-import { TOOLKIT } from "../lib/control.mjs";
+import { proposable, patchStash, readStash, wantBrowser } from "../lib/cards.mjs";
+import { TOOLKIT, LANE_DARK, laneDark } from "../lib/control.mjs";
+import { clockText, ago, span, saidNothing, heartbeatEvery, heartbeatDue, HEARTBEAT_MS, HEARTBEAT_CEILING_MS } from "../lib/clock.mjs";
 import { readCampaigns, campaignDraft, MENTIONS, STATUSES } from "../lib/campaigns.mjs";
 import { store } from "../lib/store.mjs";
 import { campaignDigest, digestText, waiting as waitingRows } from "../lib/conversations.mjs";
@@ -346,7 +347,54 @@ async function deckSnapshot({ limit = 8 } = {}) {
 async function deckPreface() {
   const deck = await deckSnapshot();
   if (typeof deck === "string") return "";
-  return `The operator's deck right now — the cards as the panel shows them, first one on screen; the button named on each is the one that exists:\n${JSON.stringify(deck)}\n\n`;
+  return `The operator's deck right now — the cards as the panel shows them, first one on screen; the button named on each is the one that exists:\n${JSON.stringify(deck)}`;
+}
+
+/* ------------------------------------------------------------- the clock */
+
+/** When what was due was last actually read — the store's own record
+ *  (reads.jsonl), never a memory. */
+const lastReadAt = (dir) => {
+  try {
+    const rows = store(dir, () => null).readJsonl("reads.jsonl");
+    return rows.length ? rows[rows.length - 1]?.at ?? null : null;
+  } catch { return null; }
+};
+
+/**
+ * The browser, in a sentence (0.12.0). It is a TOOL, and tools disconnect —
+ * Chrome closed, the profile switched, the panel never opened in this one.
+ * Before this the specialist could not tell a dark lane from a broken one:
+ * it relayed "navigate unanswered" and kept offering reads. Told plainly, it
+ * answers from the store, says the hand is gone, and says how to get it back.
+ */
+const laneLine = (dir) => {
+  const C = runtimeOf(dir).control;
+  if (!C || typeof C.attached !== "function") return "The browser: there is no lane on this host — nothing here can open a page.";
+  if (!C.attached()) {
+    const stranded = typeof C.stranded === "function" ? C.stranded() : 0;
+    return `The browser: NOT CONNECTED. ${LANE_DARK}${stranded ? ` ${stranded} tab${stranded === 1 ? "" : "s"} a colleague opened are stranded on a profile that left the lane.` : ""} So: do not offer a read, a search, a probe or a colleague until it is back — every one of those needs a tab. Answer from the store, say in one line that the browser is not connected and what to do, and carry on with everything that needs no page: verdicts against rule.md, drafts from saved material, campaigns, your notebook.`;
+  }
+  const since = typeof C.attachedSince === "function" ? C.attachedSince() : null;
+  const n = typeof C.instances === "function" ? C.instances() : 1;
+  return `The browser: connected${since ? ` (since ${ago(since)})` : ""}${n > 1 ? ` — ${n} Chrome profiles are on the lane; tabs open in the one whose panel is open` : ""}.`;
+};
+
+/**
+ * What rides in front of every turn: the clock, the browser, the deck. All
+ * three change between turns, which is exactly why they are HERE and not in
+ * the system prompt — that one is fingerprinted over its own inputs
+ * (agentFor), so anything that moves per turn would rebuild the agent per
+ * turn and throw the provider's prompt cache away with it.
+ */
+export async function turnPreface(dir, { wokeBy = null } = {}) {
+  const s = readStash(dir);
+  const parts = [
+    clockText({ operatorAt: s.operator_at ?? null, heartbeatAt: s.heartbeat_at ?? null, tickAt: lastReadAt(dir), wokeBy }),
+    laneLine(dir),
+    await deckPreface(),
+  ].filter(Boolean);
+  return parts.length ? `${parts.join("\n\n")}\n\n` : "";
 }
 
 /* ----------------------------------------------------------- the browser */
@@ -371,6 +419,15 @@ function browserTools(dir) {
     const C = runtimeOf(dir).control;
     if (!C) return "no browser lane here — the control broker is not attached";
     if (!TOOLKIT[name]) return `${name} is not in the toolkit`;
+    // The tool is gone, and that is not a failure to report as one (0.12.0):
+    // a lease into a dark lane used to wait out the job's whole minute and
+    // come back "navigate unanswered", indistinguishable from a bug. Asked
+    // first, the answer is immediate, typed, and carries the next step — and
+    // the deck deals the reconnect card, because something wanted a page.
+    if (typeof C.attached === "function" && !C.attached()) {
+      wantBrowser(dir, "your specialist, reading a page");
+      return JSON.stringify(laneDark());
+    }
     if (!turnLeases.get(dir)) {
       const url = name === "navigate" && /^https?:\/\//i.test(String(input?.url ?? "")) ? input.url : null;
       if (!url) return "no tab open — navigate to an http(s) url first";
@@ -433,6 +490,28 @@ House rules, non-negotiable:
   nothing. Not every event deserves a word.
 - You may read pages in the operator's own browser (navigate, read_page …)
   and never click or type — you hold no such grant, and the lane refuses.
+- THE CLOCK. You know what time it is: every message you get opens with the
+  local time, the instant, and how long ago the operator last spoke, you
+  last woke by yourself, and what was due was last read. Say "three hours
+  ago", not "recently". Never guess a time, never work one out from a
+  timestamp when the line above already says it in words, and never carry a
+  time over from an earlier turn — the one in THIS message is the only one
+  that is true.
+- THE BROWSER IS A TOOL, AND TOOLS DISCONNECT. Every message also says
+  whether it is connected. While it is not: nothing can be read, no tab can
+  be opened, no colleague can start, and the reads you would propose are
+  buttons that cannot fire. Say so in one line, say what to do about it, and
+  then do the work that needs no page — judge against rule.md, draft from
+  saved material, shape a campaign, answer what the store already knows.
+  Never blame a model or a bug for a browser that is simply not there.
+- WAKING UP BY YOURSELF. Some turns are nobody asking: the heartbeat wakes
+  you when the inbox is quiet. Look at the deck and the numbers, then either
+  do something that needs no permission — propose the next read or task,
+  prepare a draft, write your notebook — or answer with the single word
+  "noted" and cost nothing. Two silent wakes in a row and you are woken half
+  as often, which is the right outcome; a heartbeat spent narrating that
+  nothing has happened is a heartbeat the operator paid for. You still cannot
+  start a task from here: propose_tasks deals the card, the click is theirs.
 - Judge only against rule.md. Draft only from draft_material. Never invent a
   first-person claim me.md does not support.
 - Numbers come from the tools. Quote the count a tool returned; never tally
@@ -576,16 +655,42 @@ const openRouterFetch = async (url, init) => {
   return new Response(text, { status, statusText: err ? String(err.message ?? "upstream error").slice(0, 200) : res.statusText, headers: res.headers });
 };
 
+/**
+ * WHO THE SPECIALIST IS, as one string: the persona, the project, the
+ * doctrine, the operator's memory files, the campaigns, its own notebook and
+ * what the skills teach. Everything in here is durable — it changes when a
+ * file changes, not when the minute does.
+ *
+ * It is also its own cache key (below), which is the point of pulling it out
+ * (0.12.0). The system prompt bakes in the memory files, so an agent built
+ * before setup finished would keep telling the operator their files are
+ * empty; the fingerprint is what fixes that. Hashing the PROMPT ITSELF rather
+ * than a hand-kept list of its ingredients makes the other half of that
+ * bargain structural: anything time-varying that found its way in here would
+ * change the hash every turn, rebuild the agent every turn, and throw the
+ * provider's prompt cache away — so the clock, the lane and the deck ride in
+ * front of the message instead (turnPreface), and this cannot drift.
+ */
+export function systemPromptOf(dir) {
+  const nb = notebook(dir);
+  const skills = skillsText();
+  return [
+    personaOf(dir),
+    projectText(dir),
+    doctrine,
+    "What you know about the operator:\n\n" + (memoryContext(dir) || "(their memory files are still empty — setup is not finished)"),
+    campaignsText(dir),
+    nb ? "Your notebook (AGENTS.md):\n\n" + nb : "Your notebook (AGENTS.md) is empty. Write it when you have learned something durable.",
+    skills ? "What the skills teach:\n\n" + skills : "",
+  ].filter(Boolean).join("\n\n");
+}
+
 async function agentFor(dir) {
   const s = seat(dir, "scout"); // the researcher seat: biggest window, tool-happy
 
-  // The system prompt bakes in the memory files, so an agent built before
-  // setup finished would keep telling the user their files are empty. The
-  // cache key is what the prompt was built FROM — the seat, the persona, the
-  // memory, the notebook, the campaigns, and which skills are active; when
-  // any of that moves, rebuild.
+  const systemPrompt = systemPromptOf(dir);
   const fp = createHash("sha1").update([
-    dir, s.model, personaOf(dir), memoryContext(dir), notebook(dir), campaignsText(dir), projectText(dir),
+    dir, s.model, systemPrompt,
     activeSkills().map((k) => `${k.id}@${k.path}`).join(","),
     runtimeOf(dir).tasks ? "runtime" : "bare",
   ].join("\x00")).digest("hex");
@@ -605,21 +710,11 @@ async function agentFor(dir) {
   });
 
   const subagents = await skillSubagents(dir);
-  const skills = skillsText();
-  const nb = notebook(dir);
 
   const agent = createDeepAgent({
     model,
     tools: makeTools(dir),
-    systemPrompt: [
-      personaOf(dir),
-      projectText(dir),
-      doctrine,
-      "What you know about the operator:\n\n" + (memoryContext(dir) || "(their memory files are still empty — setup is not finished)"),
-      campaignsText(dir),
-      nb ? "Your notebook (AGENTS.md):\n\n" + nb : "Your notebook (AGENTS.md) is empty. Write it when you have learned something durable.",
-      skills ? "What the skills teach:\n\n" + skills : "",
-    ].filter(Boolean).join("\n\n"),
+    systemPrompt,
     ...(subagents.length ? { subagents } : {}),
     checkpointer: threadSaver(dir),
   });
@@ -641,11 +736,11 @@ const serial = (dir, fn) => {
   return next;
 };
 
-async function turn(dir, content, thread) {
+async function turn(dir, content, thread, { wokeBy = null } = {}) {
   const agent = await agentFor(dir);
   try {
     const result = await agent.invoke(
-      { messages: [{ role: "user", content: (await deckPreface()) + String(content).slice(0, 12_000) }] },
+      { messages: [{ role: "user", content: (await turnPreface(dir, { wokeBy })) + String(content).slice(0, 12_000) }] },
       { configurable: { thread_id: `mq:${thread}` }, recursionLimit: 40 },
     );
     const last = result.messages?.[result.messages.length - 1];
@@ -661,6 +756,10 @@ async function turn(dir, content, thread) {
  */
 export async function strategist(dir, message, thread = "panel") {
   if (!String(message ?? "").trim()) return { reply: "Say something and I will answer." };
+  // The operator spoke: the clock will say how long ago from now on, and the
+  // heartbeat's back-off starts over — somebody is here, and this is the
+  // worst moment to have decided to wake less often.
+  patchStash(dir, { operator_at: new Date().toISOString(), heartbeat_quiet: null });
   const reply = await serial(dir, () => turn(dir, message, thread));
   return { reply };
 }
@@ -670,24 +769,106 @@ export async function strategist(dir, message, thread = "panel") {
 const REACT_TO = new Set(["setup.done", "campaign.created", "campaign.status", "task.done", "task.failed", "task.blocked", "task.cancelled", "person.answered", "proposal.accepted", "proposal.dismissed", "call.refused", "grant.needed", "click.refused", "reply.waiting", "day.digest"]);
 
 /**
- * Inbox delivery when idle: every `everyMs`, the events since the last
- * cursor that deserve a reaction are handed to the CMO's thread as one
- * message. It may notify, propose, answer a task — or say nothing; the reply
- * text is not shown anywhere. Never while another turn is in flight (the
- * queue), never without a model, and with a long back-off after an error so
- * a dead key does not cost a failed call every twenty seconds.
+ * What a heartbeat is asked. Nobody is talking; the deck, the clock and the
+ * lane are already in front of it (turnPreface). Everything on this list is
+ * something the CMO may do without anyone's permission — and starting work
+ * is not on it, because it cannot: propose_tasks deals a card and the click
+ * stays the operator's, heartbeat or not.
  */
-export function startInboxLoop(dir, { everyMs = 20_000, thread = "panel" } = {}) {
+const HEARTBEAT_ASK = `Nobody asked — this is your heartbeat. The inbox is quiet and you woke up to look.
+
+Read the deck above and its numbers, then do exactly ONE of these:
+- propose the next read, or the next colleague, if the gap is plain (propose / propose_tasks — the card; the click stays theirs, and you must not claim anything started);
+- prepare what the operator will need next: judge what is pending, write the draft for the person at the top of the queue, shape a campaign that is missing;
+- write down something durable you have learned (write_notebook);
+- notify them, but only about something worth interrupting a day for;
+- otherwise answer with the single word "noted", and spend nothing.
+
+Do not narrate the deck back to them, do not repeat a note you have already made, and do not report that nothing has changed — "noted" says that for free, and two quiet heartbeats in a row mean you get woken half as often, which is the right outcome.`;
+
+/** The cards this seat can deal, as one string — so a heartbeat that dealt
+ *  something is not counted as a silent one however briefly it answered. */
+const dealt = (s) => JSON.stringify([s.agent_card?.at ?? null, (s.proposals ?? []).length, s.cmo_note?.at ?? null, s.cmo_ask?.id ?? null, s.campaign_draft?.id ?? null]);
+
+/**
+ * The loop with two reasons to fire (0.12.0).
+ *
+ * MAIL — unchanged since milestone 1: every `everyMs`, the events since the
+ * last cursor that deserve a reaction are handed to the CMO's thread as one
+ * message. It may notify, propose, answer a task — or say nothing; the reply
+ * text is not shown anywhere.
+ *
+ * HEARTBEAT — new. With nothing in the inbox, the CMO is woken anyway every
+ * half hour to look at what is queued and decide where to read next, prepare
+ * a draft, or say nothing. Before this, the loop returned immediately
+ * whenever its cursor had not moved: a mail loop, not a heartbeat, and an
+ * idle Messaging Quest stayed idle forever.
+ *
+ * QUIET GETS CHEAPER. A founder on a free seat pays for every idle turn, so
+ * the interval doubles after each silent wake to a ceiling (lib/clock.mjs
+ * heartbeatEvery) and resets on any real event or any word from the operator.
+ * The schedule is persisted in the stash, so a restart does not hand out a
+ * free turn — and so the clock can say when the last one was.
+ *
+ * Both paths: never while another turn is in flight (the queue, which the
+ * panel's messages share), never without a model, and with a long back-off
+ * after an error so a dead key does not cost a failed call every twenty
+ * seconds.
+ */
+export function startInboxLoop(dir, {
+  everyMs = 20_000, thread = "panel", heartbeatMs = HEARTBEAT_MS, ceilingMs = HEARTBEAT_CEILING_MS,
+  // One turn, as the loop takes it. Injectable for the same reason
+  // taskManager takes `modelFor`: a loop whose only untestable part is the
+  // model call is a loop nobody tests, and this one decides how often the
+  // operator's money is spent. The default is the real thing.
+  speak = (content, opts) => serial(dir, () => turn(dir, content, thread, opts)),
+} = {}) {
   let backoffUntil = 0;
   let inFlight = false;
-  const tick = async () => {
+  // A directory that has never had a turn counts from now, so a server that
+  // just came up does not spend a turn twenty seconds later. A directory that
+  // HAS one counts from that — a restart must not hand out a free heartbeat,
+  // and must not swallow one that was already overdue.
+  const bootAt = Date.now();
+
+  /** Wake with nothing to read: what the operator's money is actually being
+   *  spent on, so the guards are the same as the mail's plus the schedule. */
+  const heartbeat = async () => {
+    const s = readStash(dir);
+    const quiet = Number(s.heartbeat_quiet) || 0;
+    // The schedule counts from the last time this thread had a turn at all —
+    // a heartbeat two seconds after the operator's own message is noise.
+    const last = [s.heartbeat_at, s.operator_at].map((x) => Date.parse(x ?? "")).filter(Number.isFinite);
+    const from = new Date(last.length ? Math.max(...last) : bootAt).toISOString();
+    if (!heartbeatDue(from, quiet, { everyMs: heartbeatMs, ceilingMs })) return;
+    inFlight = true;
+    const before = dealt(s);
+    // Stamped BEFORE the turn: a turn that dies on a provider error must not
+    // leave the schedule where it was and try again in twenty seconds.
+    patchStash(dir, { heartbeat_at: new Date().toISOString() });
+    try {
+      const reply = await speak(HEARTBEAT_ASK, { wokeBy: "your heartbeat — nobody asked for it" });
+      const silent = saidNothing(reply) && dealt(readStash(dir)) === before;
+      patchStash(dir, { heartbeat_quiet: silent ? quiet + 1 : null });
+      if (!silent) return;
+      const next = heartbeatEvery(quiet + 1, { everyMs: heartbeatMs, ceilingMs });
+      if (next > heartbeatMs) console.error(`the specialist had nothing to say ${quiet + 1} times over — waking it in ${span(next)}`);
+    } catch (e) {
+      console.error(`heartbeat failed: ${String(e?.message ?? e).split("\n")[0]} — trying again in 5 minutes`);
+      backoffUntil = Date.now() + 5 * 60_000;
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const pulse = async () => {
     const T = runtimeOf(dir).tasks;
     if (!T || inFlight || Date.now() < backoffUntil || !hasModel(dir)) return;
     const cursor = Number(readStash(dir).cmo_cursor) || 0;
     const { events, cursor: next } = T.inbox(cursor);
-    if (next === cursor) return;
+    if (next === cursor) return heartbeat();
     const worth = events.filter((e) => REACT_TO.has(e.type));
-    if (!worth.length) { patchStash(dir, { cmo_cursor: next }); return; }
+    if (!worth.length) { patchStash(dir, { cmo_cursor: next }); return heartbeat(); }
     inFlight = true;
     try {
       const digest = worth.slice(-20).map((e) => `- ${e.at} ${e.type}${e.title ? ` · ${e.title}` : ""}${e.task ? ` (${e.task})` : ""}${e.questions ? ` — asks: ${e.questions.join(" · ")}` : ""}${e.result ? ` — ${short(e.result, 400)}` : ""}${e.error ? ` — ${short(e.error, 200)}` : ""}${e.why ? ` — ${short(e.why, 200)}` : ""}${e.answers ? ` — answers: ${short(JSON.stringify(e.answers), 300)}` : ""}${e.origin ? ` — ${e.origin}` : ""}`).join("\n");
@@ -707,10 +888,11 @@ export function startInboxLoop(dir, { everyMs = 20_000, thread = "panel" } = {})
         : made
           ? `The operator saved a campaign: ${made.title}. Its room is being probed in their browser now, so do not propose that search. Read campaigns, then write one short notify — what the campaign will do and what happens next (the probe, the judge, the watch card) — in two plain sentences. Nothing else.`
           : `React only if there is signal — notify the operator, propose the next task, answer a colleague you can answer — otherwise reply with the single word "noted".`;
-      await serial(dir, () => turn(dir,
-        `Inbox (${worth.length} event${worth.length === 1 ? "" : "s"} since you last looked). ${ask}\n\n${digest}`,
-        thread));
-      patchStash(dir, { cmo_cursor: next });
+      await speak(`Inbox (${worth.length} event${worth.length === 1 ? "" : "s"} since you last looked). ${ask}\n\n${digest}`,
+        { wokeBy: "your inbox — these events arrived while you were idle" });
+      // Mail is a real event: the schedule moves with it (the CMO has just
+      // looked) and the back-off starts over — something is happening again.
+      patchStash(dir, { cmo_cursor: next, heartbeat_at: new Date().toISOString(), heartbeat_quiet: null });
     } catch (e) {
       console.error(`inbox delivery failed: ${String(e?.message ?? e).split("\n")[0]} — trying again in 5 minutes`);
       backoffUntil = Date.now() + 5 * 60_000;
@@ -718,7 +900,7 @@ export function startInboxLoop(dir, { everyMs = 20_000, thread = "panel" } = {})
       inFlight = false;
     }
   };
-  const t = setInterval(() => { tick().catch(() => {}); }, everyMs);
+  const t = setInterval(() => { pulse().catch(() => {}); }, everyMs);
   t.unref?.();
   return () => clearInterval(t);
 }

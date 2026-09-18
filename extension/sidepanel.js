@@ -865,6 +865,28 @@ function drawSettings() {
     seats.append(it);
   }
 
+  /* The clock (0.12.0). The engine reads what is due by itself now — watched
+     rooms past their cadence, conversations nobody has looked at in twelve
+     hours — in tabs of this browser, which is exactly the kind of thing a
+     person wants one switch away from not happening. Off is remembered per
+     project; the card on Next still reads early on request either way. */
+  const clock = st.clock ?? null;
+  let clockSec = null;
+  if (clock) {
+    const due = (clock.due?.sources ?? 0) + (clock.due?.conversations ?? 0);
+    clockSec = section("The clock", "Reads what is due on its own — a page turn every few seconds, in tabs of this browser you can watch. Nothing is ever posted, whatever it reads.");
+    const which = el("div", "es-plans");
+    for (const [on, label] of [[true, "Read on its own"], [false, "Only when I press"]]) {
+      const b = btn(label, () => panelDo({ do: "settings.clock", auto: on }), `es-plan${clock.auto === on ? " es-on" : ""}`);
+      b.setAttribute("aria-pressed", String(clock.auto === on));
+      which.append(b);
+    }
+    clockSec.append(which);
+    clockSec.append(el("p", "es-sub", clock.auto
+      ? `${due ? `${due} read${due === 1 ? " is" : "s are"} due now.` : "Nothing is due."} ${clock.lane ? "This browser is on the lane, so a read can start any minute." : "No browser is connected, so it is holding — the Next tab says how to bring one back."}`
+      : "Holding. Nothing reads until you press it on the Next tab."));
+  }
+
   const you = section("You", "");
   const P = st.platform;
   const acc = el("div", "es-form");
@@ -991,7 +1013,7 @@ function drawSettings() {
     acct2.append(box);
   }
 
-  host.append(models, seats, you, projects, ...(acct2 ? [acct2] : []), look, browser);
+  host.append(models, seats, ...(clockSec ? [clockSec] : []), you, projects, ...(acct2 ? [acct2] : []), look, browser);
 }
 
 async function switchProjectJSON(name) {
