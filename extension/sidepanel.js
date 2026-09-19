@@ -1084,7 +1084,10 @@ function drawSettings() {
       // email door is open — it has a human check the panel cannot show, and
       // is shut altogether until the launch.
       const link = el("a", "es-link", "Connect this browser on messaging.quest ↗");
-      link.href = `${SITE}/link`; link.target = "_blank"; link.rel = "noreferrer noopener";
+      // With this extension's own id: the page pings the store build's id
+      // otherwise, and an unpacked build (the operator's, which reads for
+      // Quest) has one of its own (app/link/page.tsx takes ?ext=).
+      link.href = `${SITE}/link?ext=${encodeURIComponent(ext?.runtime?.id ?? "")}`; link.target = "_blank"; link.rel = "noreferrer noopener";
       box.append(el("p", "es-sub", "Sign in there, press Connect this browser, and this extension gets a session of its own."));
       box.append(link);
       const email = input("you@example.com", "", "email");
