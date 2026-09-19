@@ -59,8 +59,8 @@ import { campaignDigest, digestText, waiting as waitingRows } from "../lib/conve
 import { listProjects } from "../lib/projects.mjs";
 import { dataDir } from "../lib/dirs.mjs";
 import { isCustomer, customerOf, writeCustomer, siteOf, say, setCard, chatState } from "../lib/chat.mjs";
-import { offerLine, offerCard, revise, ruleOf, lookLine, lookRooms, campaignOf } from "../lib/quest.mjs";
-import { writeCampaign } from "../lib/campaigns.mjs";
+import { offerLine, lookLine } from "../lib/quest.mjs";
+import { applyRevision } from "../lib/revise.mjs";
 import { labelsOf, preferred } from "../lib/platform.mjs";
 import { engineTools } from "./verbs.mjs";
 import { threadSaver } from "./threads.mjs";
@@ -314,14 +314,14 @@ const questDoctrine = `
 How you work, non-negotiable:
 - The customer is a builder, not a marketer. Talk like a sharp colleague in a chat: plain words, short messages, no jargon. Say "people", "posts", "communities" — never "leads", "ICP", "funnel" or "campaign". Do not describe your own machinery (models, tools, browsers, agents); describe what you are doing for them.
 - You find, you judge, you draft. THEY post. You never post, comment, message or email anyone for them, and you never ask for a password, a login or access to any account of theirs. If they ask you to post for them, say plainly that you don't: they read the reply, change what they like, and press the button themselves.
-- The flow, in order. (1) Their site is read by itself as soon as they sign up — not by you — and what was understood arrives in this chat as a card: what it is, the problem, where you will look first. They press Looks right, or tell you what to change; revise_offer replaces the card with a corrected one. (2) Once they confirm, each community is checked by itself — its rules first (one that forbids promotion is skipped), then its recent posts — and the ones where real people ask for this are watched a few times a day. (3) Every person who fits arrives in this chat as an opportunity card by itself: their words, why it fits, a reply they could post, the link, and buttons. You do not post those cards; you talk about them — why one fits, what to change in a reply, where else to look (revise_offer with more communities, or people to leave out).
+- The flow, in order. (1) Their site is read by itself as soon as they sign up — not by you — and what was understood arrives in this chat as a card: what it is, the problem, where you will look first. They press Looks right, or tell you what to change; revise_offer replaces the card with a corrected one. (2) Once they confirm, each community is checked by itself — its rules first (one that forbids promotion is skipped), then its recent posts — and the ones where real people ask for this are watched a few times a day. (3) Every person who fits arrives in this chat as an opportunity card by itself: their words, why it fits, a reply they could post, the link, and buttons. You do not post those cards; you talk about them — why one fits, what to change in a reply, where else to look (revise_offer with more communities, or people to leave out). When they want a reply changed — shorter, warmer, less promotional — call rewrite_reply with their words; never write the new reply yourself, the writer does it and it replaces the old one on the card in a minute or two. Card numbers are for your tool calls only — never say one to them.
 - Their site: when they give you its address — or a corrected one — use set_site, and it is read by itself. No site (a freelancer, a consultant, a service), or one that could not be opened: ask for a sentence or two about what they sell and who buys it, then describe_offer. A CV they uploaded is read by itself too. Never read their site yourself, never ask them to confirm the card in words (the button is on it), and never guess what a site says from its name. The line "Where things stand" at the top of every message says what is happening; trust it.
 - Honesty about time. Every page is read the way a person reads it, one at a time, so a first look takes minutes and results arrive over hours. Never promise "real time", "instantly" or "24/7". When you start something that takes a while, say what happens next and that you will come back here with it.
 - Never invent a person, a post, a quote, a number or a result. If you have not found anyone yet, say so.
 - A reply you draft may mention what they built — always openly as theirs ("I built…", "we make…") and only when it genuinely helps the person asking. Never a hidden plug, never pretending to be a happy customer.
-- When they tell you who to leave out, where not to look, or what matters to them, that is an instruction: write it into your notebook now (write_notebook) and say in one line what changed.
-- THE CLOCK. Every message opens with the local time and how long ago things happened. Say "three hours ago", not "recently"; never guess a time and never carry one over from an earlier turn.
-- Every message says whether your research browser is connected. It is not the customer's and it is not their problem: when it is down, never mention it — no "browser", no "connection", no "machine" — and never ask them to open, install or connect anything. Say "It's in the queue — I'll post what I find right here", and do what needs no page.
+- Who to leave out and which communities to add is applied for you before you see their message; a line beginning "Already done" says what, and they have been told — never do it again or repeat it. Anything else they want remembered (tone, wording, what matters to them): write it into your notebook (write_notebook) and say in one line what changed. You cannot hide, delete, un-mark or re-judge a card or a reply, and you never say you did.
+- THE CLOCK. Every message you RECEIVE opens with the local time and how long ago things happened. That line is for you, not for them: never start a reply with the date or the time, and never mention a time zone unless they ask. When time matters, say "three hours ago", not "recently"; never guess a time and never carry one over from an earlier turn.
+- Every message you receive says whether your research browser is connected. It is not the customer's and it is not their problem: when it is down, never mention it — no "browser", no "connection", no "machine" — and never ask them to open, install or connect anything. Say "It's in the queue — I'll post what I find right here", and do what needs no page.
 - WAKING UP BY YOURSELF. Some turns are nobody asking. Speak up (notify) only when there is something worth their attention; otherwise answer with the single word "noted".
 - Nothing is charged now and no price has been set — say exactly that if asked. Email and Telegram are coming; for now everything arrives in this chat.
 - Answer as plain chat text: no headings, no tables, no markdown emphasis. Lead with the answer. Under 90 words unless they asked for more.`;
@@ -354,7 +354,7 @@ const questLaneLine = (dir) => {
 /** Is the site being read right now? The job itself lives in the engine's
  *  memory; the stash keeps when the engine started it, and a read that has
  *  neither finished nor failed inside twenty minutes is not "running". */
-const readingSite = (s) => Boolean(s.scout_at && !s.offer && !s.scout_gaveup && Date.now() - Date.parse(s.scout_at) < 20 * 60_000);
+const readingSite = (s) => Boolean(s.scout_at && !s.offer && !s.scout_gaveup && !s.scout_empty && Date.now() - Date.parse(s.scout_at) < 20 * 60_000);
 
 async function questPreface(dir, { wokeBy = null } = {}) {
   const s = readStash(dir);
@@ -363,7 +363,7 @@ async function questPreface(dir, { wokeBy = null } = {}) {
     clockText({ who: "the customer", operatorAt: s.operator_at ?? null, heartbeatAt: s.heartbeat_at ?? null, tickAt: lastReadAt(dir), wokeBy }),
     questLaneLine(dir),
     `The customer: ${c.email ?? "(no email given)"}. Their site: ${c.url ?? "not given yet"}.`,
-    `Where things stand: ${offerLine({ offer: s.offer ?? null, scout: readingSite(s) ? "running" : "none", url: c.url ?? null, attempts: Number(s.scout_tries) || 0, material: c.url ? null : c.cv ? "cv" : c.about ? "about" : null })}`,
+    `Where things stand: ${offerLine({ offer: s.offer ?? null, scout: readingSite(s) ? "running" : "none", url: c.url ?? null, attempts: Number(s.scout_tries) || 0, material: c.url ? null : c.cv ? "cv" : c.about ? "about" : null, empty: Boolean(s.scout_empty) })}`,
     lookLine(s.look, { room: roomLabel(dir) }),
     foundLine(dir),
   ].filter(Boolean).join("\n\n") + "\n\n";
@@ -372,28 +372,45 @@ async function questPreface(dir, { wokeBy = null } = {}) {
 /** The opportunities so far, counted off the transcript — the cards are the
  *  record, so the count cannot drift from what the customer was shown. */
 const foundLine = (dir) => {
-  const cards = chatState(dir, { limit: Infinity }).messages.filter((m) => m.card?.kind === "opportunity").map((m) => m.card);
-  if (!cards.length) return "";
+  const posted = chatState(dir, { limit: Infinity }).messages.filter((m) => m.card?.kind === "opportunity");
+  if (!posted.length) return "";
+  const cards = posted.map((m) => m.card);
   const n = (f) => cards.filter(f).length;
   const last = cards[cards.length - 1];
-  return `Opportunities so far: ${cards.length} posted in the chat (${n((c) => c.rating === "good")} marked relevant, ${n((c) => c.rating === "bad")} not relevant, ${n((c) => c.state === "replied")} replied to, ${n((c) => c.opened_at)} opened). They are cards in the chat already — never paste one again. The latest: "${String(last.title || last.quote || "").slice(0, 120)}" in ${last.room}.`;
+  const numbered = posted.slice(-5).map((m) => `#${m.id} ${m.card.room}: "${String(m.card.title || m.card.quote || "").slice(0, 60)}"`).join("; ");
+  return `Opportunities so far: ${cards.length} posted in the chat (${n((c) => c.rating === "good")} marked relevant, ${n((c) => c.rating === "bad")} not relevant, ${n((c) => c.state === "replied")} replied to, ${n((c) => c.opened_at)} opened). They are cards in the chat already — never paste one again. The latest: "${String(last.title || last.quote || "").slice(0, 120)}" in ${last.room}. Card numbers, for rewrite_reply: ${numbered}.`;
 };
 
 /** What the platform's people call a community ("r/saas"), for a card. */
 const roomLabel = (dir) => (p) => labelsOf(preferred(readStash(dir).platform)).room(p);
 
+/** What a customer has been told about, in the few things they can see: how
+ *  many people were posted, whether their offer is confirmed, whether their
+ *  site said nothing. If this has not moved since Quest last spoke up on its
+ *  own, there is nothing new to say — however the model feels about it. */
+const newsOf = (dir) => {
+  const s = readStash(dir);
+  const people = chatState(dir, { limit: Infinity }).messages.filter((m) => m.card?.kind === "opportunity").length;
+  return JSON.stringify([people, s.offer?.state ?? null, Boolean(s.scout_empty)]);
+};
+
 /** Quest's hands: say something in the chat, keep a notebook, set their site,
- *  correct the card. Everything else the operator's seat holds — the deck,
- *  campaigns, colleagues, the CLI's verbs, the browser — is left out on
- *  purpose; the search and the opportunities arrive as tools of their own. */
-const questTools = (dir) => [
+ *  correct the card, write a reply again. Everything else the
+ *  operator's seat holds — the deck, campaigns, colleagues, the CLI's verbs,
+ *  the browser — is left out on purpose; the search and the opportunities arrive as tools of their own. */
+export const questTools = (dir) => [
   tool(async ({ text }) => {
     const t = String(text ?? "").trim().slice(0, 1500);
     if (!t) return "nothing to say";
+    // Measured 2026-09-18: the heartbeat, told never to report that nothing
+    // changed, posted "still waiting, no new matches" two hours later. A rule
+    // in a prompt is a request; this is the rule.
+    const news = newsOf(dir);
+    if (readStash(dir).cmo_note?.news === news) return "nothing has changed since you last spoke up — they already know. Say nothing more: answer with the single word \"noted\".";
     say(dir, t);
     // The same stamp the operator's note leaves, so a heartbeat that spoke
     // is never counted as a silent one (dealt, below).
-    patchStash(dir, { cmo_note: { text: t.slice(0, 700), at: new Date().toISOString() } });
+    patchStash(dir, { cmo_note: { text: t.slice(0, 700), at: new Date().toISOString(), news } });
     return "said — it is in the customer's chat now";
   }, {
     name: "notify",
@@ -421,7 +438,7 @@ const questTools = (dir) => [
     if (!u) return "that is not a web address — ask them for their site's address, like acme.com";
     if (readStash(dir).offer) return "their site was already read and answered on a card — to change what it says, use revise_offer";
     writeCustomer(dir, { url: u });
-    patchStash(dir, { scoutJob: null, scout_tries: null, scout_gaveup: null, scout_at: null });
+    patchStash(dir, { scoutJob: null, scout_tries: null, scout_gaveup: null, scout_at: null, scout_empty: null });
     return `set — ${u} is read by itself within a minute or two (sooner if nothing else is being read), and the card arrives in the chat. Tell them it is on its way; do not read it yourself.`;
   }, {
     name: "set_site",
@@ -435,46 +452,40 @@ const questTools = (dir) => [
     // Their words win over a site that could not be opened: the read then
     // works from what they said, with no browser at all.
     writeCustomer(dir, { about: t, url: null });
-    patchStash(dir, { scoutJob: null, scout_tries: null, scout_gaveup: null, scout_at: null });
+    patchStash(dir, { scoutJob: null, scout_tries: null, scout_gaveup: null, scout_at: null, scout_empty: null });
     return "set — it is read by itself in a few seconds and the card arrives in the chat. Tell them it is on its way.";
   }, {
     name: "describe_offer",
     description: "When they have no site, or it could not be opened, record what they sell in their own words — what it is, who buys it, the problem it solves. Their description is then read by itself and a card arrives in the chat, the same as for a site. Pass their words, lightly joined up; do not invent anything.",
     schema: z.object({ text: z.string().describe("What they sell and who buys it, in their words") }),
   }),
-  tool(async ({ one_line, problem, places, leave_out }) => {
-    const s = readStash(dir);
-    if (!s.offer) return "there is no card yet — their site is still being read; say it is on its way";
-    const next = revise(s.offer, { one_line, problem, places, leave_out });
-    if (s.offer.state === "confirmed") {
-      // Already confirmed: the judge reads rule.md, so who is left out takes
-      // effect there, now — and in the campaign the writer reads. A new
-      // community joins the look: the engine reads its rules, then it, by
-      // itself, with the problem sentence as it stands now.
-      writeMemory(dir, "rule.md", ruleOf(next));
-      writeCampaign(dir, campaignOf(next));
-      const have = new Set((s.look?.rooms ?? []).map((r) => r.place.toLowerCase()));
-      const added = (places ?? []).length ? next.places.filter((p) => !have.has(p.toLowerCase())) : [];
-      patchStash(dir, {
-        offer: { ...next, state: "confirmed" },
-        ...(added.length ? { look: { ...(s.look ?? {}), said: false, rooms: [...(s.look?.rooms ?? []), ...lookRooms(added, next.problem || null)] } } : {}),
-      });
-      const bits = [
-        next.leave_out.length && (leave_out ?? []).length ? `leaving out ${next.leave_out.join(", ")} from now on` : "",
-        added.length ? `adding ${added.map(roomLabel(dir)).join(", ")} — it is read by itself, next` : "",
-      ].filter(Boolean);
-      return `done — ${bits.join("; ") || "the changes are on file"}. Tell them what changed in one line.`;
-    }
-    setCard(dir, s.offer.card, { state: "replaced" });
-    const msg = say(dir, offerCard(next, { room: roomLabel(dir) }));
-    patchStash(dir, { offer: { ...next, state: "open", card: msg.id, at: new Date().toISOString() } });
-    return "done — the corrected card is in the chat now, with its buttons. Do not repeat it in words; at most say you changed it.";
+  tool(async ({ note, card }) => {
+    const n = String(note ?? "").replace(/\s+/g, " ").trim().slice(0, 600);
+    if (!n) return "what should change? ask them in a few words";
+    const cards = chatState(dir, { limit: Infinity }).messages.filter((m) => m.card?.kind === "opportunity" && m.card.state !== "dismissed" && (m.card.draft || m.card.no_draft || m.card.rewriting));
+    const target = card ? cards.find((m) => m.id === Number(card)) : cards[cards.length - 1];
+    if (!target) return card ? "there is no such reply — the numbers are in \"Opportunities so far\"" : "there is no reply to rewrite yet";
+    if (target.card.rewriting) return "that reply is already being rewritten — say the new one is on its way";
+    setCard(dir, target.id, { rewriting: { note: n, style: null, at: new Date().toISOString() }, draft: null, drafts: null, no_draft: null });
+    return "done — the reply is being written again with their note and replaces the old one on its card in a minute or two. Say exactly that in one line (it is being rewritten — not that it is done); never mention card numbers, they are for your tool calls only; do not write the reply yourself.";
+  }, {
+    name: "rewrite_reply",
+    description: "When they ask to change a reply you drafted — shorter, less promotional, warmer, mention something — write it again with their note. The card's three replies are replaced by three new ones. Defaults to the latest reply; pass the card's number for an older one. Never write the new reply yourself.",
+    schema: z.object({
+      note: z.string().describe("What should change, in their words: 'shorter, and not salesy'"),
+      card: z.number().optional().describe("The card's number from \"Opportunities so far\", when they mean an older one"),
+    }),
+  }),
+  tool(async ({ one_line, problem, signals, searches, places, leave_out }) => {
+    return applyRevision(dir, { one_line, problem, signals, searches, places, leave_out }, { room: roomLabel(dir) }).said;
   }, {
     name: "revise_offer",
-    description: "Correct the card that says what they sell: the one-line description, the problem people describe (the phrase you search for), the communities to look in (bare names, e.g. saas), and who to leave out (e.g. agencies, students). Pass only what they asked to change. Before they confirm, it replaces the card with a corrected one; after, who to leave out takes effect at once.",
+    description: "Correct the card that says what they sell: the one-line description, the problem people describe, what those people do in a post (signals), the short phrases searched for, the communities to look in (bare names, e.g. saas), and who to leave out (e.g. agencies, students). Pass only what they asked to change. Before they confirm, it replaces the card with a corrected one; after, who to leave out takes effect at once, and new communities are searched with the phrases as they stand.",
     schema: z.object({
       one_line: z.string().optional().describe("What it is and who it is for, in one plain sentence"),
-      problem: z.string().optional().describe("The sentence somebody types when they have the problem"),
+      problem: z.string().optional().describe("The problem in the words of somebody who has it, one short sentence"),
+      signals: z.array(z.string()).optional().describe("What a person does in a post when they need it, each under 10 words, starting with a verb: 'ask for a scheduling tool'"),
+      searches: z.array(z.string()).optional().describe("2 to 4 search phrases of 2 to 4 plain words: 'calendly alternative'"),
       places: z.array(z.string()).optional().describe("Communities to look in, bare names"),
       leave_out: z.array(z.string()).optional().describe("Kinds of people to leave out, in their words"),
     }),
@@ -933,11 +944,11 @@ const serial = (dir, fn) => {
   return next;
 };
 
-async function turn(dir, content, thread, { wokeBy = null } = {}) {
+async function turn(dir, content, thread, { wokeBy = null, note = "" } = {}) {
   const agent = await agentFor(dir);
   try {
     const result = await agent.invoke(
-      { messages: [{ role: "user", content: (await turnPreface(dir, { wokeBy })) + String(content).slice(0, 12_000) }] },
+      { messages: [{ role: "user", content: (await turnPreface(dir, { wokeBy })) + (note ? `${note}\n\n` : "") + String(content).slice(0, 12_000) }] },
       { configurable: { thread_id: `mq:${thread}` }, recursionLimit: 40 },
     );
     const last = result.messages?.[result.messages.length - 1];
@@ -957,13 +968,13 @@ const threadOf = (dir, thread) => thread ?? (isCustomer(dir) ? "chat" : "panel")
  * One turn. `thread` keeps a conversation's context on the saver; the panel
  * uses one thread, a customer's chat another (threadOf).
  */
-export async function strategist(dir, message, thread = null) {
+export async function strategist(dir, message, thread = null, { note = "" } = {}) {
   if (!String(message ?? "").trim()) return { reply: "Say something and I will answer." };
   // The operator spoke: the clock will say how long ago from now on, and the
   // heartbeat's back-off starts over — somebody is here, and this is the
   // worst moment to have decided to wake less often.
   patchStash(dir, { operator_at: new Date().toISOString(), heartbeat_quiet: null });
-  const reply = await serial(dir, () => turn(dir, message, threadOf(dir, thread)));
+  const reply = await serial(dir, () => turn(dir, message, threadOf(dir, thread), { note }));
   return { reply };
 }
 
@@ -993,7 +1004,7 @@ Do not narrate the deck back to them, do not repeat a note you have already made
  *  propose — only whether they should hear something now. */
 const QUEST_HEARTBEAT_ASK = `Nobody asked — this is your heartbeat. The customer is not talking to you right now.
 
-If there is something they should hear — someone you found, something that changed — say it with notify, in a sentence or two. Otherwise answer with the single word "noted" and spend nothing. Never tell them that nothing happened, and never repeat something you already said.`;
+If there is something they should hear — someone you found, something that changed — say it with notify, in a sentence or two. Otherwise answer with the single word "noted" and spend nothing. Never tell them that nothing happened, and never repeat something you already said. The only count of people found is the "Opportunities so far" line above — the cards they can see; a post read or judged is not a person found.`;
 
 /** …and the mail: events arrived while Quest was idle. */
 const QUEST_MAIL_ASK = `React only if the customer should hear about it — say it with notify, in a sentence or two, in plain words — otherwise reply with the single word "noted".`;
@@ -1081,7 +1092,12 @@ export function startInboxLoop(dir, {
     const cursor = Number(readStash(dir).cmo_cursor) || 0;
     const { events, cursor: next } = T.inbox(cursor);
     if (next === cursor) return heartbeat();
-    const worth = events.filter((e) => REACT_TO.has(e.type));
+    // A customer's Quest is woken by the customer and by its heartbeat, whose
+    // turn carries the counts they can see (foundLine). The engine's events
+    // speak the operator's language — "7 found" there is seven posts read,
+    // which a free model relayed as seven people found (2026-09-18) — so none
+    // of them reach it.
+    const worth = isCustomer(dir) ? [] : events.filter((e) => REACT_TO.has(e.type));
     if (!worth.length) { patchStash(dir, { cmo_cursor: next }); return heartbeat(); }
     inFlight = true;
     try {

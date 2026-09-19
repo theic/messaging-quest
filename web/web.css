@@ -93,6 +93,49 @@ h1, h2, h3 { font-family: var(--disp); text-wrap: balance; margin: 0; }
 .versus blockquote { margin: 0; font: 600 18px/1.4 var(--disp); }
 .tagline { font: 10px/1 var(--px); letter-spacing: .06em; color: var(--soft); }
 
+.band > .go { justify-self: start; }
+.lede { margin: 0; font-size: 18px; color: var(--ink-2); max-width: 62ch; }
+
+/* What Quest finds, under the box: the page's main picture. */
+.found-card {
+  width: 100%; max-width: 760px; display: grid; gap: 8px; padding: 16px 18px; margin-top: 12px;
+  background: var(--sheet-card); border: 2px solid var(--ink); box-shadow: 5px 5px 0 0 var(--ink);
+}
+.found-card .meta { margin: 0; font: 13px var(--mono); color: var(--soft); display: flex; gap: 10px; align-items: baseline; }
+.found-card blockquote { margin: 0; font: 600 19px/1.4 var(--disp); }
+.found-card .why { margin: 0; font-size: 15.5px; color: var(--ink-2); }
+
+/* What happens, in four steps: one card each, numbered like "How it works". */
+.flow { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+.flow li { display: grid; gap: 8px; align-content: start; padding: 16px; border: 1.5px solid var(--line-2); background: var(--sheet-card); }
+.flow .n { font: 14px/1 var(--px); color: var(--lime-ink); }
+.flow b { font: 700 18px/1.3 var(--disp); }
+.flow p { margin: 0; color: var(--ink-2); font-size: 15.5px; }
+.flow .mono { font: 15px var(--mono); color: var(--ink); }
+
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chips span { font: 700 13px/1 var(--sans); padding: 7px 10px; border: 1.5px solid var(--ink); }
+
+/* The usual way against this one: a chain of steps, read top to bottom. */
+.contrast { display: grid; gap: 22px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); align-items: start; }
+.contrast > div { display: grid; gap: 12px; padding: 18px 20px; border: 1.5px dashed var(--line-2); color: var(--ink-2); }
+.contrast > .ours { border: 2px solid var(--ink); box-shadow: 5px 5px 0 0 var(--ink); background: var(--sheet-card); color: var(--ink); }
+.contrast h3 { font-size: 18px; font-weight: 700; }
+.chain { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.chain li + li::before { content: "↓"; display: block; color: var(--soft); line-height: 1.4; }
+
+/* A conversation with Quest, drawn like the chat it is. */
+.mock { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; max-width: 580px; }
+.mock li { padding: 12px 14px; font-size: 16px; }
+.mock .q { justify-self: start; border: 1.5px solid var(--line-2); background: var(--sheet-card); }
+.mock .y { justify-self: end; background: var(--sheet-2); }
+.mock .by { display: block; font: 10px/1 var(--px); letter-spacing: .06em; color: var(--soft); margin-bottom: 8px; }
+
+.segments { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.segments > div { display: grid; gap: 8px; align-content: start; padding: 16px 18px; border: 1.5px solid var(--line-2); }
+.segments h3 { font-size: 18px; font-weight: 700; }
+.segments p { margin: 0; color: var(--ink-2); }
+
 .faq { display: grid; gap: 0; max-width: 760px; }
 .faq details { border-bottom: 1.5px solid var(--line); padding-block: 14px; }
 .faq summary { font-weight: 700; cursor: pointer; }
@@ -123,6 +166,18 @@ body.app { height: 100vh; height: 100dvh; display: flex; flex-direction: column;
   display: grid; grid-template-columns: minmax(0, 1fr) 320px;
 }
 .chat { display: flex; flex-direction: column; min-height: 0; border-right: 1.5px solid var(--line); }
+/* The strip for the person at the machine: a page was asked for and no Chrome
+   is attached (coral, like every "this needs you"), then one line of green. */
+.lane { margin: 14px 20px 0; padding: 14px 16px; border: 2px solid var(--coral-ink); background: var(--coral-wash); font-size: 15.5px; }
+.lane.ok { border-color: var(--lime-ink); background: var(--lime-wash); }
+.lane p { margin: 0 0 8px; }
+.lane p:last-child { margin-bottom: 0; }
+.lane .lane-h { font: 700 17px/1.35 var(--disp); }
+.lane .lane-tip { font-size: 14px; color: var(--ink-2); }
+.lane ol { margin: 4px 0 0; padding-left: 22px; display: grid; gap: 8px; }
+.lane code { font: 13.5px var(--mono); overflow-wrap: anywhere; }
+.lane .copy { display: inline-flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.lane .copy button { font: 700 12px/1 var(--sans); padding: 5px 8px; cursor: pointer; border: 1.5px solid var(--ink); background: transparent; color: var(--ink); }
 .log { list-style: none; margin: 0; padding: 24px 20px; display: flex; flex-direction: column; gap: 14px; overflow-y: auto; flex: 1; }
 .msg { max-width: min(640px, 88%); padding: 12px 14px; border: 1.5px solid var(--line-2); background: var(--sheet-card); overflow-wrap: anywhere; }
 .msg p { margin: 0 0 8px; }
@@ -155,6 +210,11 @@ body.app { height: 100vh; height: 100dvh; display: flex; flex-direction: column;
 .opp-draft { margin-top: 12px; padding: 12px 14px; background: var(--sheet-2); display: grid; gap: 6px; }
 .opp-draft .label { font: 700 12px/1 var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--soft); }
 .opp-draft p { margin: 0; }
+.rw { display: grid; gap: 10px; margin-top: 12px; }
+.rw textarea { width: 100%; font: 16px/1.45 var(--sans); padding: 10px 12px; resize: vertical; border: 2px solid var(--ink); background: var(--sheet-card); color: var(--ink); }
+.rw textarea:focus { outline: none; box-shadow: 3px 3px 0 0 var(--ink); }
+.rw .acts { margin-top: 0; }
+.opp-draft .check { margin-top: 6px; padding: 8px 10px; font-size: 14.5px; background: var(--coral-wash); border-left: 3px solid var(--coral-ink); }
 .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
 .tab { font: 700 12px/1 var(--sans); letter-spacing: .04em; text-transform: uppercase; padding: 6px 9px; cursor: pointer; border: 1.5px solid var(--line-2); background: transparent; color: var(--ink-2); }
 .tab.on { background: var(--lime); color: var(--on-lime); border-color: var(--on-lime); }

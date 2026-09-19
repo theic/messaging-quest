@@ -1211,13 +1211,80 @@ an opportunity card, at most two a room and five a day, the three drafts
 follow, and 👍 / 👎 (skip) / I replied (sent) are the feedback. THE EXTENSION
 AS A WORKER: while the current project is a customer's, the deck deals only
 the grants and `work.browser`, and the panel says whose work it is doing.
-645 engine tests + 55 runtime + 34 voice green. Verified live: the landing, the
-sign-up, Quest answering on a real free model, the hold while no browser is
-attached, the opportunity cards and their buttons on a seeded copy, the
-worker panel. Left: the acceptance run through the operator's own Chrome —
-paste a URL, sign up, a first Reddit opportunity — since the site read, the
-rules read, the search and the drafts have not run live here; and one
-customer at a time until Stage 2.
+THE LIVE RUN (2026-09-19, a real Chrome with the extension on this laptop; the
+whole flow on a holding page, a repository's README and a description) found
+what tests could not, and each is fixed and pinned. THE PAGES AND THE AGENT:
+the model copied its own turn's clock into its reply; the reader opened legal
+pages and the same page under four addresses; a site that says nothing gave
+an "Unknown" card (now a question); a reader told nothing about buyers wrote
+the offer from the OWNER's side ("ask about my product's features", a rule
+that says YES when a post names the product) — both readers now carry
+`BUYER_RULES`; the offer card shows what the people DO (signals) and the
+search phrases are short, never the problem sentence. THE LOOK: a banned room
+burned the phrase it was given, so phrases are handed out as rooms clear
+their rules; a look that found nobody tries once more (unused phrases, then
+the reader's spare communities) before it says so, and says which rooms it
+left out and why. **Reddit's search page ignores `t=week` when sorted by
+newest** — posts 8 to 43 days old were delivered as "opportunities" — so a
+week (`FRESH_DAYS`) is enforced in `lib/quest.mjs`, and the first look counts
+only what it read from the last week. A fresh watch was read again a minute
+later (its probe's read was not the source's own): cadence counts from
+`added`. THE MODEL'S DISCIPLINE, put in code where a prompt failed: told to
+"leave out anyone selling services", a free chat model wrote its private
+notebook, changed nothing the judge reads and answered that it was "not
+marking" two cards — so who is found is now read by a forced structured call
+(`interpretInstruction`, the judge's seat) and applied by `lib/revise.mjs`
+to rule.md, the campaign and the look, confirmed in plain words, before any
+chat model sees the message; the heartbeat's "still waiting, no new matches"
+is refused by `notify` when the news has not moved; the operator's daily
+digest ("7 found" = seven posts read) never reaches a customer's Quest; a
+reply that claims a result for the customer ("I got seven booked calls") is
+flagged on the card; a description with no name in it got an invented product name that two drafts then said "I built" (a name the material never gave is now empty, and me.md says never to invent one). NEW: **Rewrite** — a button on the card and
+`rewrite_reply` in the chat — writes the three replies again from a note.
+FIRST RUN IN THE OWNER'S OWN CHROME (2026-09-19, 11:27): pasted vocavela.live,
+signed up — and the chat said "in the queue" for 22 minutes. The extension was
+in its default hosted mode, so nothing polled this server's lane, and nothing
+said so: Quest's words never mention the browser (right for a hosted customer),
+and the operator's panel was not the one open. Fixed on both sides: `/api/chat`
+carries `browser: { attached, waiting, home }` and the chat page shows a strip
+while a page was asked for and no Chrome is attached (the address to use, the
+folder to load, Copy buttons; it says "connected" once and goes); a hosted
+panel asks `127.0.0.1:8787/api/me` and puts a **Use this server** card first —
+one click, never automatic. Verified in a fresh Chrome profile (hosted by
+default) against a scratch server: the card, Not now, the click, mode saved as
+local, the lane attached, the strip dark → connected → gone.
+THE SAME RUN, ATTACHED (12:28): the read failed on a permission wall for
+`www.vocavela.live` (the bare name it was given redirects there, and to Chrome
+those are two origins); Allow was pressed, "Try again" typed — and nothing
+began for ten minutes (a failed read waits ten minutes; the chat, still
+holding the read's start time, said "being read now"). Then three reads in a
+row stopped on "the Messaging Quest window is not on screen" (Chrome does not
+draw a covered window, and the Claude app was on top), and after the third
+Quest asked a founder whether their address was right; "Try again" twice more
+did nothing, the three tries being spent. Fixed: a customer's browser is
+**patient** (`lib/browse.mjs`) — a permission wall and a window nobody is
+drawing are HOLDS, not failed reads: the read waits in its tab, asks again when
+the operator has pressed Allow / every few seconds while the window is hidden,
+and goes on; neither is counted against the address, and neither waits ten
+minutes (`isHeld`, `autoOffer`); one Allow asks Chrome for both `www.` and the
+bare name (`siteTwin`); a failed read is no longer "being read"; "Try again"
+after it gave up is a fresh round; the chat page carries the strip for each
+(`browser.allow`, `browser.hidden`). Verified in a real Chrome without the
+occlusion flags, the test window covered by a small black window: wall → the
+strip → hold; covered → the strip → hold; cover lifted → the read finished by
+itself nine seconds later. Chrome behind another app stays a limit: the README
+gives the three flags that lift it.
+704 engine tests + 60 runtime + 34 voice green. Verified live in that Chrome:
+sign-up (URL, description), the site read, the offer card and its correction
+in words, "Looks right", the rules read (r/Entrepreneur, r/SaaS and
+r/startups skipped for their own rules; r/indiehackers read), the search, the
+judge, opportunity cards with their three replies, Open thread, Copy reply,
+Rewrite (both ways), leave-out and add-a-community in the chat, a question.
+Not verified: a lead that is FRESH and good — the free models over-narrow the
+rule, the searches in small communities come back empty for the week, and
+the replies are often about the poster's own product rather than the
+customer's; the user's own Chrome (a different profile, their sign-ins); and
+one customer at a time until Stage 2.
 
 ## Next, in order
 

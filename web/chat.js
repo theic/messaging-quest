@@ -13,8 +13,13 @@
   var send = document.getElementById("send");
   var found = document.getElementById("found-list");
   var foundEmpty = document.getElementById("found-empty");
+  var lane = document.getElementById("lane");
+  var laneKey = "";      // what the strip last showed
+  var laneWas = false;   // it was up — so "connected" is said once, when it flips
+  var laneTimer = null;
   var seen = null;   // what was last painted, so a poll that brings nothing new costs nothing
   var pick = {};     // which reply style each opportunity card is showing
+  var rw = {};       // which cards have the rewrite box open, and what is typed in it
 
   var el = function (tag, cls, txt) {
     var e = document.createElement(tag);
@@ -122,8 +127,21 @@
       box.appendChild(tabs);
     }
     box.appendChild(el("span", "label", "A reply you could post"));
-    if (shown) paragraphs(box, shown.text);
-    else box.appendChild(el("p", "muted", c.no_draft ? "No reply suggested for this one — " + c.no_draft : "Writing a reply…"));
+    if (c.rewriting && !shown) {
+      box.appendChild(el("p", "muted", "Writing it again — “" + c.rewriting.note + "”…"));
+    } else if (shown) {
+      paragraphs(box, shown.text);
+      // A result the reply claims for them — a number next to "I" — is the one
+      // thing Quest cannot know. It is theirs to confirm or cut before posting.
+      if (shown.check && shown.check.length) {
+        var warn = el("p", "check");
+        warn.appendChild(el("b", null, "Check before you post: "));
+        warn.appendChild(document.createTextNode("this says something about you that Quest can't know — " + shown.check.map(function (s) { return "“" + s + "”"; }).join(" ") + " Keep it only if it's true."));
+        box.appendChild(warn);
+      }
+    } else {
+      box.appendChild(el("p", "muted", c.no_draft ? "No reply suggested for this one — " + c.no_draft : "Writing a reply…"));
+    }
     li.appendChild(box);
 
     var row = el("div", "acts");
@@ -141,6 +159,16 @@
         .catch(function () { window.prompt("Copy the reply:", shown.text); });
     });
     row.appendChild(copy);
+    if (shown && c.state !== "replied") {
+      var again = el("button", "ghost", "Rewrite");
+      again.type = "button";
+      again.addEventListener("click", function () {
+        rw[m.id] = { open: !(rw[m.id] && rw[m.id].open), text: rw[m.id] ? rw[m.id].text : "" };
+        seen = null;
+        poll().then(function () { var t = document.querySelector("#m" + m.id + " .rw textarea"); if (t) t.focus(); });
+      });
+      row.appendChild(again);
+    }
     [["good", "👍", "Relevant"], ["bad", "👎", "Not relevant"]].forEach(function (x) {
       var b = el("button", "ghost thumb" + (c.rating === x[0] ? " on" : ""), x[1]);
       b.type = "button"; b.title = x[2]; b.setAttribute("aria-label", x[2]);
@@ -154,7 +182,38 @@
       row.appendChild(r);
     }
     li.appendChild(row);
+    if (shown && rw[m.id] && rw[m.id].open && c.state !== "replied") li.appendChild(rewriteForm(m, shown));
     if (c.state === "replied") li.appendChild(el("p", "state", "✓ You replied — nice."));
+  }
+
+  /** "What should change?" — the customer's note goes to the writer, and the
+   *  three replies on the card are written again with it. */
+  function rewriteForm(m, shown) {
+    var f = el("form", "rw");
+    var t = el("textarea");
+    t.rows = 2; t.maxLength = 600; t.value = rw[m.id].text || "";
+    t.placeholder = "What should change? For example: shorter, less promotional";
+    t.setAttribute("aria-label", "What should change in this reply");
+    t.addEventListener("input", function () { rw[m.id].text = t.value; });
+    t.addEventListener("keydown", function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); f.requestSubmit(); } });
+    var row = el("div", "acts");
+    var go = el("button", "go", "Write it again");
+    go.type = "submit";
+    var cancel = el("button", "ghost", "Cancel");
+    cancel.type = "button";
+    cancel.addEventListener("click", function () { delete rw[m.id]; seen = null; poll(); });
+    row.appendChild(go); row.appendChild(cancel);
+    f.appendChild(t); f.appendChild(row);
+    f.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var note = t.value.trim();
+      if (!note) { t.focus(); return; }
+      go.disabled = true;
+      post("/api/chat/act", { id: m.id, action: "rewrite", note: note, style: shown.style === "reply" ? undefined : shown.style })
+        .then(function () { delete rw[m.id]; seen = null; return poll(); })
+        .catch(function (e2) { window.alert(e2.message); go.disabled = false; });
+    });
+    return f;
   }
 
   function bubble(m) {
@@ -205,6 +264,77 @@
     return work.length ? work.join(" · ") + "…" : "";
   }
 
+  /** A piece of text with a Copy button beside it. */
+  function copyable(s) {
+    var span = el("span", "copy");
+    span.appendChild(el("code", null, s));
+    var b = el("button", null, "Copy");
+    b.type = "button";
+    b.addEventListener("click", function () {
+      var done = function () { b.textContent = "Copied"; setTimeout(function () { b.textContent = "Copy"; }, 1500); };
+      try { navigator.clipboard.writeText(s).then(done, function () {}); } catch (e) { /* no clipboard here: the text is there to select */ }
+    });
+    span.appendChild(b);
+    return span;
+  }
+
+  /** The strip above the chat, for the person at this machine: shown only
+   *  while a page has been asked for and no Chrome is attached to open it —
+   *  the reads happen in a Chrome on this computer, and until the extension
+   *  is pointed at this server nothing can start (measured 2026-09-19: the
+   *  chat said "in the queue" for 22 minutes and nothing said why). It goes
+   *  by itself the moment one attaches, after saying so once. */
+  function strip(b) {
+    b = b || {};
+    var dark = Boolean(b.waiting) && !b.attached;
+    // A site Chrome has been asked to allow and has not yet: the read is held
+    // on it, and only the person at the machine can press Allow.
+    var allow = b.attached && b.allow && b.allow.length ? b.allow : null;
+    // …or a window Chrome is not drawing (covered, minimised): a tab in it gets
+    // no page. Measured 2026-09-19 — three reads in a row stopped on it.
+    var hidden = Boolean(b.attached) && !allow && Boolean(b.hidden);
+    var joined = !dark && !allow && !hidden && laneWas && Boolean(b.attached);
+    var key = dark ? "dark|" + (b.home || "") : allow ? "allow|" + allow.join(",") : hidden ? "hidden" : joined ? "joined" : "";
+    if (dark || allow || hidden) laneWas = true;
+    if (key === laneKey) return;
+    laneKey = key;
+    clearTimeout(laneTimer);
+    lane.textContent = "";
+    lane.hidden = !key;
+    lane.className = "lane" + (joined ? " ok" : "");
+    if (joined) {
+      lane.appendChild(el("p", "lane-h", "Chrome is connected — Quest is carrying on."));
+      laneTimer = setTimeout(function () { laneWas = false; laneKey = ""; lane.hidden = true; lane.textContent = ""; }, 8000);
+      return;
+    }
+    if (allow) {
+      var hosts = allow.map(function (o) { return String(o).replace(/^https?:\/\//, "").replace(/\/\*?$/, ""); });
+      lane.appendChild(el("p", "lane-h", "Chrome is waiting for your OK to read " + hosts.join(", ") + "."));
+      lane.appendChild(el("p", null, "Click the Messaging Quest icon in Chrome and press “Allow”. The read is on hold until you do, and carries on by itself the moment you have."));
+      return;
+    }
+    if (hidden) {
+      lane.appendChild(el("p", "lane-h", "Chrome’s window is hidden — Quest can only read a page Chrome is drawing."));
+      lane.appendChild(el("p", null, "Bring Chrome to the front (un-minimise it, or move whatever covers it). The read is on hold until you do, and carries on by itself — a minute or two in view is enough."));
+      lane.appendChild(el("p", "lane-tip", "To let Quest read while you work in other apps, start Chrome with the flags in the README (“Reading while Chrome is behind other windows”)."));
+      return;
+    }
+    if (!dark) return;
+    var base = location.origin.replace("//localhost", "//127.0.0.1");
+    lane.appendChild(el("p", "lane-h", "Quest can’t read pages yet — no Chrome is connected to it."));
+    lane.appendChild(el("p", null, "It reads the web in the Chrome on this computer, in tabs you can watch, and never posts anything. Connect it once and this page carries on by itself:"));
+    var steps = el("ol");
+    var one = el("li");
+    one.appendChild(document.createTextNode("Click the Messaging Quest icon in Chrome and press “Use this server” — or, on its Settings tab, “Use that server” with "));
+    one.appendChild(copyable(base));
+    steps.appendChild(one);
+    var two = el("li");
+    two.appendChild(document.createTextNode("No icon? Install it: chrome://extensions → Developer mode → Load unpacked → "));
+    if (b.home) two.appendChild(copyable(b.home)); else two.appendChild(document.createTextNode("the folder this server runs from."));
+    steps.appendChild(two);
+    lane.appendChild(steps);
+  }
+
   function paint(d) {
     var line = status(d);
     var key = JSON.stringify([d.version, line]);
@@ -228,6 +358,7 @@
         if (!d.customer) { location.replace("/"); return; }
         var site = d.customer.url ? " · " + d.customer.url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "") : "";
         who.textContent = (d.customer.email || "") + site;
+        strip(d.browser);
         paint(d);
       })
       .catch(function () { /* the server is restarting; the next poll will find it */ });

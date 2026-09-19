@@ -13,6 +13,7 @@
   <a class="brand" href="/"><img src="/brand-mark.png" width="22" height="22" alt="" aria-hidden="true">Messaging Quest</a>
   <nav>
     <a class="hide-sm" href="#how">How it works</a>
+    <a class="hide-sm" href="#examples">Examples</a>
     <a class="hide-sm" href="#faq">Questions</a>
     <a id="continue" href="/app" hidden>Your chat →</a>
   </nav>
@@ -34,32 +35,95 @@
     <input type="file" id="cv" accept="application/pdf,.pdf" hidden>
     <p class="err" id="cv-err" hidden></p>
     <p class="fine">No credit card. See real opportunities first.</p>
+    <!-- The page's main picture is what Quest finds, not a dashboard. -->
+    <article class="found-card" aria-label="An example of what Quest finds">
+      <p class="meta"><span class="tagline">EXAMPLE</span> Found 6 minutes ago · r/SaaS</p>
+      <blockquote>“We’re looking for something that watches Reddit and tells us when people describe the problem we solve. Does that exist?”</blockquote>
+      <p class="why"><b>Why it fits:</b> they are asking for exactly what you built, today.</p>
+    </article>
   </section>
 
-  <section class="band" id="how" aria-labelledby="how-h">
-    <h2 id="how-h">How it works</h2>
-    <ol class="steps">
-      <li><b>Show us what you sell.</b><p>Paste your site — or describe what you do in a sentence.</p></li>
-      <li><b>Quest learns what demand looks like.</b><p>Who needs it, the problem they describe, where they talk about it. You confirm it in one click.</p></li>
-      <li><b>Quest keeps looking.</b><p>When someone asks for what you built, you get their words, why they fit, and a reply you can post yourself.</p></li>
+  <section class="band" aria-labelledby="next-h">
+    <h2 id="next-h">What happens when you paste your site</h2>
+    <ol class="flow">
+      <li><span class="n">1</span><b>You tell Quest what you sell</b><p class="mono">messaging.quest</p></li>
+      <li><span class="n">2</span><b>Quest understands your offer</b><p>Finds first customers for solo founders.<br>For: founders who launched and have no audience.<br>The problem: “nobody knows my product exists.”</p></li>
+      <li><span class="n">3</span><b>Quest finds the demand</b><p>“Does anyone know a simpler way to find first users?”<br>“I built my product but have no idea how to get customers.”</p></li>
+      <li><span class="n">4</span><b>You get them</b><p>In your chat with Quest — each one with why it fits and a reply you can post.</p></li>
     </ol>
   </section>
 
-  <section class="band" aria-labelledby="opp-h">
+  <section class="band" id="examples" aria-labelledby="opp-h">
     <h2 id="opp-h">Not leads. Opportunities.</h2>
     <div class="versus">
       <div class="lead">
         <h3>A lead</h3>
-        <p class="meta">Jane Doe · Founder · SaaS · 10 people</p>
+        <p class="meta">John Smith · CEO · SaaS company · 10 employees</p>
         <p>A name on a list. You still have to invent a reason to talk.</p>
       </div>
       <div class="opp">
         <span class="tagline">EXAMPLE</span>
         <h3>An opportunity</h3>
+        <p class="meta">r/startups · posted 34 minutes ago</p>
         <blockquote>“Launched two weeks ago, zero signups. Is there anything that finds people asking for what I built?”</blockquote>
         <p>Someone with a reason to talk to you — right now, in their own words.</p>
+        <p class="chips" aria-hidden="true"><span>Open thread</span><span>Copy reply</span></p>
       </div>
     </div>
+  </section>
+
+  <section class="band" aria-labelledby="way-h">
+    <h2 id="way-h">Don’t manufacture intent. Find intent that already exists.</h2>
+    <div class="contrast">
+      <div>
+        <h3>Finding leads the usual way</h3>
+        <ol class="chain"><li>Search databases</li><li>Filter thousands of people</li><li>Cold-message them</li><li>Hope they care</li></ol>
+      </div>
+      <div class="ours">
+        <h3>With Quest</h3>
+        <ol class="chain"><li>Someone says they need it</li><li>Quest notices</li><li>You join the conversation</li></ol>
+      </div>
+    </div>
+  </section>
+
+  <section class="band" aria-labelledby="come-h">
+    <h2 id="come-h">You don’t have to remember to use it.</h2>
+    <p class="lede">Quest keeps looking while you build, and comes back when it has found someone.</p>
+    <ol class="mock" aria-label="An example conversation with Quest">
+      <li class="q"><span class="by">QUEST</span>I found 3 people today who need what you sell:<br>1. A founder asking for a simpler way to find first customers.<br>2. A small agency looking for help finding clients on Reddit.<br>3. A founder asking how to get users for a new product.<br>Each one has a reply ready.</li>
+      <li class="y">Skip agencies from now on.</li>
+      <li class="q"><span class="by">QUEST</span>Done — no more agencies.</li>
+    </ol>
+  </section>
+
+  <section class="band" aria-labelledby="who-h">
+    <h2 id="who-h">If you sell online, Quest can look for demand.</h2>
+    <div class="segments">
+      <div><h3>Founder</h3><p>“Someone is looking for an alternative to your competitor.”</p></div>
+      <div><h3>Freelancer</h3><p>“A startup needs exactly the skills in your portfolio.”</p></div>
+      <div><h3>Consultant or agency</h3><p>“A business is discussing a problem you solve.”</p></div>
+    </div>
+    <p class="fine">Website · Portfolio · CV · Product page</p>
+  </section>
+
+  <section class="band" id="how" aria-labelledby="how-h">
+    <h2 id="how-h">How it works</h2>
+    <ol class="steps">
+      <li><b>Show us what you sell.</b><p>Paste a website or a profile, upload your CV — or describe what you do in a sentence.</p></li>
+      <li><b>Quest learns what demand looks like.</b><p>Who buys it, the problem they describe, what they write when they need you, and where they talk. You confirm it in one click.</p></li>
+      <li><b>Quest keeps watching.</b><p>When someone asks for what you sell, you get their words, why they fit, and a reply you can post yourself.</p></li>
+    </ol>
+    <a class="go" href="#top" data-to-top>Find my opportunities</a>
+  </section>
+
+  <section class="band" aria-labelledby="where-h">
+    <h2 id="where-h">Where customers say what they need</h2>
+    <p class="lede">Quest chooses where to look from what you sell. Today that means the Reddit communities where your buyers talk about the problem — more places are on the way, and Quest will say when it looks somewhere new.</p>
+  </section>
+
+  <section class="band" aria-labelledby="pay-h">
+    <h2 id="pay-h">See demand before you pay.</h2>
+    <p class="lede">We don’t ask you to subscribe before you know whether Quest can find opportunities for your business. Paste your offer — we’ll show you what we can find.</p>
   </section>
 
   <section class="band" id="faq" aria-labelledby="faq-h">
@@ -74,8 +138,8 @@
   </section>
 
   <section class="band again" aria-labelledby="again-h">
-    <h2 id="again-h">Someone is probably looking for what you sell.</h2>
-    <a class="go" href="#top" id="again">Paste your website</a>
+    <h2 id="again-h">Someone is probably looking for what you sell. Let’s find them.</h2>
+    <a class="go" href="#top" data-to-top>Paste your website</a>
   </section>
 </main>
 

@@ -14,7 +14,7 @@
 
 import "../lib/node.mjs";   // the Node host for lib/fs.mjs — first, before anything in lib/
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -384,12 +384,39 @@ check("...and capped at twelve", normalizeQuestions(Array.from({ length: 20 }, (
   attachRuntime(QD, { tasks: TQ, control });
   await sleep(200);
   writeFileSync(join(QD, "cards.json"), JSON.stringify({ cmo_cursor: TQ.inbox().cursor }));
+  // The operator's digest lands in every project's inbox; in a customer's it
+  // must not reach Quest ("7 found" is seven posts read, not seven people).
+  appendFileSync(join(QD, "inbox.jsonl"), JSON.stringify({ at: new Date().toISOString(), type: "day.digest", title: "0 waiting on you · 7 found in all" }) + "\n");
   const woke = [];
   const stopQ = startInboxLoop(QD, { everyMs: 40, heartbeatMs: 100, ceilingMs: 400, speak: async (content) => { woke.push(content); return "noted"; } });
   await until(() => woke.length >= 1, 6000);
   stopQ();
   check("Quest's heartbeat asks whether the customer should hear something — nothing to propose, no deck to read",
     [/The customer is not talking/.test(woke[0] ?? ""), /deck|propose/.test(woke[0] ?? "")], [true, false]);
+  check("...and the operator's digest never reaches it: no 'found in all', and the count to trust is the cards they can see",
+    [woke.some((w) => /found in all|day\.digest/.test(w)), /Opportunities so far/.test(woke[0] ?? "")], [false, true]);
+
+  // Its hands. Measured 2026-09-18: told never to report that nothing changed,
+  // a heartbeat posted "still waiting, no new matches" — so the rule is code.
+  const { questTools } = await import("./strategist.mjs");
+  const { say: chatSay, chatState } = await import("../lib/chat.mjs");
+  const tools = questTools(QD);
+  const tool = (name) => tools.find((t) => t.name === name);
+  const said = () => chatState(QD, { limit: Infinity }).messages.filter((m) => m.from === "quest" && !m.card).length;
+  const spoke1 = await tool("notify").invoke({ text: "I found someone who needs it." });
+  const spoke2 = await tool("notify").invoke({ text: "Still nothing new, but I am watching." });
+  check("Quest speaks up once; the same news again is refused in code, and nothing is written",
+    [/said/.test(spoke1), /nothing has changed/.test(spoke2), said()], [true, true, 1]);
+  chatSay(QD, { text: "A person", card: { kind: "opportunity", state: "open", item: "t3_x", room: "r/x", title: "a post", draft: "old reply", drafts: [{ style: "straight", text: "old reply" }] } });
+  check("...and when there is news — somebody new in the chat — it may speak again", /said/.test(await tool("notify").invoke({ text: "There is a new one." })), true);
+
+  const card = chatState(QD, { limit: Infinity }).messages.find((m) => m.card?.kind === "opportunity");
+  const rewrote = await tool("rewrite_reply").invoke({ note: "shorter and warmer" });
+  const after = chatState(QD, { limit: Infinity }).messages.find((m) => m.id === card.id).card;
+  check("rewrite_reply puts the customer's note on the latest reply and clears it, for the engine's clock to write again",
+    [/written again/.test(rewrote), after.rewriting?.note, after.draft, after.drafts], [true, "shorter and warmer", null, null]);
+  check("...a reply already being rewritten is not rewritten twice, and a card that is not there is said so",
+    [/already being rewritten/.test(await tool("rewrite_reply").invoke({ note: "more" })), /no such reply/.test(await tool("rewrite_reply").invoke({ note: "x", card: 999 }))], [true, true]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

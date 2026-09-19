@@ -58,7 +58,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
  *  stores, the project and the deck's actions from it. */
 const DATA = dataDir();
 await loadPlatforms(DATA);
-const E = engine({ root: DATA, base: () => process.env.MQ_SERVER ?? `http://127.0.0.1:${PORT}` });
+const E = engine({ root: DATA, base: () => process.env.MQ_SERVER ?? `http://127.0.0.1:${PORT}`, home: ROOT });
 const { P, PJ, LB, S, J, CONTROL, LANE, RT, WHY, INBOX, loadRuntime, afterSwitch, acct, who, queueRows,
         SPAWNABLE, AGENTIC, startAgentic, SELF, startScout, cardSnapshot, actCard,
         projectSummary, switchProject, controlSummary, panelState, panelAct } = E;

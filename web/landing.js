@@ -90,9 +90,12 @@
       });
   });
 
-  document.getElementById("again").addEventListener("click", function (e) {
-    e.preventDefault();
-    window.scrollTo({ top: 0, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
-    what.focus({ preventScroll: true });
+  // Every "find my opportunities" further down goes back to the one box.
+  Array.prototype.forEach.call(document.querySelectorAll("[data-to-top]"), function (a) {
+    a.addEventListener("click", function (e) {
+      e.preventDefault();
+      window.scrollTo({ top: 0, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+      what.focus({ preventScroll: true });
+    });
   });
 })();
