@@ -31,6 +31,7 @@
 import { ensureControlLoop, httpLane, insertDraft, instanceId } from "./control.js";
 import { booted, parts, onFileChange } from "./engine.js";
 import { account, SITE } from "./account.js";
+import { questWorker } from "./worker.js";
 
 const DEFAULT_BASE = "http://127.0.0.1:8787";
 
@@ -68,7 +69,18 @@ async function laneFor() {
     answer: async (id, out) => { E.CONTROL.answer(id, out); },
   };
 }
-const start = () => laneFor().then(ensureControlLoop).catch((e) => console.error("lane:", e?.message ?? e));
+/** The Quest worker (worker.js, Stage 2): in hosted mode, signed in, this
+ *  browser takes the cloud's reads. An account that is not a worker is told
+ *  so once and not asked again until somebody signs in afresh. */
+const WORKER = questWorker({ account: ACCOUNT, engine: () => engineSynced() });
+async function startWorker({ fresh = false } = {}) {
+  const { mode } = await settings();
+  if (mode !== "hosted" || !(await ACCOUNT.status()).signedIn) return;
+  if (!fresh && WORKER.status().status === "not a worker") return;
+  WORKER.start();
+}
+
+const start = () => laneFor().then(ensureControlLoop).then(() => startWorker()).catch((e) => console.error("lane:", e?.message ?? e));
 
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
 
@@ -127,6 +139,8 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg?.type === "instance") { instanceId().then((instance) => reply({ instance }), () => reply({ instance: null })); return true; }
   if (msg?.type === "settings") { settings().then(reply, () => reply({ mode: "hosted", base: DEFAULT_BASE })); return true; }
+  // The Quest worker's state, for the panel: reading what, waiting, or why not.
+  if (msg?.type === "worker") { reply(WORKER.status()); return false; }
   if (msg?.type === "mode") {
     const mode = msg.mode === "local" ? "local" : "hosted";
     const patch = { mode, ...(msg.base ? { base: String(msg.base) } : {}) };
@@ -151,8 +165,8 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     (async () => {
       if (step === "status") return ACCOUNT.status();
       if (step === "start") return ACCOUNT.signInStart(msg.email);
-      if (step === "verify") { const out = await ACCOUNT.signInVerify(msg.email, msg.code); if (out.ok) { await engineSynced(); ACCOUNT.syncNow().catch(() => {}); } return out; }
-      if (step === "out") return ACCOUNT.signOut();
+      if (step === "verify") { const out = await ACCOUNT.signInVerify(msg.email, msg.code); if (out.ok) { await engineSynced(); ACCOUNT.syncNow().catch(() => {}); startWorker({ fresh: true }).catch(() => {}); } return out; }
+      if (step === "out") { WORKER.stop(); return ACCOUNT.signOut(); }
       if (step === "sync") { await engineSynced(); return ACCOUNT.syncNow(); }
       return { error: `not an account step: ${step}` };
     })().then(reply, (e) => reply({ error: String(e?.message ?? e) }));
@@ -174,7 +188,7 @@ chrome.runtime.onMessageExternal?.addListener((msg, sender, reply) => {
   if (msg?.type === "ping") { reply({ ok: true, version: chrome.runtime.getManifest().version }); return false; }
   if (msg?.type === "connect") {
     ACCOUNT.connect(msg.token_hash)
-      .then(async (out) => { if (out.ok) { await chrome.storage.local.set({ mode: "hosted" }); await engineSynced(); ACCOUNT.syncNow().catch(() => {}); } return out; })
+      .then(async (out) => { if (out.ok) { await chrome.storage.local.set({ mode: "hosted" }); await engineSynced(); ACCOUNT.syncNow().catch(() => {}); startWorker({ fresh: true }).catch(() => {}); } return out; })
       .then(reply, (e) => reply({ error: String(e?.message ?? e) }));
     return true;
   }

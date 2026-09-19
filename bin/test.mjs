@@ -2559,6 +2559,12 @@ check("a proposal with a verb outside the law never renders",
     const both = await E.applyInstruction(QD, "add r/dentistry_uk and rewrite the first reply", async () => ({ leave_out: [], places: ["dentistry_uk"], also_asks: true }));
     check("...a message that ALSO asks something goes on to Quest, told what was already done and not to do it again",
       [both?.done, /Already done/.test(both?.note ?? ""), /adding r\/dentistry_uk/.test(both?.note ?? ""), readStash(QD).look.rooms.some((r) => r.place === "dentistry_uk")], [false, true, true, true]);
+    // Measured 2026-09-19 on the cloud's first live run: "are you sure r/X
+    // exists?" came back from a free model as leave_out: ["X"].
+    const rooms0 = readStash(QD).offer.leave_out.length;
+    const asked = await E.applyInstruction(QD, "Are you sure r/dentistry_uk exists?", async () => ({ leave_out: ["dentistry_uk", "r/dentistry_uk"], places: [], also_asks: true }));
+    check("a community in the list of PEOPLE to leave out is not applied — the message goes to Quest as it was",
+      [asked, readStash(QD).offer.leave_out.length], [null, rooms0]);
 
     // Slice 4 — no site, a CV: read at once, with no browser on the lane.
     const other = createProject(DQ, "cv-person", { inherit: false });

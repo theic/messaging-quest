@@ -43,6 +43,8 @@ jobs:
         run: node bin/test.mjs
       - name: voice fingerprint
         run: node --test bin/voice-test.mjs
+      - name: the cloud — a customer's engine on Supabase, against a database in memory
+        run: node bin/cloud-test.mjs
 
   brain:
     runs-on: ubuntu-latest
@@ -56,5 +58,10 @@ jobs:
         run: npm run brain
       - name: the strategist imports clean, keyless
         run: node -e "import('./agent/strategist.mjs').then(() => console.log('brain imports clean'))"
+      # The quest Edge Function (Deno) has no Node host to fall back on: a module
+      # that touches lib/fs.mjs while it is being imported fails the function at
+      # boot. Taking Node 22's fallback away here is that view of it.
+      - name: the cloud and Quest's own seat import clean with no filesystem host — the Edge Function's view
+        run: node -e "delete process.getBuiltinModule; import('./lib/cloud.mjs').then(() => import('./skills/index.mjs')).then(() => import('./agent/quest.mjs')).then(() => console.log('imports clean with no host'))"
       - name: the runtime — workers, the question list, restart, cancel — on a scripted model
         run: node agent/test.mjs
