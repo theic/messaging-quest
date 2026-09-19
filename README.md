@@ -48,6 +48,30 @@ Node 18 or newer. Then, on the panel's Settings tab, **Use that server**
 (`http://127.0.0.1:8787`); `npm run brain` installs the CMO. The extension
 reloads itself; open the panel again.
 
+The same server is also **Quest**, the side a founder sees (0.13.0, a first
+stage that runs whole on one machine). `http://127.0.0.1:8787` is a front
+page with one box: paste your site's address — or drop a CV, or say in two
+sentences what you sell — give an email, and you are talking to the agent at
+`/app`. It reads your site, proposes what you sell and where your buyers
+talk, and posts the people asking for it as cards with a reply you could
+post. The Chrome on this machine does the reading; the posting is yours. That Chrome
+has to be pointed at this server once: click the extension's icon and press
+**Use this server** (the panel offers it by itself while `mq serve` runs;
+Settings → *Use that server* is the same thing). Until it is, the chat page
+says so at the top and says what to load. The sign-up is a stub for now (an
+email, nothing else), and the dashboard moved to `/today`.
+
+**Reading while Chrome is behind other windows.** A page is only read in a tab
+Chrome is drawing, and Chrome does not draw a window that is minimised or fully
+covered by another app — the read then holds ("Chrome's window is hidden" on
+the chat page) until you bring it into view, a minute or two for a site. To let
+it read while you work elsewhere, start Chrome with the three flags the test rig
+uses, from a shortcut (close every Chrome window first — they apply at start):
+
+```
+chrome.exe --disable-features=CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows --disable-renderer-backgrounding
+```
+
 ## The idea, in three paragraphs
 
 **You tell it once what you sell.** Paste your site's address on the first
@@ -128,7 +152,7 @@ next, who is waiting, how a campaign is going, why this person — one press
 each. When an answer needs an action, the CMO deals it as a card rather than
 telling you where to click.
 
-In local mode the dashboard at `http://127.0.0.1:8787` is the ledger behind
+In local mode the dashboard at `http://127.0.0.1:8787/today` is the ledger behind
 it — Today, People, Campaigns, You — and `node bin/mq.mjs` is the same engine
 from the terminal.
 

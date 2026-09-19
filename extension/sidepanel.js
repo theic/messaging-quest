@@ -116,28 +116,94 @@ const refreshAccount = async () => {
   try { accountStatus = await ext.runtime.sendMessage({ type: "account.status" }); } catch { accountStatus = null; }
 };
 
+/**
+ * The worker (Stage 1 of the Quest plan, 2026-09-18). When the current
+ * project is a customer's, this browser is Quest's hands: pages open here by
+ * themselves — a customer's site, a community's rules, a search — and the
+ * operator's deck, tabs and specialist are not what this panel is for. It
+ * keeps the status strip (what is being read, and how long), the cards only
+ * a hand here can answer (a site Chrome has not allowed yet, a lane that
+ * dropped), and one card saying whose work this is.
+ */
+let workerFor = null;
+const HANDS_ONLY = /^grant\.|^work\.browser$/;
+const workerCard = (c) => {
+  let host = null;
+  try { host = c.url ? new URL(c.url).host.replace(/^www\./, "") : null; } catch { host = null; }
+  return {
+    id: "worker", kind: "worker",
+    eyebrow: "Working for a customer",
+    question: "This browser is Quest's hands right now.",
+    help: `Reading for ${c.email ?? "a customer"}${host ? ` — ${host}` : ""}. Keep this panel open: pages open here by themselves, one at a time at a person's pace, and close once read. Nothing is ever posted from here.`,
+    primary: { id: "chat", label: "Open their chat" },
+    actions: [{ id: "console", label: "Console" }],
+  };
+};
+
+/**
+ * A server on this machine (Stage 1 of the Quest plan). The default install
+ * runs the engine inside the extension — hosted — and Quest, the customer's
+ * chat, lives on the local server, which reads with THIS browser once the
+ * extension is pointed at it. Measured 2026-09-19, the first run in the
+ * owner's own Chrome: hosted, nothing polled the server's lane, and Quest
+ * waited 22 minutes for a browser that was never going to come. So a hosted
+ * panel looks, at most every few seconds, whether `mq serve` answers on this
+ * machine, and puts one card first that makes the switch in one click. Never
+ * by itself: what answers on 127.0.0.1 is not a reason to hand it a browser.
+ */
+let questHere = null;      // /api/me from a server on this machine, or null
+let questAsked = 0;
+let questLater = false;    // "Not now" — until this panel is closed
+async function askQuest() {
+  if (!hosted() || questLater) return null;
+  if (Date.now() - questAsked < 8000) return questHere;
+  questAsked = Date.now();
+  try {
+    const res = await fetch(`${DEFAULT_BASE}/api/me`, { signal: AbortSignal.timeout(1500) });
+    const me = res.ok ? await res.json() : null;
+    questHere = me && typeof me === "object" && "customer" in me ? me : null;
+  } catch { questHere = null; }
+  return questHere;
+}
+const serverCard = (me) => ({
+  id: "server", kind: "server",
+  eyebrow: "Quest is on this computer",
+  question: me.customer ? "Quest is waiting for a browser to read with." : "A Messaging Quest server is running on this computer.",
+  help: `${me.customer ? `${me.customer.email ?? "A customer"} is signed up there, and nothing can be read until this Chrome is attached. ` : "Quest, the chat, lives on it. "}Use it and this browser becomes its hands: pages open in their own tabs, at a person's pace, and nothing is ever posted from here. The extension reloads itself — click its icon to open the panel again. Your files in this browser stay where they are.`,
+  primary: { id: "use", label: "Use this server" },
+  actions: [{ id: "later", label: "Not now" }],
+});
+
 async function load() {
   try {
-    const [deck, st] = await Promise.all([getJSON(INSTANCE ? `/api/cards?instance=${encodeURIComponent(INSTANCE)}` : "/api/cards"), getJSON("/api/panel").catch(() => null), refreshAccount()]);
-    const { cards, jobs, control, tasks, project, brain, recent } = deck;
+    const [deck, st, , here] = await Promise.all([getJSON(INSTANCE ? `/api/cards?instance=${encodeURIComponent(INSTANCE)}` : "/api/cards"), getJSON("/api/panel").catch(() => null), refreshAccount(), askQuest()]);
+    const { jobs, control, tasks, project, brain, recent, customer } = deck;
+    workerFor = customer ?? null;
+    document.body.classList.toggle("es-worker", Boolean(workerFor));
+    const cards = workerFor ? (deck.cards ?? []).filter((c) => HANDS_ONLY.test(c.id)) : deck.cards;
     if (st) state = st;
     deckCards = cards ?? [];
     // The card first: show() clears the notice line, and the hints that
     // follow are allowed to fill it again. Redrawn only when it CHANGED —
     // the panel now polls while idle too, and a poll must never wipe the
     // words the operator is editing in the card's field.
-    const first = cards?.[0] ?? null;
+    const first = here ? serverCard(here) : cards?.[0] ?? (workerFor ? workerCard(workerFor) : null);
     const sig = JSON.stringify(first);
     if (sig !== shownSig) { show(first); shownSig = sig; }
     showStatus(jobs, control, tasks, recent);
     showProject(project);
     showFocus();
     showBadges(cards);
-    showSuggestions(cards?.[0] ?? null, brain !== false);
+    if (workerFor) { suggestBox.hidden = true; if (view !== "deck") showView("deck"); }
+    else showSuggestions(cards?.[0] ?? null, brain !== false);
     if (view !== "deck") drawView();
     schedule(cards?.[0], jobs, tasks);
   } catch {
     showDown();
+    // Keep looking: a server restarted under a panel left open (the worker's
+    // panel is left open on purpose) comes back on its own, not on a click.
+    clearTimeout(pollTimer);
+    pollTimer = setTimeout(load, 10_000);
   }
 }
 
@@ -372,6 +438,23 @@ const sayError = (msg) => { errorLine.textContent = msg; errorLine.hidden = fals
 async function act({ action, choice, choices, text, tab }) {
   if (!current) return;
 
+  // The worker's own card is the panel's, not the deck's: its buttons open
+  // the customer's chat and the operator's console on the local server.
+  if (current.id === "worker") {
+    if (hosted()) { sayError("The customer's chat runs on the local server — this extension is in hosted mode."); return; }
+    openTab(`${base}${action === "chat" ? "/app" : "/today"}`);
+    return;
+  }
+
+  // The server on this machine, offered to a hosted panel (askQuest): the
+  // switch is the person's click, here and nowhere else.
+  if (current.id === "server") {
+    if (action === "later") { questLater = true; shownSig = null; load(); return; }
+    showWait("Switching to the server on this computer…", "The extension reloads itself — click its icon to open the panel again.");
+    try { await ext.runtime.sendMessage({ type: "mode", mode: "local", base: DEFAULT_BASE }); } catch { /* the worker reloads under us */ }
+    return;
+  }
+
   // The client-side actions; the server hears about them at "posted".
   if (action === "insert" && current.data?.url) return insertFlow(current, text, tab);
   // A site the extension may not read yet: Chrome grants only inside the
@@ -379,9 +462,13 @@ async function act({ action, choice, choices, text, tab }) {
   if (action === "allow" && current.data?.origin) {
     if (!ext) { sayError("Open the Messaging Quest side panel in Chrome and press Allow there — Chrome asks for a site permission only from the extension itself."); return; }
     const origin = current.data.origin;
-    const ok = await ext.permissions.request({ origins: [`${origin}/*`] }).catch(() => false);
+    // www. and the bare name are two origins to Chrome, and a site often sends
+    // one to the other (measured 2026-09-19): the card carries the twin, and
+    // one click asks for both in one dialog.
+    const origins = [origin, current.data.also].filter(Boolean);
+    const ok = await ext.permissions.request({ origins: origins.map((o) => `${o}/*`) }).catch(() => false);
     if (!ok) { sayError(`Chrome did not grant ${origin.replace(/^https?:\/\//, "")} — the task stays paused until it is allowed.`); return; }
-    await postJSON("/api/control/granted", { origin }).catch(() => {});
+    for (const o of origins) await postJSON("/api/control/granted", { origin: o }).catch(() => {});
     load();
     return;
   }
@@ -958,7 +1045,7 @@ function drawSettings() {
   browser.append(srv);
   if (!hosted()) {
     const dash = el("a", "es-link", "Open the dashboard ↗");
-    dash.href = `${base}/`; dash.target = "_blank"; dash.rel = "noreferrer noopener";
+    dash.href = `${base}/today`; dash.target = "_blank"; dash.rel = "noreferrer noopener";
     browser.append(dash);
   }
 
@@ -1049,8 +1136,9 @@ settingsOf().then(async (s) => {
   const dash = $("dash");
   if (hosted()) dash.hidden = true;
   else {
-    dash.href = `${base}/`;
-    dash.addEventListener("click", (e) => { e.preventDefault(); openTab(`${base}/`); });
+    // The console, not the front page: / is the customer's since Stage 1.
+    dash.href = `${base}/today`;
+    dash.addEventListener("click", (e) => { e.preventDefault(); openTab(`${base}/today`); });
   }
   // The worker's name on the lane: while this panel is the one open, the
   // engine opens its tabs in THIS profile (two open: the first keeps it).

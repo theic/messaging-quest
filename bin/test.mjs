@@ -24,11 +24,11 @@ import { verdictOf } from "../lib/probe.mjs";
 import { fromDescription, readRoomFile, roomFile, bansPromotion } from "../lib/rules.mjs";
 import { conforms } from "../lib/llm.mjs";
 import { loadPlatforms, platform, roomOf } from "../lib/platform.mjs";
-import { longestSharedRun, repeats, claims, inventedLinks, theirs, RUN_LIMIT } from "../lib/guards.mjs";
+import { longestSharedRun, repeats, claims, results, inventedLinks, theirs, RUN_LIMIT } from "../lib/guards.mjs";
 import { standing, readiness, burst, mix } from "../lib/ready.mjs";
 import { nextCards, onboarded, questionCards, readStash } from "../lib/cards.mjs";
 import { agentDefinition } from "../lib/skills.mjs";
-import { controlBroker, permitted, familiesOf, grantsOf, TOOLKIT, LANE_DARK, laneDark } from "../lib/control.mjs";
+import { controlBroker, permitted, familiesOf, grantsOf, TOOLKIT, LANE_DARK, laneDark, siteTwin, isHeld, isHidden } from "../lib/control.mjs";
 import { ago, span, localTime, clockText, saidNothing, heartbeatEvery, heartbeatDue, HEARTBEAT_MS, HEARTBEAT_CEILING_MS } from "../lib/clock.mjs";
 import { browser, NOT_ATTACHED } from "../lib/browse.mjs";
 import { parseCampaign, campaignFile, writeCampaign, readCampaigns, readCampaign, writerBlock, judgeLine, campaignDraft, campaignHash, MENTIONS } from "../lib/campaigns.mjs";
@@ -52,12 +52,22 @@ import { readdirSync } from "node:fs";
 import { posix } from "node:path";
 import { pathToFileURL } from "node:url";
 import { conversationRows, bindConversations, recordReturn, recordTurn, closeConversation, waiting as waitingRows, yourTurns, dueConversations, unbound, campaignDigest, digestText } from "../lib/conversations.mjs";
+import { siteOf, looksLikeEmail, say as chatSay, heard as chatHeard, setCard, chatState, isCustomer, customerOf, writeCustomer } from "../lib/chat.mjs";
+import { BUYER_RULES, PROPOSAL_BRIEF } from "../lib/agents.mjs";
+import { applyRevision } from "../lib/revise.mjs";
+import { offerFrom, revise as reviseOffer, ruleOf, offerLine, offerCard, lookRooms, lookOf, secondPass, lookNote, saysNothing, isFresh, FRESH_DAYS, instructionFrom, meOf } from "../lib/quest.mjs";
+import { patchStash } from "../lib/cards.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 // The design book, pinned. The website repo pins the same number for its
 // copy of extension/tokens.css; if you change the palette, both move.
 const TOKENS_SHA = "d40154c3be7f03064377b9940dd8604b3886e5dd264a1a30c4233b021a970339";
 const ES = join(here, "mq.mjs");
+// A verb with no MQ_SERVER reaches for 127.0.0.1:8787 — where the operator's
+// own `mq serve` may be running with a real browser on its lane (measured
+// 2026-09-18: a `tick` in here opened a stranger's tab in it). Every child
+// inherits an address nobody listens on, as on CI, unless told otherwise.
+process.env.MQ_SERVER = process.env.MQ_TEST_SERVER || "http://127.0.0.1:9";
 // The built-in platform loads when an entry point asks, not at import
 // (lib/platform.mjs, 0.10.0) — this suite is one.
 await loadPlatforms(null);
@@ -353,6 +363,11 @@ check("a fabricated job history is surfaced", said.length, 1);
 check("...as the whole sentence, not the two words that matched", /vocavela/.test(said[0].sentence), true);
 check("ordinary prose makes no claim", claims("That sounds frustrating. Have you tried asking them directly?").length, 0);
 check("first person alone is not a claim about experience", claims("I would probably start there.").length, 0);
+// Measured 2026-09-18 from a free writer, for a customer who had said only
+// what they built: a result of theirs, invented. The claims guard missed it.
+check("a result claimed for the author — I or we, an outcome, a number — is found; the honest mention and a plan are not",
+  [results("Start there. I got seven booked calls in one day doing that manually. I built Acme for this."), results("We saw 30% more signups.").length, results("I built Acme to find those posts.").length, results("I would start with one post a day.").length],
+  [["I got seven booked calls in one day doing that manually."], 1, 0, 0]);
 
 // "i built doctick" — to the person who built DocTick (a free writer, 2026-09-07,
 // with me.md still the seed). The claim is theirs; the guard says so by name.
@@ -472,6 +487,129 @@ check("a skip is never gated", /discarded/.test(es4(["mark", "t3_z", "skip"])), 
   check("...and the data came along", /t1_keep/.test(readFileSync(join(box5, ".mq", "items.jsonl"), "utf8")), true);
 }
 
+/* ------------------------------------------------------------- the channel */
+// Stage 1 of the Quest plan: one transcript per customer (lib/chat.mjs). What
+// would break quietly: a card whose answer never shows, a message lost behind
+// a torn line, a "site" read out of a sentence that names none.
+{
+  check("the site in what somebody typed: an address, a bare domain, or nothing at all",
+    [siteOf("https://acme.com/pricing."), siteOf("we're at acme.io, have a look"), siteOf("I build tools for dentists"), siteOf("see e.g. the demo"), siteOf("my-cv.pdf")],
+    ["https://acme.com/pricing", "https://acme.io", null, null, null]);
+  check("an email is the stub sign-up's whole check — loose, but not nothing", [looksLikeEmail("a@b.co"), looksLikeEmail("nope"), looksLikeEmail("a@b")], [true, false, false]);
+  const cd = mkdtempSync(join(tmpdir(), "mq-chat-"));
+  const before = isCustomer(cd);
+  writeCustomer(cd, { email: "a@b.co" });
+  check("a directory is a customer's only once it has a customer.json", [before, isCustomer(cd), customerOf(cd).email], [false, true, "a@b.co"]);
+  const one = chatHeard(cd, "hello");
+  const two = chatSay(cd, { text: "You sell X to Y. Right?", card: { kind: "offer", state: "open" } });
+  setCard(cd, two.id, { state: "confirmed" });
+  appendFileSync(join(cd, "chat.jsonl"), '{"id": 9, "torn');   // a process that died mid-append
+  const three = chatSay(cd, "on it");
+  const st = chatState(cd);
+  check("ids count up, a card carries its latest state, an update is not a message, and a torn line costs only itself",
+    [one.id, two.id, three.id, st.messages.map((m) => m.from), st.messages[1].card.state, st.messages[2].text],
+    [1, 2, 4, ["you", "quest", "quest"], "confirmed", "on it"]);
+  // Measured 2026-09-18 on a free model: the reply opened with its own turn's
+  // clock, zone and all. That line is the seat's, not the customer's.
+  const echoed = chatSay(cd, "Friday, 18 September 2026 at 21:22 in Europe/London — just now.\nYour site is queued to be read.");
+  const onlyClock = chatSay(cd, "Friday, 18 September 2026 at 21:22 in Europe/London — just now.");
+  const plain = chatSay(cd, "Monday at 9:00 works — I'll look again then.");
+  check("a reply that opens with the clock it was handed loses that line; one that was only the clock says nothing; a time a person would write stays",
+    [echoed.text, onlyClock, plain.text], ["Your site is queued to be read.", null, "Monday at 9:00 works — I'll look again then."]);
+
+  // The offer (lib/quest.mjs): what the site reader understood, as the one
+  // question a customer answers — and what their corrections change.
+  const off = offerFrom({ name: "Acme", one_line: "x", problem: "y", places: ["r/a", "a", "B"], rule_md: "# Rule" });
+  check("an offer keeps its communities bare and once each", off.places, ["a", "B"]);
+  const long = offerFrom({
+    one_line: "A scheduling tool for consultants", problem: "I want to run outreach at scale but setting up authenticated sending infrastructure takes forever and nobody explains it to a founder who has never done it and only wants the first ten customers",
+    signals: ["• ask for a scheduling tool.", "complain about double bookings", "ask for a scheduling tool."],
+    searches: ["Calendly alternative", "\"scheduling tool\"", "how do I stop double bookings for my consulting clients", "booking app"],
+    places: ["consulting", "smallbusiness", "freelance"],
+  });
+  check("a long problem is cut at a word, with an ellipsis — never mid-word on a customer's card",
+    [long.problem.length <= 160, long.problem.endsWith("…"), /\b\w+…$/.test(long.problem) && !/infrastructur…$/.test(long.problem)], [true, true, true]);
+  check("signals keep their words, without bullets or full stops, once each; searches are a few plain lowercase words, never a sentence or an operator",
+    [long.signals, long.searches], [["ask for a scheduling tool", "complain about double bookings"], ["calendly alternative", "scheduling tool", "booking app"]]);
+  const lk = lookOf(long.places, long.searches);
+  check("a look holds its rooms without a phrase, and the phrases still to hand out — a skipped room must burn none",
+    [lk.rooms.map((r) => `${r.place}:${r.q}`), lk.phrases, lk.used], [["consulting:null", "smallbusiness:null", "freelance:null"], ["calendly alternative", "scheduling tool", "booking app"], 0]);
+  check("...and with no phrase at all a room reads its newest posts (q stays null)", lookOf(["a"], []).phrases, []);
+  // Measured 2026-09-18: the best phrase went to a room whose rules forbid it
+  // and the look ended "found nobody" without ever having searched it.
+  const open = [{ place: "a", rules: "allowed", probe: "done" }, { place: "b", rules: "banned", probe: "todo" }, { place: "c", rules: "allowed", probe: "done" }];
+  check("a look that found nobody tries once more: the rooms that cleared their rules, each with a phrase nobody has searched — never one twice",
+    [secondPass(open, ["p1", "p2", "p3", "p4"], 2), secondPass(open, ["p1", "p2", "p3", "p4"], 3).rooms.map((r) => `${r.place}:${r.q}`), secondPass(open, ["p1", "p2"], 2).rooms, secondPass([open[1]], ["p1"], 0).rooms],
+    [{ rooms: [{ place: "a", q: "p3", rules: "allowed", probe: "todo", watch: "todo", tries: 0 }, { place: "c", q: "p4", rules: "allowed", probe: "todo", watch: "todo", tries: 0 }], used: 4 }, ["a:p4"], [], []]);
+  check("...and with the phrases spent it tries the reader's spare communities — at most two, never one already looked at, rules read first",
+    [secondPass(open, ["p1"], 1, ["a", "Spare1", "r/spare2", "spare3", "b"]), secondPass(open, ["p1", "p2"], 1, ["a", "c"])],
+    [{ rooms: [{ place: "Spare1", q: null, rules: "todo", probe: "todo", watch: "todo", tries: 0 }, { place: "spare2", q: null, rules: "todo", probe: "todo", watch: "todo", tries: 0 }], used: 1 }, { rooms: [{ place: "a", q: "p2", rules: "allowed", probe: "todo", watch: "todo", tries: 0 }], used: 2 }]);
+  const daysAgo = (d) => new Date(Date.now() - d * 86_400_000).toISOString();
+  check("a post is somebody to answer right now for a week — Reddit's own week filter cannot be trusted; no date at all counts as just seen",
+    [FRESH_DAYS, isFresh({ posted_at: daysAgo(1) }), isFresh({ posted_at: daysAgo(6.9) }), isFresh({ posted_at: daysAgo(8) }), isFresh({ posted_at: daysAgo(43) }), isFresh({ seen_at: daysAgo(30) }), isFresh({})],
+    [7, true, true, false, false, false, true]);
+  check("what a model made of a customer's message is cleaned: people to leave out in their words, communities bare and few, a flag for 'and also asks'",
+    [instructionFrom({ leave_out: ["agencies", " agencies ", "", "people selling services"], places: ["r/saas", "SaaS", "indiehackers"], also_asks: 1 }), instructionFrom(null), instructionFrom({ leave_out: "agencies" })],
+    [{ leave_out: ["agencies", "people selling services"], places: ["saas", "indiehackers"], also_asks: true }, { leave_out: [], places: [], also_asks: false }, { leave_out: [], places: [], also_asks: false }]);
+  check("a community they ask for is added to the list, not swapped for it",
+    reviseOffer(offerFrom({ one_line: "x", problem: "y", places: ["a", "b"] }), { add_places: ["r/c", "a"] }).places, ["a", "b", "c"]);
+  {
+    // Measured 2026-09-19: told to leave out agencies, a free model wrote it in
+    // its notebook and changed nothing the judge reads. The effect is code.
+    const mk = (state) => {
+      const d = mkdtempSync(join(tmpdir(), "mq-revise-"));
+      writeCustomer(d, { email: "r@x.co" });
+      const o = { ...offerFrom({ name: "Acme", one_line: "Acme sends reminders", problem: "no-shows", signals: ["ask for reminders"], searches: ["no-shows"], places: ["a", "b", "c", "d"], rule_md: "# Rule\n\nAnswer YES when a clinic asks." }), state, card: 1 };
+      patchStash(d, { offer: o, look: lookOf(["a", "b", "c"], ["no-shows"]) });
+      return d;
+    };
+    const conf = mk("confirmed");
+    const rc = applyRevision(conf, { leave_out: ["agencies"], add_places: ["fresh"] }, { room: (p) => `r/${p}` });
+    check("a confirmed offer told to leave out agencies: the rule the JUDGE reads has the section, the campaign says it, the offer remembers it",
+      [/## Leave out — the customer said so[\s\S]*- agencies/.test(readFileSync(join(conf, "rule.md"), "utf8")), /Not: agencies/.test(readFileSync(join(conf, "campaigns", "quest.md"), "utf8")), readStash(conf).offer.leave_out, rc.leftOut],
+      [true, true, ["agencies"], ["agencies"]]);
+    check("...and a community they NAMED joins the look — the proposal's other places (d) stay unread, as before",
+      [rc.added, readStash(conf).look.rooms.map((r) => r.place), readStash(conf).look.said], [["fresh"], ["a", "b", "c", "fresh"], false]);
+    check("...the same instruction again says nothing new left out", applyRevision(conf, { leave_out: ["agencies"] }).leftOut, []);
+    const open = mk("open");
+    const ro = applyRevision(open, { leave_out: ["students"] });
+    const said = chatState(open).messages;
+    check("an open offer told the same: the old card is replaced by a corrected one that says so on its face",
+      [ro.ok, said.filter((m) => m.card?.kind === "offer").length, /Leaving out: students\./.test(said[said.length - 1].text), readStash(open).offer.state, readStash(open).offer.card === ro.card],
+      [true, 1, true, "open", true]);
+    check("...and with no offer yet there is nothing to revise", applyRevision(mkdtempSync(join(tmpdir(), "mq-revise-")), { leave_out: ["x"] }).ok, false);
+  }
+  check("what a customer hears about the rooms that were left out: each once, with the reason — a community they know is never silently missing",
+    [lookNote([{ place: "a", rules: "banned" }, { place: "a", rules: "banned" }, { place: "b", rules: "failed" }, { place: "c", rules: "allowed", probe: "done" }], (p) => `r/${p}`), lookNote([{ place: "a", rules: "banned" }, { place: "b", rules: "banned" }], (p) => `r/${p}`), lookNote([{ place: "c", rules: "allowed", probe: "done" }])],
+    ["I left out r/a — its rules don't allow promotion. I couldn't read r/b.", "I left out r/a and r/b — their rules don't allow promotion.", ""]);
+  check("the card says what they sell, what the people do, and where it starts — the chat's own V1 card",
+    /^Here's what I understood: A scheduling tool for consultants\n\nI'll look for people who:\n• ask for a scheduling tool\n• complain about double bookings\n\nI'll start in r\/consulting, r\/smallbusiness and r\/freelance\.\n\nLooks right\?$/.test(offerCard(long, { room: (p) => `r/${p}` }).text), true);
+  // Measured 2026-09-18: read from the owner's side ("ask about my product's
+  // features"), an offer finds nobody. The site's reader is told who to find.
+  check("the site's reader is told the people to find are buyers, in their words — and never the product's own",
+    [PROPOSAL_BRIEF.includes(BUYER_RULES), /BUYERS/.test(BUYER_RULES), /Never about this product/.test(BUYER_RULES), /never the product's name/i.test(BUYER_RULES) || /Never the product's name/.test(BUYER_RULES)], [true, true, true, true]);
+  // Measured 2026-09-19: from a description with no name in it, the reader made
+  // one up ("Reddit First Customer Helper") and two drafts said "I built" it.
+  check("a name the material never gave is empty — not a guess, not 'Unknown' — and me.md says so instead of putting one in their mouth",
+    [offerFrom({ name: "Unknown", one_line: "x", problem: "y" }).name, offerFrom({ name: "N/A", one_line: "x" }).name, offerFrom({ name: "Acme", one_line: "x" }).name,
+      /I built the thing I sell: A tool/.test(meOf(offerFrom({ name: "", one_line: "A tool" }))), /never invent one/.test(meOf(offerFrom({ name: "", one_line: "A tool" }))), /I built Acme: A tool/.test(meOf(offerFrom({ name: "Acme", one_line: "A tool" })))],
+    ["", "", "Acme", true, true, true]);
+  check("a read that understood nothing is not an offer: 'Unknown' for what it is, or for the problem with no signals",
+    [saysNothing(offerFrom({ one_line: "Unknown", problem: "Unknown" })), saysNothing(offerFrom({ one_line: "A tool", problem: "Unknown." })), saysNothing(offerFrom({ one_line: "A tool", problem: "unknown", signals: ["ask for a tool"] })), saysNothing(long)],
+    [true, true, false, false]);
+  check("...and a correction can change the signals and the searches too",
+    [reviseOffer(long, { signals: ["look for a Calendly alternative"] }).signals, reviseOffer(long, { searches: ["Booking Tool"] }).searches, reviseOffer(long, { searches: ["a whole long sentence that nobody types into a search box"] }).searches],
+    [["look for a Calendly alternative"], ["booking tool"], long.searches]);
+  const off2 = reviseOffer(reviseOffer(off, { leave_out: ["agencies"] }), { leave_out: ["students", "agencies"] });
+  check("who to leave out accumulates — said once, meant for good — and reaches the judge's rule as a section it cannot miss",
+    [off2.leave_out, /## Leave out — the customer said so[\s\S]*- agencies\n- students/.test(ruleOf(off2))], [["agencies", "students"], true]);
+  check("where things stand, for Quest's turn: queued, being read, a card waiting, confirmed, or given up on",
+    [/queued to be read/.test(offerLine({ url: "https://a.co" })), /being read right now/.test(offerLine({ url: "https://a.co", scout: "running" })),
+      /waiting for their answer/.test(offerLine({ offer: off })), /They confirmed/.test(offerLine({ offer: { ...off, state: "confirmed" } })),
+      /could not be read after 3 tries/.test(offerLine({ url: "https://a.co", attempts: 3 }))],
+    [true, true, true, true, true]);
+}
+
 /* ------------------------------------------------------- the dashboard */
 // Served on localhost, so the interesting failures are not "does it render"
 // but "what does it render, and who can reach it".
@@ -499,7 +637,9 @@ writeFileSync(join(DW, "probes.jsonl"), JSON.stringify({ place: "smallbusiness",
 // Port 0 — the OS hands out a free one, and serve prints the port it actually
 // bound. A guessed port collided with a running hub once and every request in
 // this section quietly interrogated the wrong server.
-const srv = spawn(process.execPath, [SERVE, "--port", "0"], { env: { ...process.env, MQ_DIR: DW }, stdio: ["ignore", "pipe", "pipe"] });
+// No key, whatever this machine's shell has: the customer checks below must
+// never spend a real model call.
+const srv = spawn(process.execPath, [SERVE, "--port", "0"], { env: { ...process.env, MQ_DIR: DW, OPENROUTER_API_KEY: "" }, stdio: ["ignore", "pipe", "pipe"] });
 const base = await new Promise((resolve) => {
   let out = "";
   const t = setTimeout(() => resolve(null), 8000);
@@ -514,7 +654,7 @@ const GET = async (p) => { const r = await fetch(base + p); return { status: r.s
 
 if (!(await up())) { console.log("FAIL  the dashboard did not start"); fail++; }
 else {
-  for (const p of ["/", "/people", "/people?view=waiting", "/campaigns", "/you", "/standing", "/waiting", "/queue", "/rooms", "/ready", "/sources", "/voice"]) {
+  for (const p of ["/today", "/people", "/people?view=waiting", "/campaigns", "/you", "/standing", "/waiting", "/queue", "/rooms", "/ready", "/sources", "/voice"]) {
     check(`${p} renders`, (await GET(p)).status, 200);
   }
   check("an unknown path is a 404, not a stack trace", (await GET("/nope")).status, 404);
@@ -526,7 +666,7 @@ else {
   check("...while the text itself is still shown", /&lt;img src=x/.test(q.body), true);
   // A CDN reference added later would break loudly instead of quietly making a
   // local-only dashboard phone home.
-  const head = await fetch(base + "/");
+  const head = await fetch(base + "/today");
   check("nothing may load from anywhere", /default-src 'none'/.test(head.headers.get("content-security-policy") ?? ""), true);
 
   // The only writes in the product, and they are clicks.
@@ -544,6 +684,55 @@ else {
     /promotion_allowed:\s*no/.test(readFileSync(join(DW, "rooms", "smallbusiness.md"), "utf8")), true);
   check("...which the CLI then honours",
     /does not allow it/.test(esFails2(["watch", "smallbusiness"], DW)), true);
+
+  /* The customer's side (Stage 1 of the Quest plan) — last in this block,
+   * because a sign-up makes the customer's project the current one and every
+   * check above acts on the operator's. */
+  const front = await fetch(base + "/");
+  const frontBody = await front.text();
+  check("/ is the customer's front page: the one box and the promise under it, on a strict CSP",
+    [front.status, /id="what"/.test(frontBody), /No credit card/.test(frontBody), /default-src 'none'; script-src 'self'/.test(front.headers.get("content-security-policy") ?? "")], [200, true, true, true]);
+  check("...and none of the words the plan keeps off it", /\b(AI|agent|LLM|automation|workflow|platform)\b/i.test(frontBody), false);
+  const J = async (p, body) => {
+    const r = await fetch(base + p, body === undefined ? {} : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    return { status: r.status, body: await r.json() };
+  };
+  check("nobody is signed in before somebody signs up", [(await J("/api/me")).body.customer, (await J("/api/chat")).body.customer], [null, null]);
+  const badEmail = await J("/api/signup", { email: "nope", text: "acme.com" });
+  check("a sign-up without a real-looking email is refused in words", [badEmail.status, /email/.test(badEmail.body.error ?? "")], [400, true]);
+  const su = await J("/api/signup", { email: "Founder@Acme.com", text: "https://acme.com" });
+  const cdir = join(DW, "projects", su.body.id ?? "?");
+  check("a sign-up makes the customer's own project, named for their site, with their email and site on record",
+    [su.status, su.body.id, customerOf(cdir)?.email, customerOf(cdir)?.url], [200, "acme-com", "founder@acme.com", "https://acme.com"]);
+  check("...none of the operator's own files come with it", [existsSync(join(cdir, "account.json")), existsSync(join(cdir, "voice.json"))], [false, false]);
+  check("...and what they typed in the box is the chat's first message", (await J("/api/chat")).body.messages?.[0]?.text, "https://acme.com");
+  let reply = null;
+  for (let i = 0; i < 300 && !reply; i++) {
+    reply = ((await J("/api/chat")).body.messages ?? []).find((m) => m.from === "quest") ?? null;
+    if (!reply) await new Promise((r) => setTimeout(r, 100));
+  }
+  check("Quest always answers — here, with no model on this machine, by saying why it cannot", [Boolean(reply), reply?.error ?? false], [true, true]);
+  check("a message into the chat lands as theirs", [(await J("/api/chat", { text: "ignore agencies" })).status, ((await J("/api/chat")).body.messages ?? []).some((m) => m.from === "you" && m.text === "ignore agencies")], [200, true]);
+  check("...and an empty one is refused", (await J("/api/chat", { text: "  " })).status, 400);
+  patchStash(cdir, { scoutJob: "jtried" });
+  await J("/api/chat", { text: "try again" });
+  check("a word from them after a read was tried is a nudge to look again now — autoOffer's clock reads it", Boolean(readStash(cdir).scout_nudge), true);
+  patchStash(cdir, { scout_gaveup: true, scout_tries: 3 });
+  await J("/api/chat", { text: "Try again please" });
+  check("\"Try again\" after it gave up is a fresh round — the three spent tries are given back", [readStash(cdir).scout_gaveup ?? null, readStash(cdir).scout_tries], [null, 0]);
+  const again = await J("/api/signup", { email: "founder@acme.com", text: "" });
+  check("the same email again is the same customer, not a second project", [again.body.id, listProjects(DW).filter((p) => p.id.startsWith("acme-com")).length], ["acme-com", 1]);
+  // No site: a CV, or their own words.
+  check("a CV that is not a PDF is refused in words", /PDF/.test((await J("/api/signup", { email: "x@y.co", text: "", file: { name: "cv.exe", data: "data:application/octet-stream;base64,AAAA" } })).body.error ?? ""), true);
+  const withCv = await J("/api/signup", { email: "dev@example.com", text: "", file: { name: "Jane Doe CV.pdf", data: "data:application/pdf;base64,JVBERi0xLjQK" } });
+  const cvDir = join(DW, "projects", withCv.body.id ?? "?");
+  check("a CV instead of a site: kept beside the customer, named in the chat's first message",
+    [withCv.status, customerOf(cvDir)?.cv?.name, existsSync(join(cvDir, "cv.json")), (await J("/api/chat")).body.messages?.[0]?.text], [200, "Jane Doe CV.pdf", true, "My CV: Jane Doe CV.pdf"]);
+  const words = await J("/api/signup", { email: "coach@example.com", text: "I coach first-time managers at small startups" });
+  check("...or their own words, when there is no site in them", [words.status, customerOf(join(DW, "projects", words.body.id ?? "?"))?.about, customerOf(join(DW, "projects", words.body.id ?? "?"))?.url ?? null], [200, "I coach first-time managers at small startups", null]);
+  const gh = await J("/api/signup", { email: "dev2@example.com", text: "https://github.com/theic/messaging-quest?tab=readme" });
+  check("a site that is somebody else's is named for its page too — not every customer on it 'github-com-N'", gh.body.id, "github-com-theic-messaging-quest");
+  check("the chat page and its script are served", [(await GET("/app")).status, (await fetch(base + "/web/chat.js")).headers.get("content-type")], [200, "text/javascript; charset=utf-8"]);
 }
 srv.kill();
 
@@ -672,6 +861,9 @@ check("a fresh dir asks who you are first", nextCards(snap())[0].id, "onboard.ac
   check("a site the extension may not read yet is the first card", [g.id, g.kind, g.primary.id, g.secondary.id, g.data.origin],
     ["grant.https://www.reddit.com", "grant.ask", "allow", "later", "https://www.reddit.com"]);
   check("...naming the host on the button", g.primary.label, "Allow www.reddit.com");
+  // www. and the bare name are two origins to Chrome; a site often sends one to the other.
+  check("...and carrying the other spelling of the site, so one click asks Chrome for both — but only where there is one",
+    [g.data.also, /reddit\.com too/.test(g.help), nextCards(snap({ grants: ["https://app.acme.dev"] }))[0].data.also ?? null], ["https://reddit.com", true, null]);
 }
 check("skipping the account moves to the url, not back to the account",
   nextCards(snap({ stash: { account_skipped: true } }))[0].id, "onboard.url");
@@ -978,6 +1170,102 @@ srvC.kill();
   check("a lease nobody claims dies with its reason", /unanswered/.test((await dead.lease({ task: "t", url: "https://x.y/" })).error), true);
 }
 
+// A site's other spelling: www. and the bare name are two origins to Chrome.
+// Measured 2026-09-19: vocavela.live opened at the address the customer typed,
+// landed on www., and "no permission" for a site the operator had just allowed.
+check("a site's other spelling: www. and the bare name, and nothing else",
+  [siteTwin("https://vocavela.live"), siteTwin("https://www.vocavela.live"), siteTwin("https://www.reddit.com/*"), siteTwin("https://app.acme.com"),
+    siteTwin("https://example.co.uk"), siteTwin("http://127.0.0.1:8787"), siteTwin("https://localhost"), siteTwin("https://acme.dev:8443"), siteTwin("nonsense")],
+  ["https://www.vocavela.live", "https://vocavela.live", "https://reddit.com", null, null, null, null, null, null]);
+
+// A permission wall is a hold for a customer's browser (lib/browse.mjs patient):
+// the read waits for Allow and goes on in the tab it already has. Measured
+// 2026-09-19 in the owner's own Chrome: it failed on the wall, Allow was pressed,
+// and nothing began again for ten minutes while the chat said "being read now".
+{
+  const WALL = { error: "the extension has no permission for https://www.acme.dev yet — the operator is being asked on the panel; try again once they grant it", grant: "https://www.acme.dev" };
+  const laneWith = (state) => ({
+    attached: async () => true,
+    lease: async () => ({ id: "L1", tabId: 1, url: "https://acme.dev/" }),
+    act: async () => { state.acts++; return state.walled ? WALL : { ok: true, text: "Acme sells reminders", url: "https://www.acme.dev/" }; },
+    release: async () => ({ ok: true }),
+    grants: async () => (state.walled ? ["https://www.acme.dev"] : []),
+  });
+  const said = [];
+  const S1 = { walled: true, acts: 0 };
+  const patient = browser(laneWith(S1), { task: "t", patient: true, pollMs: 15, onHold: (o) => said.push(o) });
+  await patient.open("https://acme.dev/");
+  setTimeout(() => { S1.walled = false; }, 120);      // the operator presses Allow
+  const read = await patient.text();
+  check("a customer's read waits out a permission wall and goes on when Allow is pressed — the same call asked again, once, and the wait said once",
+    [read.ok, read.text, S1.acts, said], [true, "Acme sells reminders", 2, [{ kind: "allow", origin: "https://www.acme.dev" }]]);
+
+  const S2 = { walled: true, acts: 0 };
+  const brisk = browser(laneWith(S2), { task: "t" });
+  await brisk.open("https://acme.dev/");
+  const refused = await brisk.text();
+  check("anyone else's browser is handed the wall at once, as before", [refused.error === WALL.error, S2.acts], [true, 1]);
+
+  const S3 = { walled: true, acts: 0 };
+  const away = browser(laneWith(S3), { task: "t", patient: true, pollMs: 10, holdMs: 80 });
+  await away.open("https://acme.dev/");
+  const t1 = Date.now();
+  const gaveUp = await away.text();
+  check("the hold is bounded: an operator who never comes gets the wall back, worded as it was", [gaveUp.error === WALL.error, Date.now() - t1 < 1500], [true, true]);
+
+  const S4 = { walled: true, acts: 0 };
+  const ctrl = new AbortController();
+  const stopped = browser(laneWith(S4), { task: "t", patient: true, pollMs: 10, holdMs: 60_000, signal: ctrl.signal });
+  await stopped.open("https://acme.dev/");
+  setTimeout(() => ctrl.abort(), 60);
+  const t2 = Date.now();
+  const cut = await stopped.text();
+  check("...and a cancelled job stops waiting at once", [cut.error === WALL.error, Date.now() - t2 < 1500], [true, true]);
+
+  // …and a Chrome window nobody is drawing: the same hold, asked again every
+  // few seconds — asking is what raises the window. Measured 2026-09-19: three
+  // reads in a row stopped on it, and Quest asked whether the address was right.
+  const HIDDEN = { error: "the Messaging Quest window is not on screen — Chrome gives input only to a tab it is drawing. Bring that window into view (it is minimised or covered) and try again. Chrome's windows: 1 (ours) focused maximized" };
+  const S5 = { covered: true, acts: 0 };
+  const covered = {
+    attached: async () => true, lease: async () => ({ id: "L1", tabId: 1 }), release: async () => ({ ok: true }),
+    act: async () => { S5.acts++; return S5.covered ? HIDDEN : { ok: true, text: "Acme sells reminders" }; },   // no grants(): this kind needs none
+  };
+  const said5 = [];
+  const waiting = browser(covered, { task: "t", patient: true, pollMs: 10, onHold: (w) => said5.push(w) });
+  await waiting.open("https://acme.dev/");
+  setTimeout(() => { S5.covered = false; }, 90);
+  const drawn = await waiting.text();
+  check("a covered window is a hold too: the read asks again until Chrome is drawing it, and goes on — said once",
+    [drawn.ok, S5.acts > 2, said5], [true, true, [{ kind: "window" }]]);
+  const S6 = { acts: 0 };
+  const quick = browser({ ...covered, act: async () => { S6.acts++; return HIDDEN; } }, { task: "t" });
+  await quick.open("https://acme.dev/");
+  check("...and anyone else's browser is handed it at once", [(await quick.text()).error === HIDDEN.error, S6.acts], [true, 1]);
+  check("what only the person at the machine can lift: a wall, or a window nobody is drawing — and nothing else",
+    [isHeld(WALL.error), isHeld(HIDDEN.error), isHidden(HIDDEN.error), isHidden(WALL.error), isHeld("could not read acme.com — no page opened"), isHeld(null)],
+    [true, true, true, false, false, false]);
+}
+
+// The broker remembers a window nobody is drawing, for a page's strip — until a read gets through.
+{
+  const hb = controlBroker({ ttlMs: 60_000, paceMs: 0 });
+  const leasing = hb.lease({ task: "t", url: "https://acme.dev/" });
+  let hj = await hb.claim(1000);
+  hb.answer(hj[0].id, { tabId: 5, groupId: 1, windowId: 1 });
+  const HL = await leasing;
+  const r1 = hb.act(HL.id, "get_page_text", {});
+  hj = await hb.claim(1000);
+  hb.answer(hj[0].id, { error: "the Messaging Quest window is not on screen — Chrome gives input only to a tab it is drawing." });
+  await r1;
+  const was = hb.hidden();
+  const r2 = hb.act(HL.id, "get_page_text", {});
+  hj = await hb.claim(1000);
+  hb.answer(hj[0].id, { ok: true, text: "hi" });
+  await r2;
+  check("the broker remembers a window nobody is drawing — until a read gets through", [was, hb.hidden()], [true, false]);
+}
+
 /* ------------------------------------------ two Chrome profiles, one lane */
 
 // Measured 2026-09-07: the extension loaded in two Chrome profiles, both
@@ -1273,7 +1561,7 @@ check("a proposal with a verb outside the law never renders",
     const G = async (p) => { const r = await fetch(baseS + p); return { status: r.status, body: await r.text() }; };
     check("a skill's page mounts beside the core views", (await G("/board")).status, 200);
     check("...rendering its body inside the dashboard chrome", /hello from a skill/.test((await G("/board")).body), true);
-    check("...and the nav carries it", /href="\/board"/.test((await G("/")).body), true);
+    check("...and the nav carries it", /href="\/board"/.test((await G("/today")).body), true);
     check("the Skills screen names the stalemate and its candidates", /probe:coin/.test((await G("/skills")).body), true);
     const posted = await fetch(baseS + "/skills/choose", {
       method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -1802,7 +2090,7 @@ check("a proposal with a verb outside the law never renders",
     SV.append("conversations.jsonl", { ...cv, comment_id: "t1_v1mine", state: "waiting", checked_at: "2026-09-06T06:00:00Z", latest: { author: "vera", text: "which tool?", at: "2026-09-06T05:00:00Z", url: "https://www.reddit.com/r/saas/comments/v1/x/vera/" }, turns: [...cv.turns, { by: "them", author: "vera", text: "which tool?", at: "2026-09-06T05:00:00Z", url: "https://www.reddit.com/r/saas/comments/v1/x/vera/" }] });
     const turn = (await deckV())[0];
     check("the turn card is dealt, with their reply and the operator's own words", [turn.id, turn.question, /You said: my own words, edited on the card/.test(turn.help), turn.data.url], ["work.turn.t3_v1", "which tool?", true, "https://www.reddit.com/r/saas/comments/v1/x/vera/"]);
-    const today = await GV("/");
+    const today = await GV("/today");
     check("Today shows the next card, who is waiting, what is due and the queue", [today.status, /<h1>Today<\/h1>/.test(today.body), /Waiting for you/.test(today.body), /u\/vera/.test(today.body), /which tool\?/.test(today.body), /read is due|reads are due|Nothing is due/.test(today.body), /Open the panel/.test(today.body)], [200, true, true, true, true, true, true]);
     check("the nav is four questions", [/>Today<\/a>/.test(today.body), />People<\/a>/.test(today.body), />Campaigns<\/a>/.test(today.body), />You<\/a>/.test(today.body), />Prospects<\/a>/.test(today.body), />Tasks<\/a>/.test(today.body)], [true, true, true, true, false, false]);
     const people = await GV("/people?view=waiting");
@@ -2036,6 +2324,13 @@ check("a proposal with a verb outside the law never renders",
     setPlan(DK, "local");   // a seat that needs no key: the clock only asks whether a model exists
     check("what is due is computed once and shared — the card, the panel and the clock all ask the same question",
       [E.dueNow().sources, E.dueNow().running, E.cardSnapshot().due.sources], [1, false, 1]);
+    // Measured 2026-09-18: a room watched a minute ago was read again a minute
+    // later, because its probe's read is not recorded as the source's own.
+    // Never read as itself counts from when it was added — the probe read that
+    // very page just before — and a source with no date at all is due.
+    const cad = (added) => E.dueNow([{ id: "x:new", place: "x", cadence_min: 240, ...(added ? { added } : {}) }]).sources;
+    check("a source watched a minute ago is not due again; one added a cadence ago is; one with no date is",
+      [cad(new Date().toISOString()), cad(new Date(Date.now() - 5 * 3_600_000).toISOString()), cad(null)], [0, 1, 1]);
 
     // Detached: it HOLDS. Nothing is started, the ask is recorded, and the
     // deck offers the reconnect instead of the button that cannot fire.
@@ -2061,6 +2356,12 @@ check("a proposal with a verb outside the law never renders",
         nextCards(snap({ ...settled, control: { attached: true } }))[0].id,
         nextCards(snap(settled))[0].id], ["work.due", "work.due", "work.due"]);
     check("...and the deck's own card snoozes through the engine", [(await E.actCard({ card: "work.browser", action: "later" })).ok, Boolean(readStash(DK).browser_later)], [true, true]);
+    // A customer's project never finishes the operator's setup, so its deck
+    // is only the hand's cards — or the reconnect would never be dealt at all.
+    check("a customer's project deals only what a hand at the browser can do: the reconnect when their read wanted a page, else nothing",
+      [nextCards(snap({ customer: true, stash: { browser_wanted: { at: new Date().toISOString(), what: "reading a customer's site" } }, control: { attached: false } })).map((c) => c.id),
+        nextCards(snap({ customer: true, control: { attached: true } })).map((c) => c.id)],
+      [["work.browser"], []]);
 
     // Attached: a browser claims from the lane, so the next pass reads.
     await E.CONTROL.claim(0, "chrome-1");
@@ -2075,6 +2376,282 @@ check("a proposal with a verb outside the law never renders",
     check("the off switch is on Settings, and holds the clock", [readStash(DK).auto_tick, E.panelState().settings.clock.auto], [false, false]);
     check("...and on is the absence of the switch, so a directory that never touched it reads as on",
       [(await E.panelAct({ do: "settings.clock", auto: true })).ok, "auto_tick" in readStash(DK), E.panelState().settings.clock.auto], [true, false, true]);
+    E.stop();
+  }
+
+  // Stage 1, slice 2: a customer's site is read by itself and comes back as
+  // the one card they answer — held while no browser is on the lane, never
+  // failed; confirmed, it becomes the files the judge already reads.
+  {
+    const boxQ = mkdtempSync(join(tmpdir(), "mq-offer-"));
+    const DQ = join(boxQ, ".mq");
+    execFileSync(process.execPath, [ES, "init"], { env: { ...process.env, MQ_DIR: DQ }, stdio: "ignore" });
+    setPlan(DQ, "local");
+    const E = engine({ root: DQ });
+    const su = E.signup({ email: "founder@acme.com", text: "" });   // nothing typed: no turn, no model
+    const QD = join(DQ, "projects", su.id);
+    writeCustomer(QD, { url: "https://acme.com" });
+    const quiet = E.chatView().browser;
+    E.autoOffer();
+    check("a customer's site waits for a browser rather than failing — and the operator is asked on the deck",
+      [E.J.busy("scout"), Boolean(readStash(QD).browser_wanted), Number(readStash(QD).scout_tries) || 0], [false, true, 0]);
+    // Quest's own words never mention the browser (a hosted customer must not
+    // be asked to open one), so the page is what tells the person at the
+    // machine — measured 2026-09-19: 22 minutes of "in the queue", no reason.
+    check("...and the chat page is told a Chrome is wanted and none is attached — but nothing before something asked for one",
+      [quiet.attached, quiet.waiting, E.chatView().browser.attached, E.chatView().browser.waiting], [false, false, false, true]);
+
+    patchStash(QD, { scout_tries: 3 });
+    E.autoOffer(); E.autoOffer();
+    check("three reads that open nothing, and Quest asks about the address instead — once",
+      chatState(QD).messages.filter((m) => /is that the right address/.test(m.text ?? "")).length, 1);
+    patchStash(QD, { scout_tries: null, scout_gaveup: null });
+
+    // A read that understood nothing (measured on messaging.quest itself,
+    // mid-rebuild): a question for the customer, never an "Unknown" card —
+    // and no second read by itself; their answer is the next read.
+    const blank = E.J.run("scout", async () => ({ name: "acme.com", one_line: "Unknown", problem: "Unknown", project_md: "", icp_md: "", rule_md: "", places: [], unknown: ["What the product does"] }), { label: "Reading your site" });
+    patchStash(QD, { scoutJob: blank.id });
+    for (let i = 0; i < 100 && E.J.get(blank.id)?.status !== "ok"; i++) await new Promise((r) => setTimeout(r, 20));
+    E.autoOffer(); E.autoOffer();
+    check("a site that says nothing about what it sells gets a question, once — no card, and no read again by itself",
+      [chatState(QD).messages.some((m) => m.card?.kind === "offer"), chatState(QD).messages.filter((m) => /doesn't say yet what you sell/.test(m.text ?? "")).length, readStash(QD).scout_empty, E.J.busy("scout")],
+      [false, 1, true, false]);
+    check("...and Quest's turn is told to wait for their words, then describe_offer",
+      /does not say what they sell[\s\S]*describe_offer/.test(offerLine({ url: "https://acme.com", empty: true })), true);
+    patchStash(QD, { scout_empty: null });
+
+    // A read that finished — the scout's own result shape, without a browser.
+    const proposal = { name: "Acme", one_line: "Acme sends clinics text reminders so patients turn up.", problem: "how do I stop no-shows",
+      signals: ["complain about patients not showing up", "ask for an appointment reminder tool"], searches: ["no-shows", "appointment reminders"],
+      project_md: "# Acme\n\nText reminders for clinics.", icp_md: "# Who\n\nSmall clinics.", rule_md: "# Rule\n\nAnswer YES when a clinic owner asks about no-shows.",
+      places: ["r/dentistry", "smallbusiness", "dentistry", "Physicaltherapy", "optometry"], unknown: [] };
+    const job = E.J.run("scout", async () => proposal, { label: "Reading your site" });
+    patchStash(QD, { scoutJob: job.id });
+    for (let i = 0; i < 100 && E.J.get(job.id)?.status !== "ok"; i++) await new Promise((r) => setTimeout(r, 20));
+    E.autoOffer();
+    const card = chatState(QD).messages.find((m) => m.card?.kind === "offer");
+    check("what the reader understood arrives as the one card they answer — what the people do, three communities, deduped, in the platform's own words",
+      [readStash(QD).offer?.state, card?.card.state, /Acme sends clinics/.test(card?.text ?? ""), /• complain about patients not showing up\n• ask for an appointment reminder tool/.test(card?.text ?? ""), /I'll start in r\/dentistry, r\/smallbusiness and r\/Physicaltherapy/.test(card?.text ?? ""), card?.card.actions.map((a) => a.label)],
+      ["open", "open", true, true, true, ["Looks right", "Change something"]]);
+    E.autoOffer();
+    check("...posted once, however often the clock looks", chatState(QD).messages.filter((m) => m.card?.kind === "offer").length, 1);
+    check("a button on a card that does not exist is refused", (await E.handle("POST", "/api/chat/act", {}, { id: 999, action: "confirm" })).status, 400);
+    const ok = await E.handle("POST", "/api/chat/act", {}, { id: card.id, action: "confirm" });
+    const after = chatState(QD).messages;
+    check("Looks right: the offer becomes the files the judge and the writer already read, and the card says so",
+      [ok.status, readFileSync(join(QD, "rule.md"), "utf8").includes("no-shows"), readFileSync(join(QD, "project.md"), "utf8").includes("Text reminders"),
+        after.find((m) => m.id === card.id)?.card.state, readStash(QD).offer.state, /start with r\/dentistry/.test(after[after.length - 1].text ?? "")],
+      [200, true, true, "confirmed", "confirmed", true]);
+
+    // Slice 3 — the first look. What a reply may say about them, the one
+    // campaign that lets it, and the communities queued in order.
+    check("...and a reply may now say they built it — disclosed, under the one campaign every find is made under — with the phrases held for the rooms that clear their rules",
+      [/I built Acme: Acme sends clinics/.test(readFileSync(join(QD, "me.md"), "utf8")), readCampaign(QD, "quest")?.mention, readStash(QD).look.rooms.map((r) => `${r.place}:${r.rules}:${r.q}`), readStash(QD).look.phrases],
+      [true, "disclosed", ["dentistry:todo:null", "smallbusiness:todo:null", "Physicaltherapy:todo:null"], ["no-shows", "appointment reminders"]]);
+    E.autoLook();
+    check("the first look waits for a browser too — nothing started, the operator asked", [E.J.busy("rules"), /communities a customer confirmed/.test(readStash(QD).browser_wanted?.what ?? "")], [false, true]);
+
+    // What the lane and the judge would have left behind, without either: the
+    // rules read said yes for one room and no for another, the third could
+    // not be opened; the search in the first read three posts, two of them fit.
+    const q = "no-shows";
+    const tag = `dentistry:${q}`;
+    writeFileSync(join(QD, "rooms", "dentistry.md"), "# r/dentistry\n\npromotion_allowed: yes\n");
+    const hoursAgo = (h) => new Date(Date.now() - h * 3_600_000).toISOString();
+    const posts = [["t3_opp1", "Patients keep not showing up", hoursAgo(5), "dr_a"], ["t3_opp2", "Any tool for appointment reminders?", hoursAgo(4), "dr_b"], ["t3_opp3", "Best dental chairs?", hoursAgo(6), "dr_c"]];
+    for (const [id, title, at, author] of posts)
+      appendFileSync(join(QD, "found.jsonl"), JSON.stringify({ id, place: "dentistry", url: `https://www.reddit.com/r/dentistry/comments/${id.slice(3)}/x/`, author, title, body: `${title} — details.`, posted_at: at, seen_at: at, probe: tag, via: "browser", campaign: "quest" }) + "\n");
+    for (const [id, fit] of [["t3_opp1", true], ["t3_opp2", true], ["t3_opp3", false]])
+      appendFileSync(join(QD, "verdicts.jsonl"), JSON.stringify({ id, fit, why: fit ? `they ask about no-shows (${id})` : "chairs, not no-shows", rule: "x", at: "2026-09-18T11:00:00Z" }) + "\n");
+    // The phrases are handed out as rooms clear their rules: the first room's
+    // rules forbid it (it burns none), the second's allow it and get the first.
+    const ruled = async (state) => {
+      const rj = E.J.run("rules", async () => ({ state, quote: state === "banned" ? "no promotion" : null }), { label: "a rules read" });
+      for (let i = 0; i < 100 && E.J.get(rj.id)?.status !== "ok"; i++) await new Promise((r) => setTimeout(r, 20));
+      return rj.id;
+    };
+    const banJob = await ruled("banned"), okJob = await ruled("allowed");
+    const l0 = readStash(QD).look;
+    patchStash(QD, { look: { ...l0, rooms: [{ ...l0.rooms[0], rules: "reading", rulesJob: banJob }, { ...l0.rooms[1], rules: "reading", rulesJob: okJob }, l0.rooms[2]] } });
+    E.autoLook();
+    const handed = readStash(QD).look;
+    check("search phrases are handed out as rooms clear their rules: a skipped room burns none, the next one gets the first",
+      [handed.rooms.map((r) => `${r.place}:${r.rules}:${r.q}`), handed.used], [["dentistry:banned:null", "smallbusiness:allowed:no-shows", "Physicaltherapy:todo:null"], 1]);
+    const look = readStash(QD).look;
+    patchStash(QD, { look: { ...look, rooms: [{ ...look.rooms[0], rules: "allowed", probe: "done", q }, { ...look.rooms[1], rules: "banned" }, { ...look.rooms[2], rules: "failed" }] } });
+    E.autoLook(); E.autoLook();
+    const src = E.S.sources().find((s) => s.id === tag.toLowerCase());
+    check("a room whose search cleared the floor is watched — a few times a day, under the customer's campaign",
+      [readStash(QD).look.rooms[0].watch, src?.cadence_min, src?.campaign], ["watched", 240, "quest"]);
+
+    // Two fits, delivered as cards the moment they are judged; their replies after.
+    for (const id of ["t3_opp1", "t3_opp2"]) appendFileSync(join(QD, "drafts.jsonl"), JSON.stringify({ id, drafts: [{ style: "straight", text: `I built Acme for exactly this (${id}).` }, { style: "deeper", text: "Longer. I got 12 clinics signed in a week this way." }], at: "2026-09-18T11:05:00Z" }) + "\n");
+    for (let i = 0; i < 5; i++) E.autoDeliver();
+    const opps = chatState(QD).messages.filter((m) => m.card?.kind === "opportunity");
+    check("every fit arrives as an opportunity card — newest first, their words, why it fits, the room, and the reply written onto it after",
+      [opps.map((m) => m.card.item), opps[0]?.card.room, /no-shows \(t3_opp2\)/.test(opps[0]?.card.why ?? ""), opps[0]?.card.draft, opps[0]?.card.drafts?.length, /Why it fits/.test(opps[0]?.text ?? "")],
+      [["t3_opp2", "t3_opp1"], "r/dentistry", true, "I built Acme for exactly this (t3_opp2).", 2, true]);
+    check("...and a result the reply claims for them rides on that draft as something to check — the honest mention does not",
+      [opps[0]?.card.drafts?.[1]?.check, opps[0]?.card.drafts?.[0]?.check ?? null], [["I got 12 clinics signed in a week this way."], null]);
+    appendFileSync(join(QD, "found.jsonl"), JSON.stringify({ id: "t3_opp4", place: "dentistry", url: "https://www.reddit.com/r/dentistry/comments/opp4/x/", author: "dr_d", title: "No-shows again", body: "help", posted_at: hoursAgo(2), seen_at: hoursAgo(2), probe: tag, via: "browser", campaign: "quest" }) + "\n");
+    appendFileSync(join(QD, "verdicts.jsonl"), JSON.stringify({ id: "t3_opp4", fit: true, why: "no-shows", rule: "x", at: "2026-09-18T12:01:00Z" }) + "\n");
+    E.autoDeliver();
+    check("...at most two a community a day: a third fit there waits for tomorrow", chatState(QD).messages.filter((m) => m.card?.kind === "opportunity").length, 2);
+
+    // Freshness: a fit from a month ago is not delivered — a fit from an hour
+    // ago, in a room with nothing yet today, is.
+    for (const [id, days, author] of [["t3_old", 30, "dr_old"], ["t3_new", 1 / 24, "dr_new"]])
+      appendFileSync(join(QD, "found.jsonl"), JSON.stringify({ id, place: "optometry", url: `https://www.reddit.com/r/optometry/comments/${id.slice(3)}/x/`, author, title: `No-shows (${id})`, body: "Big trouble.Please help. It costs €35.Every week.", posted_at: new Date(Date.now() - days * 86_400_000).toISOString(), seen_at: new Date().toISOString(), probe: "optometry:new", via: "browser", campaign: "quest" }) + "\n");
+    for (const id of ["t3_old", "t3_new"]) appendFileSync(join(QD, "verdicts.jsonl"), JSON.stringify({ id, fit: true, why: "no-shows", rule: "x", at: new Date().toISOString() }) + "\n");
+    appendFileSync(join(QD, "drafts.jsonl"), JSON.stringify({ id: "t3_new", drafts: [{ style: "straight", text: "A fresh reply." }], at: new Date().toISOString() }) + "\n");
+    for (let i = 0; i < 4; i++) E.autoDeliver();
+    check("a fit older than a week is not delivered as an opportunity; a fresh one is — and a post whose paragraphs ran together reads with its spaces",
+      chatState(QD).messages.filter((m) => m.card?.kind === "opportunity" && m.card.place === "optometry").map((m) => [m.card.item, m.card.quote]), [["t3_new", "Big trouble. Please help. It costs €35. Every week."]]);
+
+    // "Rewrite": the customer's note goes onto the card, the reply is cleared,
+    // and what comes back is the round written AFTER the note — never the one
+    // they just turned down. (A draft job is held for the moment, so the clock
+    // does not start a real one against a model this suite does not have.)
+    const [, R] = opps;
+    const act = (id, body) => E.handle("POST", "/api/chat/act", {}, { id, ...body });
+    const held = E.J.run("draft", () => new Promise((r) => setTimeout(r, 300)), { label: "a draft being written" });
+    check("a Rewrite with no note is refused in words", [(await act(R.id, { action: "rewrite", note: "  " })).status], [400]);
+    const wrote = await act(R.id, { action: "rewrite", note: "shorter, and not salesy", style: "deeper" });
+    const cleared = chatState(QD).messages.find((m) => m.id === R.id).card;
+    check("Rewrite: the note rides on the card, and the reply they turned down is cleared",
+      [wrote.status, cleared.rewriting?.note, cleared.rewriting?.style, cleared.draft, cleared.drafts], [200, "shorter, and not salesy", "deeper", null, null]);
+    E.autoDeliver();
+    check("...the round they turned down is not put back, and a second Rewrite while one is under way is refused",
+      [chatState(QD).messages.find((m) => m.id === R.id).card.draft, (await act(R.id, { action: "rewrite", note: "again" })).status], [null, 400]);
+    for (let i = 0; i < 100 && E.J.get(held.id)?.status !== "ok"; i++) await new Promise((r) => setTimeout(r, 20));
+    appendFileSync(join(QD, "drafts.jsonl"), JSON.stringify({ id: "t3_opp1", drafts: [{ style: "straight", text: "Shorter, no pitch." }, { style: "deeper", text: "Also short." }], at: new Date(Date.now() + 2000).toISOString() }) + "\n");
+    E.autoDeliver();
+    const rewritten = chatState(QD).messages.find((m) => m.id === R.id).card;
+    check("...the round written after the note lands on the card as its tabs, and the note is spent",
+      [rewritten.draft, rewritten.drafts?.map((d) => d.style), rewritten.rewriting ?? null], ["Shorter, no pitch.", ["straight", "deeper"], null]);
+
+    const [A, B] = opps;
+    await E.handle("POST", "/api/chat/act", {}, { id: A.id, action: "good" });
+    await E.handle("POST", "/api/chat/act", {}, { id: B.id, action: "bad" });
+    await E.handle("POST", "/api/chat/act", {}, { id: A.id, action: "replied" });
+    const byId = new Map(chatState(QD).messages.map((m) => [m.id, m.card]));
+    const marks = E.S.marks();
+    check("the buttons are the feedback: relevant, not relevant (the post leaves the queue), replied (marked sent, the author retired)",
+      [byId.get(A.id).rating, byId.get(A.id).state, byId.get(B.id).state, marks.get("t3_opp1")?.mark, marks.get("t3_opp2")?.mark, E.S.contacted().has("dr_b")],
+      ["good", "replied", "dismissed", "skip", "sent", true]);
+    E.autoLook();
+    check("with every room settled and people found, the first look does not say nobody is asking", [readStash(QD).look.said, chatState(QD).messages.some((m) => /nobody is asking/.test(m.text ?? ""))], [true, false]);
+    check("...but it says which rooms it left out, and why — once",
+      chatState(QD).messages.filter((m) => m.text === "I left out r/smallbusiness — its rules don't allow promotion. I couldn't read r/Physicaltherapy.").length, 1);
+
+    // The instruction path: the customer's message is read for what it asks to
+    // change and applied before any chat model sees it (lib/revise.mjs).
+    const said0 = chatState(QD).messages.length;
+    check("a message that changes nothing about who is found is left to Quest: nothing applied, nothing said",
+      [await E.applyInstruction(QD, "why did you pick that one?", async () => ({ leave_out: [], places: [], also_asks: true })), chatState(QD).messages.length], [null, said0]);
+    check("a reader that fails is not an error — the message goes to Quest as it was",
+      await E.applyInstruction(QD, "leave out agencies", async () => { throw new Error("429 rate limited"); }), null);
+    const only = await E.applyInstruction(QD, "Please leave out agencies and only people who built their own product", async () => ({ leave_out: ["agencies", "people who did not build their own product"], places: [], also_asks: false }));
+    check("'leave out agencies': applied to the judge's rule at once, confirmed in their words, and it was the whole message",
+      [/leave out agencies and people who did not build their own product/.test(only?.said ?? ""), only?.done, /- agencies\n- people who did not build their own product/.test(readFileSync(join(QD, "rule.md"), "utf8")), readStash(QD).offer.leave_out],
+      [true, true, true, ["agencies", "people who did not build their own product"]]);
+    const both = await E.applyInstruction(QD, "add r/dentistry_uk and rewrite the first reply", async () => ({ leave_out: [], places: ["dentistry_uk"], also_asks: true }));
+    check("...a message that ALSO asks something goes on to Quest, told what was already done and not to do it again",
+      [both?.done, /Already done/.test(both?.note ?? ""), /adding r\/dentistry_uk/.test(both?.note ?? ""), readStash(QD).look.rooms.some((r) => r.place === "dentistry_uk")], [false, true, true, true]);
+
+    // Slice 4 — no site, a CV: read at once, with no browser on the lane.
+    const other = createProject(DQ, "cv-person", { inherit: false });
+    writeCustomer(other.dir, { email: "cv@example.com", cv: { name: "cv.pdf" } });
+    writeFileSync(join(other.dir, "cv.json"), JSON.stringify({ name: "cv.pdf", data: "data:application/pdf;base64,JVBERi0xLjQK" }));
+    E.autoOffer();
+    const cvJob = E.J.list().find((j) => j.verb === "scout");
+    check("a CV is read without a browser — the lane is dark and the read starts anyway",
+      [cvJob?.label, Boolean(readStash(other.dir).scout_at), E.controlSummary().attached], ["Reading your CV", true, false]);
+    check("...and Quest's turn is told what is being read", /Their CV is being read right now/.test(offerLine({ scout: "running", material: "cv" })), true);
+    E.stop();
+  }
+
+  // The strip on the chat page: dark while a page was asked for and no Chrome
+  // is attached, with the folder to load the extension from — and gone the
+  // moment a lane polls, whether or not the deck ever noticed.
+  {
+    const boxH = mkdtempSync(join(tmpdir(), "mq-lane-"));
+    const DH = join(boxH, ".mq");
+    execFileSync(process.execPath, [ES, "init"], { env: { ...process.env, MQ_DIR: DH }, stdio: "ignore" });
+    setPlan(DH, "local");
+    const E = engine({ root: DH, home: "C:/mq" });
+    const su = E.signup({ email: "lane@acme.com", text: "" });
+    writeCustomer(join(DH, "projects", su.id), { url: "https://acme.com" });
+    E.autoOffer();
+    const dark = E.chatView().browser;
+    await E.CONTROL.claim(0, "chrome-1");
+    const lit = E.chatView().browser;
+    check("the chat page's strip: a Chrome wanted and none attached, with where to load it from — and none once a lane polls",
+      [dark.attached, dark.waiting, dark.home, lit.attached, lit.waiting, lit.home], [false, true, "C:/mq", true, false, "C:/mq"]);
+    // …and the second thing only the person at the machine can fix: a site the
+    // extension has been asked to allow.
+    const leasing = E.CONTROL.lease({ task: "reading your site", url: "https://www.acme.com/" });
+    let wj = await E.CONTROL.claim(1000, "chrome-1");
+    E.CONTROL.answer(wj[0].id, { tabId: 12, groupId: 3, windowId: 1 });
+    const LL = await leasing;
+    const reading = E.CONTROL.act(LL.id, "get_page_text", {}, { grants: ["read"] });
+    wj = await E.CONTROL.claim(1000, "chrome-1");
+    E.CONTROL.answer(wj[0].id, { error: "not_granted", origin: "https://www.acme.com" });
+    await reading;
+    const asked = E.chatView().browser.allow;
+    E.CONTROL.granted("https://www.acme.com");
+    check("the chat page is told which site the extension is waiting to be allowed — and not once it has been", [asked, E.chatView().browser.allow], [["https://www.acme.com"], []]);
+    // …and when Chrome is not drawing its window, until a read gets through.
+    const r3 = E.CONTROL.act(LL.id, "get_page_text", {}, { grants: ["read"] });
+    wj = await E.CONTROL.claim(1000, "chrome-1");
+    E.CONTROL.answer(wj[0].id, { error: "the Messaging Quest window is not on screen — Chrome gives input only to a tab it is drawing." });
+    await r3;
+    const hid = E.chatView().browser.hidden;
+    const r4 = E.CONTROL.act(LL.id, "get_page_text", {}, { grants: ["read"] });
+    wj = await E.CONTROL.claim(1000, "chrome-1");
+    E.CONTROL.answer(wj[0].id, { ok: true, text: "x" });
+    await r4;
+    check("the chat page is told when Chrome is not drawing its window — and not once a read gets through", [hid, E.chatView().browser.hidden], [true, false]);
+    E.stop();
+  }
+
+  // A read that stopped on a permission wall is not a failed read of the
+  // address: not counted, not "being read", and no ten minutes' wait — the ask
+  // is still on the panel. Any other failed read waits its ten minutes, unless
+  // the customer has spoken since. (Measured 2026-09-19: the wall, Allow
+  // pressed, "Try again" in the chat — and nothing for ten minutes.)
+  {
+    const boxW = mkdtempSync(join(tmpdir(), "mq-wall-"));
+    const DWL = join(boxW, ".mq");
+    execFileSync(process.execPath, [ES, "init"], { env: { ...process.env, MQ_DIR: DWL }, stdio: "ignore" });
+    setPlan(DWL, "local");
+    const E = engine({ root: DWL });
+    const su = E.signup({ email: "wall@acme.com", text: "" });
+    const WD = join(DWL, "projects", su.id);
+    writeCustomer(WD, { url: "https://acme.com" });
+    const failed = async (message) => {
+      const j = E.J.run("scout", async () => { throw new Error(message); }, { label: "Reading your site" });
+      for (let i = 0; i < 100 && E.J.get(j.id)?.status === "running"; i++) await new Promise((r) => setTimeout(r, 20));
+      patchStash(WD, { scoutJob: j.id, scout_tries: 1, scout_at: new Date().toISOString(), scout_walled: null, scout_nudge: null, browser_wanted: null });
+    };
+    await failed("could not read acme.com — the extension has no permission for https://www.acme.com yet — the operator is being asked on the panel; try again once they grant it. Press Allow on the panel's card for the site, then try again.");
+    E.autoOffer();
+    check("a read that stopped on a permission wall is not counted against the address, is no longer 'being read', and does not wait ten minutes",
+      [readStash(WD).scout_tries, readStash(WD).scout_at, Boolean(readStash(WD).browser_wanted)], [0, null, true]);
+    E.autoOffer();
+    check("...and is counted off once, however often the clock looks", readStash(WD).scout_tries, 0);
+    await failed("could not read acme.com — the Messaging Quest window is not on screen — Chrome gives input only to a tab it is drawing. Bring that window into view (it is minimised or covered) and try again. Bring Chrome's window into view, then try again.");
+    E.autoOffer();
+    check("a Chrome window nobody was drawing is the same: not counted against the address, and no ten minutes' wait",
+      [readStash(WD).scout_tries, readStash(WD).scout_at, Boolean(readStash(WD).browser_wanted)], [0, null, true]);
+    await failed("could not read acme.com — no page opened. Check the address, then try again.");
+    E.autoOffer();
+    check("any other failed read waits its ten minutes: counted, no longer 'being read', and nothing asked of the browser yet",
+      [readStash(WD).scout_tries, readStash(WD).scout_at, Boolean(readStash(WD).browser_wanted)], [1, null, false]);
+    patchStash(WD, { scout_nudge: new Date(Date.now() + 5000).toISOString() });
+    E.autoOffer();
+    check("...unless the customer has said something since: that is a nudge to look again now", Boolean(readStash(WD).browser_wanted), true);
     E.stop();
   }
 

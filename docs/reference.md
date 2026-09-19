@@ -40,8 +40,10 @@ Then open the dashboard and set it up there:
 node bin/mq.mjs serve
 ```
 
-That is `http://127.0.0.1:8787`, and everything this tool does is reachable from
-it — onboarding, the queue, your prospects, the memory files, the models.
+That is `http://127.0.0.1:8787/today`, and everything this tool does is reachable
+from it — onboarding, the queue, your prospects, the memory files, the models.
+The bare address is Quest's front page since 0.13.0 (see
+[Quest](#quest-0130) below).
 (`npm start` does the same thing; the direct form is spelled out because
 Windows PowerShell blocks npm's `.ps1` shim under its default execution
 policy, and there is no reason to make anybody debug that for a tool with
@@ -279,6 +281,132 @@ verdicts against your rule, drafts already written, campaigns, and the
 conversation with your specialist, which now says plainly that the browser
 is not connected instead of relaying a timeout. Two colleagues work at once
 and no more, because the browser is the scarce resource.
+
+### Quest (0.13.0)
+
+Everything above is the operator's own tool. Quest is the side a founder
+sees: they paste their site's address, give an email, and talk to the agent
+in a chat, while the reading happens in the operator's Chrome and the
+posting stays theirs. It is the first stage of a hosted service, and it runs
+whole on one machine for now.
+
+**The front page** (`/`) is one box: an address, a CV as a PDF (under
+1.4 MB, read by the model through OpenRouter's PDF parser, so not on the
+Local plan), or a sentence or two about what they sell — then an email. That
+is the whole sign-up, and it is a stub: no password, no verification, one
+project per email, and the same email again goes back to the same project.
+The project is made without the operator's account, voice, me.md or persona,
+because a draft written for a customer must never carry the operator's
+claims about themselves. What they typed becomes the first message of the
+chat at `/app`. The dashboard moved to `/today`.
+
+**The browser has to be attached, and the page says when it is not.** The
+extension's default is hosted mode (the engine inside it), which never polls
+this server's lane, so on a first run nothing reads the site and the queue
+just sits — measured 2026-09-19 in the owner's own Chrome, 22 minutes of
+"in the queue". Quest's words do not mention the browser (a hosted customer
+must never be asked to open one), so the chat page carries it: `/api/chat`
+returns `browser: { attached, waiting, home }`, and while a page has been
+asked for and no lane is attached a strip above the chat says so, with the
+address to point the extension at and the folder to load it from (`home`).
+It clears itself, after one line of "connected". The extension's half: a
+hosted panel asks `127.0.0.1:8787/api/me` every few seconds and, if a server
+answers, puts a card first — **Use this server** — that switches the mode in
+one click. Never automatic: the click is the consent.
+
+**Two things only the person at the machine can lift are holds, not failures.**
+A customer's browser is *patient* (`lib/browse.mjs`, `patient: true`, set by
+the engine for a customer's project): when the lane answers that the extension
+has no permission for a site yet, or that the Chrome window is not on screen (a
+covered or minimised window is drawn by nobody and gets no page —
+`extension/control.js` `front()`), the read waits in the tab it has and asks
+again — when the operator has pressed Allow (it watches the lane's grant
+list), and every few seconds, a little less often each time, while the window
+is hidden (asking is what raises it) — for up to eight minutes, then hands the
+answer back. The job's own log says what it waits on, `browser.allow` and
+`browser.hidden` on `/api/chat` put a strip on the page for each, and the
+clock (`autoOffer`) counts neither against the address: a read that stopped on
+one is retried at once, not after ten minutes, and never asks a founder
+whether their address is right. Allow asks Chrome for the site's other
+spelling too (`siteTwin`: `www.` and the bare name are two origins, and sites
+send one to the other). A word from the customer after a failed read is a
+nudge to look again, and "try again" after it gave up is a fresh round. Chrome
+behind another app stays a limit of a real Chrome; the README gives the three
+flags that lift it.
+
+**One transcript per customer.** Everything Quest says goes into
+`chat.jsonl` in the customer's project (`lib/chat.mjs`), cards included; a
+card's later state is a row of its own, folded in when the chat is read.
+The web chat is its first reader. Email or Telegram would be the next, and
+the agent would not change.
+
+**Quest never touches a browser.** It is the specialist's seat in a
+customer-facing mode — its own persona and doctrine, plain words, and no
+browser tools. Every read it depends on is an engine step on the lane, taken
+by a ten-second clock (`lib/quest.mjs` holds the shapes):
+
+1. *The offer.* The site is read in a tab — held while no browser is on the
+   lane, and after three reads that open nothing Quest asks for the address
+   again. A site that says nothing about what it sells (a holding page)
+   gets a question instead of an "Unknown" card. The reader is told to write
+   about the *buyers* — people who have the problem and have never heard of
+   the product — never about the product itself. What it understood becomes
+   one card: what they sell, what the people do in a post ("ask how to get
+   first users", "complain about no audience"), and the first three
+   communities to look in. "Change something" is answered in words
+   (`revise_offer`, which can also change the signals, the search phrases,
+   the communities and who to leave out). **Looks right** writes
+   `project.md`, `icp.md`, `rule.md` (with a "Leave out" section for what
+   they asked to drop), `me.md` ("I built …", and that nothing else about
+   them is on record) and the campaign `quest`, whose mention is *disclosed*.
+2. *The look.* Each community's rules page is read first. One whose rules
+   forbid promotion is skipped, and the sentence that forbids it goes into
+   its room file, where the operator can overrule it. The offer's search
+   phrases (short: two to four plain words) are handed out as rooms clear
+   their rules, so a skipped room burns none. Each cleared room is probed
+   under the campaign and, if enough of what came back fits, watched every
+   four hours instead of every hour, so one laptop keeps up. A look that
+   found nobody tries once more with the phrases nobody has searched before
+   it says so; and whichever way it ends, the customer is told which rooms
+   were left out and why, so a community they know is never silently
+   missing.
+3. *The delivery.* Every post the judge marks as a fit **from the last seven
+   days** becomes an opportunity card at once — who, where, their own words,
+   why it fits — at most two per community and five a day. (The search asks
+   Reddit for the past week, and Reddit's new search page ignores that when
+   sorted by newest: measured 2026-09-19, posts 8 to 22 days old came back,
+   and 43 in an earlier run — so the week is enforced here, and the first
+   look counts and says only what it read from the last week.) The reply follows when it is
+   written, in three styles, with a "check before you post" note under any
+   sentence that claims a result for them (a number next to "I") — the one
+   thing Quest cannot know. The customer opens the thread, copies the reply
+   and posts it themselves. **Rewrite** (a button, or "make it shorter" in
+   the chat, which Quest turns into `rewrite_reply`) takes a note and writes
+   the three replies again from it. 👍, 👎 (the post is skipped) and
+   **I replied** (marked sent, and its author leaves every future queue) are
+   recorded from the first day.
+
+**A change to who is found is applied, not remembered.** A message like
+"leave out anyone selling services" or "add r/foo" is read by a forced
+structured call (`interpretInstruction` in `lib/agents.mjs` — a free model
+conforms to that reliably) and applied at once by `lib/revise.mjs`: the
+section in `rule.md` that the judge reads, the campaign the writer reads,
+the rooms the look takes — and confirmed in plain words. Everything else in
+the message goes on to Quest. Before this, a free chat model told the same
+thing wrote it in its private notebook, changed nothing the judge reads, and
+answered that it was "not marking" two cards as matches, which it cannot do.
+
+Quest speaks up on its own only when there is news — a person posted, the
+offer confirmed — and the same news is never announced twice: that rule is
+in the tool, not the prompt, after a free model reported "still waiting, no
+new matches" two hours after the last real event. The operator's own daily
+digest never reaches it, because "7 found" there means seven posts read.
+
+While the current project is a customer's, the side panel says whose work it
+is doing ("This browser is Quest's hands right now"), and the deck deals only
+what the browser needs. Left for the next stages: more than one customer at
+a time (the engine works on the current project), the sign-up and the files
+on Supabase, the agent off this machine, and more places to look than one.
 
 ### Four pages
 
@@ -591,7 +719,7 @@ number invented for it would be decoration.
 ## The dashboard
 
 ```bash
-node bin/mq.mjs serve      # then open http://127.0.0.1:8787
+node bin/mq.mjs serve      # then open http://127.0.0.1:8787/today
 ```
 
 Everything is here. Not a window onto the CLI — the whole product.

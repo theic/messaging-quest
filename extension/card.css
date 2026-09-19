@@ -311,3 +311,10 @@ footer button:active { transform: translateY(1px); box-shadow: 0 1px 0 0 var(--i
 
 @keyframes es-pulse { 50% { opacity: 0.4; } }
 .es-waiting .es-primary { animation: es-pulse 1.6s ease-in-out infinite; pointer-events: none; }
+
+/* The worker (Stage 1 of the Quest plan): when the current project is a
+   customer's, the panel is Quest's hands, not the operator's desk — the
+   strip and the cards a hand here must answer stay; the tabs and the
+   specialist's box go (extension/sidepanel.js workerFor). */
+body.es-worker .es-tabs,
+body.es-worker footer { display: none; }

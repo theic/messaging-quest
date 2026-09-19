@@ -58,7 +58,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
  *  stores, the project and the deck's actions from it. */
 const DATA = dataDir();
 await loadPlatforms(DATA);
-const E = engine({ root: DATA, base: () => process.env.MQ_SERVER ?? `http://127.0.0.1:${PORT}` });
+const E = engine({ root: DATA, base: () => process.env.MQ_SERVER ?? `http://127.0.0.1:${PORT}`, home: ROOT });
 const { P, PJ, LB, S, J, CONTROL, LANE, RT, WHY, INBOX, loadRuntime, afterSwitch, acct, who, queueRows,
         SPAWNABLE, AGENTIC, startAgentic, SELF, startScout, cardSnapshot, actCard,
         projectSummary, switchProject, controlSummary, panelState, panelAct } = E;
@@ -226,7 +226,10 @@ It needs two looks, and both are on disk.</p>`);
  * what is due, who is worth answering, and the campaigns' numbers. A person
  * who only ever opens this page knows what to do next.
  */
-views["/"] = () => {
+// At /today since Stage 1 of the Quest plan (2026-09-18): / is the
+// customer's front page now (web/index.html), and this dashboard is the
+// operator's console behind it.
+views["/today"] = () => {
   const snap = cardSnapshot();
   const deck = nextCards(snap);
   const top = deck[0] ?? null;
@@ -267,7 +270,7 @@ views["/"] = () => {
   const campHtml = dg.length ? `<h2>Campaigns</h2><table><thead><tr><th>campaign</th><th>found</th><th>fit</th><th>sent</th><th>replied</th><th>2nd turn</th><th>waiting</th><th>crowding</th></tr></thead><tbody>
 ${dg.map((r) => `<tr><td><b>${esc(r.name)}</b> ${tag(r.status, r.status === "active" ? "ok" : "dim")}</td><td>${r.found}</td><td>${r.fit}${r.fitRate != null ? ` <span class="muted">(${Math.round(r.fitRate * 100)}%)</span>` : ""}</td><td>${r.sent}</td><td>${r.replies}</td><td>${r.second}</td><td>${r.waiting}</td><td>${r.crowd ?? "—"}</td></tr>`).join("")}
 </tbody></table><p class="sub" style="font-size:13px">Crowding is the median number of comments a post already had when it was found — a room whose question gets a dozen generated answers on day one. <a href="/campaigns">Campaigns →</a></p>` : "";
-  return render("/", "Today", `
+  return render("/today", "Today", `
 <h1>Today</h1>
 ${live.length ? `<p class="sub">Now: ${esc(live.join(" · "))}</p>` : ""}
 ${!ready ? `<div class="note"><b>Setup is ${setup.done} of ${setup.total} done.</b> The panel asks the rest one card at a time — what you sell, who it is for, your account, the first room — and proposes the first campaign when it is done. <a href="/panel/">Open the panel</a>, or <a href="/setup">finish it here</a>.</div>` : ""}
@@ -1364,8 +1367,8 @@ const backTo = (form, req) => {
   if (/^\/(?!\/)/.test(want)) return want;
   const ref = req.headers.referer ?? "";
   const origin = `http://127.0.0.1:${PORT}`;
-  if (ref.startsWith(origin)) return ref.slice(origin.length) || "/";
-  return "/";
+  if (ref.startsWith(origin)) return ref.slice(origin.length) || "/today";
+  return "/today";
 };
 
 const JSON_HEAD = { "content-type": "application/json", "cache-control": "no-store" };
@@ -1460,6 +1463,32 @@ const server = createServer((req, res) => {
     }
   }
 
+  /* The customer's side (Stage 1 of the Quest plan, 2026-09-18): the front
+   * page and the chat. Static files from web/ that talk to the engine's
+   * /api/me, /api/signup and /api/chat and to nothing else — the panel's
+   * CSP, script and style from this origin only. The dashboard that used to
+   * answer at / is the operator's console at /today. */
+  const WEB = {
+    "/": ["index.html", "text/html; charset=utf-8"],
+    "/app": ["app.html", "text/html; charset=utf-8"],
+    "/web/web.css": ["web.css", "text/css; charset=utf-8"],
+    "/web/landing.js": ["landing.js", "text/javascript; charset=utf-8"],
+    "/web/chat.js": ["chat.js", "text/javascript; charset=utf-8"],
+  };
+  if (WEB[url.pathname] && req.method === "GET") {
+    const [file, type] = WEB[url.pathname];
+    try {
+      return res.writeHead(200, {
+        "content-type": type,
+        "cache-control": "no-cache",
+        "referrer-policy": "same-origin",
+        "content-security-policy": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'",
+      }).end(readFileSync(join(ROOT, "web", file)));
+    } catch {
+      return res.writeHead(404, JSON_HEAD).end(JSON.stringify({ error: "not part of the web app" }));
+    }
+  }
+
   /* The deck as a page: the extension's own panel files, served same-origin.
    * One implementation of the card surface — the extension is where it earns
    * its keep (it can type into Reddit's composer), and this is the same thing
@@ -1528,14 +1557,14 @@ const server = createServer((req, res) => {
 
   const view = views[url.pathname];
   if (!view)
-    return res.writeHead(404, HTML).end(render("/", "Not found", `<h1>Not found</h1><p><a href="/">Standing</a></p>`));
+    return res.writeHead(404, HTML).end(render("/today", "Not found", `<h1>Not found</h1><p><a href="/today">Today</a></p>`));
 
   Promise.resolve()
     .then(() => view(url))
     .then((html) => res.writeHead(200, HTML).end(html))
     .catch((e) => {
       console.error(e);
-      res.writeHead(500, HTML).end(render("/", "Error", `<h1>Something broke</h1><pre class="log">${esc(e.stack ?? e.message)}</pre>`));
+      res.writeHead(500, HTML).end(render("/today", "Error", `<h1>Something broke</h1><pre class="log">${esc(e.stack ?? e.message)}</pre>`));
     });
 });
 

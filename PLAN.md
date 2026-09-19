@@ -752,6 +752,28 @@ need one answers immediately with a typed, actionable sentence
 (`laneDark()`), never a timeout; and the fix is offered on the deck as a
 card, once, because a failure in a log nobody opens is the same as silence.
 
+**Quest: the agent is the product, and it is detached (2026-09-18).** Set by
+the user after a strategy review: sell *distribution* to founders who built
+something and have no audience ("Find people who already need what you
+sell"), on one rule — *autopilot for discovery, human-in-the-loop for
+execution*. So the deep agent is what a customer talks to (Quest, the CMO
+seat in a customer-facing mode), and it is detached from its three sides:
+CHANNELS — everything it says goes into one transcript per customer
+(`lib/chat.mjs`, `chat.jsonl`), which the web chat reads today and email or
+Telegram read later; TOOLS — it never touches a browser, every read is an
+engine step on the lane (the site read, a community's rules, a search), which
+is *SearchJob → Source Worker → Candidates* with the operator's own Chrome as
+today's worker; STORAGE — per-customer files behind `lib/fs.mjs`, rows in
+Supabase later. The extension is no longer the customer's: it runs only on
+the operator's laptop as a read-only worker, and its panel shows whose work it
+is doing. Onboarding is a URL or a CV, an email, and one "Looks right" — no
+account, key, voice questions, rooms or phrases; the reader proposes, the
+customer corrects in words. Nothing is posted and no credentials are ever
+asked for: the customer opens the thread and posts the reply themselves.
+Stage 1 (this) runs whole on one laptop with a stub sign-up; Stage 2 moves
+it to the existing Supabase project; Stage 3 is the first ten customers.
+Supersedes "the extension as the primary surface" above for customers.
+
 ## Done
 
 - 0.1–0.2: listener, waiting-for-you, find, drafts, the gate; dashboard;
@@ -1155,6 +1177,114 @@ a refused proposal keeping its card instead of spending it. 607 engine tests
 + 45 runtime tests green. Left: the live run (a real key, Chrome attached) —
 the heartbeat's own back-off and the self-started tick have not been watched
 against a real model here.
+
+**0.13.0 — Quest: a URL, an email, and the people who need it.** Stage 1 of
+the decision of record above (2026-09-18), whole on one laptop. THE FRONT
+PAGE AND THE CHAT: `/` is one box — a site's address, a CV as a PDF, or two
+sentences about what they sell — and an email is the whole sign-up, a stub
+with no password and no verification: one project per email, made with
+`createProject(…, { inherit: false })` so none of the operator's account,
+voice, me.md or persona reaches a customer's drafts. `/app` is the chat with
+the opportunities beside it and `/today` the dashboard that used to be `/`;
+the pages are plain files in `web/` under a strict CSP, kept out of the store
+zip, and the landing is tested against the words the strategy review ruled
+out. ONE TRANSCRIPT PER CUSTOMER (`lib/chat.mjs`): `customer.json` and
+`chat.jsonl`, cards in the same stream and a card's later state a row of its
+own, folded on read — the seam email and Telegram plug into. QUEST: the CMO
+seat in a customer-facing mode whenever the current project has a
+`customer.json` — its own persona, doctrine and turn preface (the clock, the
+lane, where things stand, the communities, the counts), on thread "chat",
+with tools that talk and record (notify, the notebook, `set_site`,
+`describe_offer`, `revise_offer`) and none that browse; a read that waits is
+"in the queue", and the browser is never named. THE CUSTOMER CLOCK: every
+ten seconds `autoOffer` → `autoLook` → `autoDeliver` drive the existing
+verbs (`lib/quest.mjs` holds the shapes). The site is read by the scout —
+held while the lane is dark, three tries — or a CV or description is read
+with no browser (OpenRouter's PDF parser, passed through `lib/llm.mjs`), and
+the proposal becomes the offer card; "Looks right" writes project.md,
+icp.md, rule.md (with the "Leave out" the customer asked for), me.md ("I
+built …") and the campaign `quest`, mention *disclosed*. Each community's
+rules page is read first (`bansPromotion` → its room file, and a room that
+forbids promotion is skipped), then it is probed under the campaign and
+watched every four hours (`watch --every`). Every fit is posted at once as
+an opportunity card, at most two a room and five a day, the three drafts
+follow, and 👍 / 👎 (skip) / I replied (sent) are the feedback. THE EXTENSION
+AS A WORKER: while the current project is a customer's, the deck deals only
+the grants and `work.browser`, and the panel says whose work it is doing.
+THE LIVE RUN (2026-09-19, a real Chrome with the extension on this laptop; the
+whole flow on a holding page, a repository's README and a description) found
+what tests could not, and each is fixed and pinned. THE PAGES AND THE AGENT:
+the model copied its own turn's clock into its reply; the reader opened legal
+pages and the same page under four addresses; a site that says nothing gave
+an "Unknown" card (now a question); a reader told nothing about buyers wrote
+the offer from the OWNER's side ("ask about my product's features", a rule
+that says YES when a post names the product) — both readers now carry
+`BUYER_RULES`; the offer card shows what the people DO (signals) and the
+search phrases are short, never the problem sentence. THE LOOK: a banned room
+burned the phrase it was given, so phrases are handed out as rooms clear
+their rules; a look that found nobody tries once more (unused phrases, then
+the reader's spare communities) before it says so, and says which rooms it
+left out and why. **Reddit's search page ignores `t=week` when sorted by
+newest** — posts 8 to 43 days old were delivered as "opportunities" — so a
+week (`FRESH_DAYS`) is enforced in `lib/quest.mjs`, and the first look counts
+only what it read from the last week. A fresh watch was read again a minute
+later (its probe's read was not the source's own): cadence counts from
+`added`. THE MODEL'S DISCIPLINE, put in code where a prompt failed: told to
+"leave out anyone selling services", a free chat model wrote its private
+notebook, changed nothing the judge reads and answered that it was "not
+marking" two cards — so who is found is now read by a forced structured call
+(`interpretInstruction`, the judge's seat) and applied by `lib/revise.mjs`
+to rule.md, the campaign and the look, confirmed in plain words, before any
+chat model sees the message; the heartbeat's "still waiting, no new matches"
+is refused by `notify` when the news has not moved; the operator's daily
+digest ("7 found" = seven posts read) never reaches a customer's Quest; a
+reply that claims a result for the customer ("I got seven booked calls") is
+flagged on the card; a description with no name in it got an invented product name that two drafts then said "I built" (a name the material never gave is now empty, and me.md says never to invent one). NEW: **Rewrite** — a button on the card and
+`rewrite_reply` in the chat — writes the three replies again from a note.
+FIRST RUN IN THE OWNER'S OWN CHROME (2026-09-19, 11:27): pasted vocavela.live,
+signed up — and the chat said "in the queue" for 22 minutes. The extension was
+in its default hosted mode, so nothing polled this server's lane, and nothing
+said so: Quest's words never mention the browser (right for a hosted customer),
+and the operator's panel was not the one open. Fixed on both sides: `/api/chat`
+carries `browser: { attached, waiting, home }` and the chat page shows a strip
+while a page was asked for and no Chrome is attached (the address to use, the
+folder to load, Copy buttons; it says "connected" once and goes); a hosted
+panel asks `127.0.0.1:8787/api/me` and puts a **Use this server** card first —
+one click, never automatic. Verified in a fresh Chrome profile (hosted by
+default) against a scratch server: the card, Not now, the click, mode saved as
+local, the lane attached, the strip dark → connected → gone.
+THE SAME RUN, ATTACHED (12:28): the read failed on a permission wall for
+`www.vocavela.live` (the bare name it was given redirects there, and to Chrome
+those are two origins); Allow was pressed, "Try again" typed — and nothing
+began for ten minutes (a failed read waits ten minutes; the chat, still
+holding the read's start time, said "being read now"). Then three reads in a
+row stopped on "the Messaging Quest window is not on screen" (Chrome does not
+draw a covered window, and the Claude app was on top), and after the third
+Quest asked a founder whether their address was right; "Try again" twice more
+did nothing, the three tries being spent. Fixed: a customer's browser is
+**patient** (`lib/browse.mjs`) — a permission wall and a window nobody is
+drawing are HOLDS, not failed reads: the read waits in its tab, asks again when
+the operator has pressed Allow / every few seconds while the window is hidden,
+and goes on; neither is counted against the address, and neither waits ten
+minutes (`isHeld`, `autoOffer`); one Allow asks Chrome for both `www.` and the
+bare name (`siteTwin`); a failed read is no longer "being read"; "Try again"
+after it gave up is a fresh round; the chat page carries the strip for each
+(`browser.allow`, `browser.hidden`). Verified in a real Chrome without the
+occlusion flags, the test window covered by a small black window: wall → the
+strip → hold; covered → the strip → hold; cover lifted → the read finished by
+itself nine seconds later. Chrome behind another app stays a limit: the README
+gives the three flags that lift it.
+704 engine tests + 60 runtime + 34 voice green. Verified live in that Chrome:
+sign-up (URL, description), the site read, the offer card and its correction
+in words, "Looks right", the rules read (r/Entrepreneur, r/SaaS and
+r/startups skipped for their own rules; r/indiehackers read), the search, the
+judge, opportunity cards with their three replies, Open thread, Copy reply,
+Rewrite (both ways), leave-out and add-a-community in the chat, a question.
+Not verified: a lead that is FRESH and good — the free models over-narrow the
+rule, the searches in small communities come back empty for the week, and
+the replies are often about the poster's own product rather than the
+customer's; the user's own Chrome (a different profile, their sign-ins); and
+one customer at a time until Stage 2.
 
 ## Next, in order
 
