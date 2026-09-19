@@ -71,6 +71,7 @@ let current = null;      // the card on screen
 let shownSig = null;     // the card as drawn — redrawn only when the deck's first card changes
 let INSTANCE = null;     // this profile's worker on the lane; the deck poll carries it so new tabs open where the panel is
 let accountStatus = null; // hosted: who is signed in and how the sync stands (sw.js account.status)
+let questWork = null;     // hosted: what this browser is reading for Quest in the cloud (sw.js worker, Stage 2)
 let accountEmail = null;  // hosted: the address a code was sent to, while the code is being typed
 let deckCards = [];      // every card dealt, the one on screen first
 let pollTimer = null;
@@ -112,8 +113,18 @@ const postJSON = async (path, body) => {
 
 /** Hosted: the account's standing, for the Settings tab. */
 const refreshAccount = async () => {
-  if (!hosted()) { accountStatus = null; return; }
+  if (!hosted()) { accountStatus = null; questWork = null; return; }
   try { accountStatus = await ext.runtime.sendMessage({ type: "account.status" }); } catch { accountStatus = null; }
+  try { questWork = await ext.runtime.sendMessage({ type: "worker" }); } catch { questWork = null; }
+};
+
+/** The cloud's reads, in one line (extension/worker.js) — nothing for an
+ *  account that is not the operator's. */
+const questWorkLine = (w) => {
+  if (!w || ["off", "not a worker", "signed out"].includes(w.status)) return "";
+  if (w.status === "reading") return `Reading for Quest: ${w.job?.label ?? "a page"}${w.note ? ` — ${w.note}` : ""}.`;
+  if (w.status === "trouble") return `Quest's reads paused for a minute: ${w.error ?? "the cloud did not answer"}.`;
+  return `Reading for Quest when it asks${w.done ? ` · ${w.done} done since Chrome started` : ""}.`;
 };
 
 /**
@@ -1060,6 +1071,8 @@ function drawSettings() {
     if (a?.signedIn) {
       const stood = a.error ? `Last sync failed: ${a.error}` : a.lastSync ? `Synced ${ago(a.lastSync)}.` : "Not synced yet.";
       box.append(el("p", "es-sub", `Signed in as ${a.email}. ${stood}${a.dirty ? ` ${a.dirty} change${a.dirty === 1 ? "" : "s"} to send.` : ""}`));
+      const work = questWorkLine(questWork);
+      if (work) box.append(el("p", "es-sub", work));
       box.append(row(
         btn("Sync now", async () => { const out = await ext.runtime.sendMessage({ type: "account.sync" }).catch((e) => ({ error: String(e?.message ?? e) })); if (out?.error) { tabError(out.error); return; } tabError(""); await refreshAccount(); drawView(); }),
         btn("Sign out", async () => { await ext.runtime.sendMessage({ type: "account.out" }).catch(() => {}); await refreshAccount(); drawView(); }),
