@@ -39,6 +39,16 @@ export const scoped = (place, q, window = "week") =>
  *  precision — worth it in a room where the problem is the reason people post. */
 export const submissions = (place) => `${ROOT}/r/${place}/new/`;
 
+/** Reddit's own search for COMMUNITIES about a topic — what a person does to
+ *  find where to look. Read as text (pages.mjs communitiesFrom): the rooms it
+ *  lists exist, and say how alive they are ("264K weekly visitors · 3.3K
+ *  weekly contributions"). A first look searches these, not the names a model
+ *  guessed (all five were invented on the first live run, 2026-09-19).
+ *  Measured the same day, logged out: a site-wide POST search is no use for
+ *  this — four broad phrases in five came back as a page the post reader
+ *  rejects, and the fifth found one post. Never a source. */
+export const communities = (q) => `${ROOT}/search/?q=${encodeURIComponent(q)}&type=communities`;
+
 export const SHAPES = { scoped, submissions };
 
 /** Where a person reads a room's rules — Reddit does not show them to a

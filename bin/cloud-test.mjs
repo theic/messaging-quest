@@ -66,17 +66,20 @@ function fakeDb() {
 
 /** Models that answer from a script, and remember being asked. */
 const asked = [];
-const PLACES = ["saas", "startups", "smallbusiness"];
+// What a free model composed from the topic (two of the three are not
+// communities), and the rooms real posts about the problem were in.
+const GUESSES = ["expatforums", "saas", "groupsforconsultants"];
 const models = {
-  offerFromPages: async (dir, url, pages) => { asked.push(["offer", url, pages.length]); return { name: "Acme", one_line: "A scheduling tool for independent consultants.", problem: "I lose clients to back-and-forth about meeting times", signals: ["ask for a scheduling tool", "complain about double bookings"], searches: ["scheduling tool", "calendly alternative"], project_md: "# Acme\n\nScheduling for consultants.", icp_md: "# Who\n\nConsultants.", rule_md: "# Who to answer\n\nAnswer YES when somebody struggles to schedule clients.", places: PLACES, unknown: [] }; },
+  offerFromPages: async (dir, url, pages) => { asked.push(["offer", url, pages.length]); return { name: "Acme", one_line: "A scheduling tool for independent consultants.", problem: "I lose clients to back-and-forth about meeting times", signals: ["ask for a scheduling tool", "complain about double bookings"], searches: ["scheduling tool", "calendly alternative"], topics: ["scheduling", "freelancing"], project_md: "# Acme\n\nScheduling for consultants.", icp_md: "# Who\n\nConsultants.", rule_md: "# Who to answer\n\nAnswer YES when somebody struggles to schedule clients.", places: GUESSES, unknown: [] }; },
   offerFromMaterial: async () => { asked.push(["material"]); return null; },
   judgeItems: async (dir, items) => { asked.push(["judge", items.length]); const out = items.map((x) => ({ n: x.n, fit: true, why: `They said it: "${String(x.title).slice(0, 30)}"` })); out.failed = []; return out; },
   draftReply: async (dir, prompt) => { asked.push(["draft", /Need a scheduling tool/.test(prompt)]); return { drafts: [{ style: "straight", text: "I built Acme for exactly this — it books the slot for you." }, { style: "deeper", text: "Two things helped me." }, { style: "ask_back", text: "How many clients a week?" }], no_fit: null }; },
   interpretInstruction: async () => ({ leave_out: [], places: [], also_asks: true }),
 };
 const turns = [];
+let turnScript = null;
 const quest = {
-  turn: async (dir, content, opts) => { turns.push({ content, history: opts.history?.length ?? 0, lane: opts.lane?.attached?.() ?? null }); return content === "HEARTBEAT" ? "noted" : "Thanks — I'm reading your site now and will post what I understood right here."; },
+  turn: async (dir, content, opts) => { turns.push({ content, history: opts.history?.length ?? 0, lane: opts.lane?.attached?.() ?? null, note: opts.note ?? "" }); if (content === "HEARTBEAT") return "noted"; if (turnScript?.length) return turnScript.shift(); return "Thanks — I'm reading your site now and will post what I understood right here."; },
   history: () => [],
   heartbeatAsk: "HEARTBEAT",
 };
@@ -115,9 +118,24 @@ check("an event already applied is skipped when it comes round again", db.chat(I
 const site = db.open(ID)[0];
 db.finish(site.id, { ok: true, pages: [{ url: "https://acme.io/", title: "Acme", text: "Acme books meetings for consultants." }, { url: "https://acme.io/pricing", title: "Pricing", text: "$9 a month." }] });
 r = await C.step(ID);
+check("the site's pages come back; before the offer card, the platform's own search for communities is read, once a topic",
+  [asked.find((a) => a[0] === "offer"), db.chat(ID).some((m) => m.card?.kind === "offer"), db.open(ID).map((j) => [j.kind, j.args.purpose, j.args.q, /^https:\/\/www\.reddit\.com\/search\/\?q=.*&type=communities$/.test(j.args.url ?? "")])],
+  [["offer", "https://acme.io", 2], false, [["text", "discover", "scheduling", true], ["text", "discover", "freelancing", true], ["text", "discover", "scheduling tool", true]]]);
+check("...the customer's row says the offer is being worked on", db.T.customers.get(ID).state?.offer, "reading");
+// What Reddit's community search says, as the page's text: a name, the name
+// with r/ in front, what it is, and how alive it is.
+const page = (...rooms) => rooms.map(([name, visitors, contributions]) => `${name}\nr/${name}\nA community about ${name}.\n${visitors} weekly visitors · ${contributions} weekly contributions`).join("\n");
+const [d1, d2, d3] = db.open(ID);
+db.finish(d1.id, { ok: true, text: page(["saas", "30K", "900"], ["saasjerk", "5K", "300"]) });
+r = await C.step(ID);
+check("one of the reads is back: the offer waits for the others, and the read that is back is kept", [db.chat(ID).some((m) => m.card?.kind === "offer"), db.open(ID).length], [false, 3]);
+db.finish(d2.id, { ok: true, text: page(["startups", "80K", "1.2K"], ["deadplace", "18", "0"]) });
+db.finish(d3.id, { ok: true, text: page(["smallbusiness", "500K", "9K"]) });
+r = await C.step(ID);
 const offerMsg = db.chat(ID).find((m) => m.card?.kind === "offer");
-check("the site's pages come back; the offer card is written from them", [asked.find((a) => a[0] === "offer"), Boolean(offerMsg), /r\/saas/.test(offerMsg?.text ?? "")], [["offer", "https://acme.io", 2], true, true]);
-check("...and the read is consumed, so nothing is asked again", db.open(ID).length, 0);
+check("all are back: the offer names the communities the platform listed — each topic's best in turn, none of its joke or dead ones, and not the model's invented names",
+  [Boolean(offerMsg), /r\/saas, r\/startups and r\/smallbusiness/.test(offerMsg?.text ?? ""), /expatforums|groupsforconsultants|saasjerk|deadplace/.test(offerMsg?.text ?? "")], [true, true, false]);
+check("...and the reads are consumed, so nothing is asked again", db.open(ID).length, 0);
 
 /* ----------------------------------------------------------- Looks right */
 
@@ -200,6 +218,70 @@ check("a failing judge: tried once, then left alone for five minutes, not woken 
   late.event(ID, "start", { text: "acme.io" });
   const out = await L.step(ID);
   check("something said during a wake-up: it is not left for the clock — another wake-up is asked for", [out.again, late.T.pokes.length], [true, 1]);
+}
+
+/* ------------------------- where the problem is said: what can go wrong */
+
+// A customer whose site was read and whose offer now waits on the two
+// discovery reads.
+async function toDiscovery(prefix, { make = null } = {}) {
+  const d = fakeDb();
+  const id = `${prefix}-2222-3333-4444-555555555555`;
+  d.T.customers.set(id, { id, user_id: `u-${prefix}`, email: "sam@example.com", created_at: new Date().toISOString() });
+  const K = make ? make(d) : cloud({ db: d, skills, adapters: BUILTIN_ADAPTERS, env: ENV, quest, models, log });
+  d.event(id, "start", { text: "acme.io" });
+  await K.step(id);
+  d.finish(d.open(id)[0].id, { ok: true, pages: [{ url: "https://acme.io/", title: "Acme", text: "Acme books meetings." }] });
+  await K.step(id);
+  return { d, id, K, reads: d.open(id) };
+}
+{
+  const { d, id, K, reads } = await toDiscovery("aaaaaaaa");
+  d.finish(reads[0].id, null, "the page did not load");
+  d.finish(reads[1].id, { ok: false, error: "a wall: log in" });
+  d.finish(reads[2].id, { ok: true, text: "Log in to continue. Nothing here." });
+  await K.step(id);
+  const card = d.chat(id).find((m) => m.card?.kind === "offer");
+  check("reads that fail, and a page that lists no community: the offer still goes out, with the model's own guesses", [/r\/expatforums, r\/saas and r\/groupsforconsultants/.test(card?.text ?? ""), d.open(id).length], [true, 0]);
+}
+{
+  const { d, id, K, reads } = await toDiscovery("bbbbbbbb");
+  d.finish(reads[0].id, { ok: true, text: page(["saas", "30K", "900"]) });
+  d.finish(reads[1].id, { ok: true, text: "" });
+  d.finish(reads[2].id, { ok: true, text: page(["saasjerk", "9K", "500"]) });
+  await K.step(id);
+  const card = d.chat(id).find((m) => m.card?.kind === "offer");
+  check("one real community listed: the guesses only fill what the first look needs, after it", /r\/saas, r\/expatforums and r\/groupsforconsultants/.test(card?.text ?? ""), true);
+}
+{
+  let clock = Date.now();
+  const { d, id, K } = await toDiscovery("cccccccc", { make: (dd) => cloud({ db: dd, skills, adapters: BUILTIN_ADAPTERS, env: ENV, quest, models, log, now: () => clock }) });
+  for (const j of d.open(id)) j.state = "claimed";   // a browser that took them and never finished
+  clock += 14 * 60_000;
+  await K.step(id);
+  const early = d.chat(id).some((m) => m.card?.kind === "offer");
+  clock += 2 * 60_000;
+  await K.step(id);
+  const card = d.chat(id).find((m) => m.card?.kind === "offer");
+  check("reads that never come back hold the offer for a quarter of an hour, not for ever", [early, /r\/expatforums, r\/saas and r\/groupsforconsultants/.test(card?.text ?? "")], [false, true]);
+}
+{
+  const d = fakeDb();
+  const id = "dddddddd-2222-3333-4444-555555555555";
+  d.T.customers.set(id, { id, user_id: "u-d", email: "sam@example.com", created_at: new Date().toISOString() });
+  const K = cloud({ db: d, skills, adapters: BUILTIN_ADAPTERS, env: ENV, quest, models, log });
+  // A free model answered a first message with "noted" (measured 2026-09-19):
+  // dropping it left the customer in a silent chat.
+  turnScript = ["noted", "It's in the queue — I'll post what I find right here."];
+  d.event(id, "start", { text: "acme.io" });
+  await K.step(id);
+  const nudge = turns.filter((t) => t.content === "acme.io").pop()?.note ?? "";
+  check("a message answered 'noted' is asked again, and the answer that follows is what they see", [d.chat(id).filter((m) => m.from === "quest").map((m) => m.text), /waiting for an answer/.test(nudge)], [["It's in the queue — I'll post what I find right here."], true]);
+  turnScript = ["noted", "Noted."];
+  d.event(id, "say", { text: "hello?" });
+  await K.step(id);
+  check("asked twice and still silent: they are told the one thing that is always true", d.chat(id).filter((m) => m.from === "quest").pop()?.text, "Got it — I'm reading acme.io now. What I understood will land here as a card for you to check.");
+  turnScript = null;
 }
 
 installHost(nodeHost);

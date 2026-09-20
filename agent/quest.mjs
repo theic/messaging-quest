@@ -179,7 +179,7 @@ export const questTools = (dir) => [
     if (!u) return "that is not a web address — ask them for their site's address, like acme.com";
     if (readStash(dir).offer) return "their site was already read and answered on a card — to change what it says, use revise_offer";
     writeCustomer(dir, { url: u });
-    patchStash(dir, { scoutJob: null, scout_tries: null, scout_gaveup: null, scout_at: null, scout_empty: null });
+    patchStash(dir, { scoutJob: null, scout_tries: null, scout_gaveup: null, scout_at: null, scout_empty: null, discovering: null });
     return `set — ${u} is read by itself within a minute or two (sooner if nothing else is being read), and the card arrives in the chat. Tell them it is on its way; do not read it yourself.`;
   }, {
     name: "set_site",
@@ -193,7 +193,7 @@ export const questTools = (dir) => [
     // Their words win over a site that could not be opened: the read then
     // works from what they said, with no browser at all.
     writeCustomer(dir, { about: t, url: null });
-    patchStash(dir, { scoutJob: null, scout_tries: null, scout_gaveup: null, scout_at: null, scout_empty: null });
+    patchStash(dir, { scoutJob: null, scout_tries: null, scout_gaveup: null, scout_at: null, scout_empty: null, discovering: null });
     return "set — it is read by itself in a few seconds and the card arrives in the chat. Tell them it is on its way.";
   }, {
     name: "describe_offer",

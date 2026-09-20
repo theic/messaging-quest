@@ -55,7 +55,7 @@ import { conversationRows, bindConversations, recordReturn, recordTurn, closeCon
 import { siteOf, looksLikeEmail, say as chatSay, heard as chatHeard, setCard, chatState, isCustomer, customerOf, writeCustomer } from "../lib/chat.mjs";
 import { BUYER_RULES, PROPOSAL_BRIEF } from "../lib/agents.mjs";
 import { applyRevision } from "../lib/revise.mjs";
-import { offerFrom, revise as reviseOffer, ruleOf, offerLine, offerCard, lookRooms, lookOf, secondPass, lookNote, saysNothing, isFresh, FRESH_DAYS, instructionFrom, meOf } from "../lib/quest.mjs";
+import { offerFrom, revise as reviseOffer, ruleOf, offerLine, offerCard, lookRooms, lookOf, secondPass, lookNote, saysNothing, isFresh, FRESH_DAYS, instructionFrom, meOf, discoveredPlaces, placesFrom, ackFor } from "../lib/quest.mjs";
 import { patchStash } from "../lib/cards.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -544,6 +544,53 @@ check("a skip is never gated", /discarded/.test(es4(["mark", "t3_z", "skip"])), 
   check("...and with the phrases spent it tries the reader's spare communities — at most two, never one already looked at, rules read first",
     [secondPass(open, ["p1"], 1, ["a", "Spare1", "r/spare2", "spare3", "b"]), secondPass(open, ["p1", "p2"], 1, ["a", "c"])],
     [{ rooms: [{ place: "Spare1", q: null, rules: "todo", probe: "todo", watch: "todo", tries: 0 }, { place: "spare2", q: null, rules: "todo", probe: "todo", watch: "todo", tries: 0 }], used: 1 }, { rooms: [{ place: "a", q: "p2", rules: "allowed", probe: "todo", watch: "todo", tries: 0 }], used: 2 }]);
+  // Measured 2026-09-19, on the cloud's first live run: five communities the
+  // offer named, none with a post to read. Reddit's own search for communities
+  // (read as text, logged out) lists rooms that exist, with how alive they are.
+  // The page's text, as the browser hands it over: a name, the same name with r/
+  // in front, what it is, and how alive it is — each on its own line. (A log that
+  // collapses whitespace hides this: the first live run found the parser had been
+  // written against the collapsed form and read no community at all.)
+  const blocks = (...rooms) => rooms.map(([name, about, stats]) => `${name}\nr/${name}\n${about}\n${stats}`).join("\n");
+  const FIX_LANG = blocks(
+    ["languagelearning", "A community for anybody interested in learning other languages. Whether you are just starting, a polyglot or a language nerd, this is the place for you!", "264K weekly visitors · 3.3K weekly contributions"],
+    ["LearningLanguages", "This is for people to discuss the languages they are learning and any difficulty in learning them. (If you are bilingual/multilingual, please stay on this subreddit to help anybody learning your language).", "3.9K weekly visitors · 196 weekly contributions"],
+    ["languagelearningjerk", "how lern languge fast????", "56K weekly visitors · 1.3K weekly contributions"],
+    ["Language_Resources", "This subreddit has merged with /r/languagelearning Be sure to read the sidebar first. If you would like to take over this subreddit please message u/Virusnzz.", "18 weekly visitors · 0 weekly contributions"],
+    ["EnglishLearning", "A place for learning English.", "510K weekly visitors · 5.5K weekly contributions"],
+  );
+  const FIX_EXPAT = blocks(
+    ["expat", "For expats & those looking to live abroad! Share your new home & expatriation stories.", "29K weekly visitors · 987 weekly contributions"],
+    ["expats", "reddit's best expats sub", "211K weekly visitors · 4.6K weekly contributions"],
+    ["IWantOut", "Welcome to r/IWantOut: Reddit's expatriate community.", "21K weekly visitors · 522 weekly contributions"],
+  );
+  const redditPages = await import("../skills/reddit/pages.mjs");
+  const lang = redditPages.communitiesFrom(FIX_LANG);
+  const expat = redditPages.communitiesFrom(FIX_EXPAT);
+  check("Reddit's search for communities is read off its text: each community once, with its weekly visitors and contributions — a description that merely mentions another community is not another community",
+    [lang.map((c) => [c.place, c.visitors, c.contributions]), expat.map((c) => c.place), /^A community for anybody interested/.test(lang[0].about), /weekly/.test(lang[0].about)],
+    [[["languagelearning", 264000, 3300], ["LearningLanguages", 3900, 196], ["languagelearningjerk", 56000, 1300], ["Language_Resources", 18, 0], ["EnglishLearning", 510000, 5500]], ["expat", "expats", "IWantOut"], true, false]);
+  check("...and the same page with its whitespace collapsed (the way a log shows it) reads the same",
+    redditPages.communitiesFrom(FIX_LANG.replace(/\s+/g, " ")).map((c) => [c.place, c.visitors, c.contributions]), lang.map((c) => [c.place, c.visitors, c.contributions]));
+  check("...millions, and a number the page did not say is null — never zero, never a guess; and a page that lists no community lists none",
+    [redditPages.communitiesFrom("big r/big Lots of people. 1.2M weekly visitors · 30K weekly contributions quiet r/quiet Nothing said here."), redditPages.communitiesFrom("Log in to continue. Nothing here."), redditPages.communitiesFrom(undefined)].map((x) => x.map((c) => [c.place, c.visitors, c.contributions])),
+    [[["big", 1200000, 30000], ["quiet", null, null]], [], []]);
+  const jerk = (p) => /jerk$/i.test(p);
+  check("communities for the offer's topics: each topic's best first in turn, the platform's joke communities out, the dead ones out (eighteen weekly visitors and no contributions is nobody), a room once",
+    discoveredPlaces([lang, expat], { parody: jerk }).map((c) => c.place),
+    ["languagelearning", "expat", "LearningLanguages", "expats", "IWantOut", "EnglishLearning"]);
+  check("...never fewer than the first look needs because a few were quiet: the busiest quiet ones fill after the live ones; a number not said is not held against a room; profiles are not communities",
+    [discoveredPlaces([[{ place: "a", visitors: 10, contributions: 1 }, { place: "b", visitors: 20, contributions: 9 }, { place: "c", visitors: 5, contributions: 0 }, { place: "d", visitors: 9000, contributions: 200 }]]).map((c) => c.place),
+      discoveredPlaces([[{ place: "x" }, { place: "u_someone", visitors: 9000, contributions: 900 }, { place: "X", visitors: 9000, contributions: 900 }]]).map((c) => c.place),
+      discoveredPlaces([]), discoveredPlaces(undefined), discoveredPlaces([[{}, { place: null }]])],
+    [["d", "b", "a"], ["x"], [], [], []]);
+  check("the offer names the real rooms first; the model's own guesses only fill the first look, and only after them",
+    [placesFrom([{ place: "translator" }, { place: "expats" }, { place: "languagelearning" }], ["madeupforums", "Translator"]), placesFrom([{ place: "translator" }], ["madeupforums", "Translator", "expats", "more"]), placesFrom([], ["a", "r/b", "c", "d"]), placesFrom([{ place: "x" }], [], { keep: 3 })],
+    [["translator", "expats", "languagelearning"], ["translator", "madeupforums", "expats"], ["a", "b", "c"], ["x"]]);
+  check("...at most six, whatever was found", placesFrom(["a", "b", "c", "d", "e", "f", "g", "h"].map((place) => ({ place })), []).length, 6);
+  check("a customer who wrote is owed an answer that is always true: reading their site, or on it, or nothing more than that",
+    [ackFor({ host: "acme.io", reading: true }), ackFor({ reading: true }), ackFor({ offer: { state: "confirmed" } }), ackFor({ offer: { state: "open" } }), ackFor()],
+    ["Got it — I'm reading acme.io now. What I understood will land here as a card for you to check.", "Got it — I'm reading it now. What I understood will land here as a card for you to check.", "Got it — I'm on it, and I'll post what I find right here.", "Got it. The card above has what I understood — tell me if anything is off, or press Looks right.", "Got it."]);
   const daysAgo = (d) => new Date(Date.now() - d * 86_400_000).toISOString();
   check("a post is somebody to answer right now for a week — Reddit's own week filter cannot be trusted; no date at all counts as just seen",
     [FRESH_DAYS, isFresh({ posted_at: daysAgo(1) }), isFresh({ posted_at: daysAgo(6.9) }), isFresh({ posted_at: daysAgo(8) }), isFresh({ posted_at: daysAgo(43) }), isFresh({ seen_at: daysAgo(30) }), isFresh({})],

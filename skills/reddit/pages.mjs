@@ -93,6 +93,32 @@ export function kindOf(url) {
   return "listing";
 }
 
+/**
+ * Reddit's search for communities, read as TEXT: one block a community, in
+ * the order Reddit ranks them —
+ *   "<name> r/<name> <what it is> <N> weekly visitors · <M> weekly contributions"
+ * (measured 2026-09-19, logged out, "language learning" and "expat": twenty
+ * blocks each, the numbers there for every one). Text, not a spec: a spec is
+ * a guess at Reddit's markup, and the words a person reads are what they are.
+ * A community starts wherever a name is followed by the same name with "r/" in
+ * front — which a description that only mentions another community never is.
+ *   [{ place, visitors, contributions, about }]   (a number is null when unsaid)
+ */
+export function communitiesFrom(text) {
+  const t = String(text ?? "");
+  const count = (n, k) => { const v = Number(String(n).replace(/,/g, "")); return Number.isFinite(v) ? Math.round(v * ({ k: 1e3, m: 1e6 }[String(k).toLowerCase()] ?? 1)) : null; };
+  // Any whitespace between the two: the page's text has line breaks there,
+  // which a log that collapses them hides (found on the first live run).
+  const starts = [...t.matchAll(/(?:^|\s)([A-Za-z0-9_]{2,21})\s+r\/\1(?=\s|$)/gi)];
+  return starts.map((m, i) => {
+    const seg = t.slice(m.index + m[0].length, starts[i + 1]?.index ?? t.length);
+    const v = /([\d.,]+)\s*([KkMm]?)\s+weekly visitors/.exec(seg);
+    const c = /([\d.,]+)\s*([KkMm]?)\s+weekly contributions/.exec(seg);
+    const about = seg.replace(/[\d.,]+\s*[KkMm]?\s+weekly (?:visitors|contributions)/gi, "").replace(/[·\s]+/g, " ").trim().slice(0, 160);
+    return { place: m[1], visitors: v ? count(v[1], v[2]) : null, contributions: c ? count(c[1], c[2]) : null, about };
+  });
+}
+
 /* ----------------------------------------------------------------- specs */
 
 /**
