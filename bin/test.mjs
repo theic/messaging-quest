@@ -43,6 +43,8 @@ import { setPlan } from "../lib/models.mjs";
 import { voiceQuestions } from "../lib/voice.mjs";
 import { install as installHost, host as hostNow } from "../lib/fs.mjs";
 import { memoryHost, sha256 as sha256js, join as pjoin, basename as pbasename, dirname as pdirname } from "../lib/fs-memory.mjs";
+import { postOpportunity } from "../lib/customer.mjs";
+import { buttonsFor, pressedButtons, draftButtons, renderRow, splitText, intentOf } from "../lib/telegram.mjs";
 import { engine } from "../lib/engine.mjs";
 import { verbs } from "../lib/verbs.mjs";
 import { BUILTIN_SKILLS, BUILTIN_ADAPTERS } from "../skills/index.mjs";
@@ -2856,6 +2858,60 @@ check("a proposal with a verb outside the law never renders",
     check("the site's door: a bad hash refused, the minted one a session", [(await A.connect("nope")).error, (await A.connect("hash-ok")).ok], ["Token has expired or is invalid", true]);
     check("sign out clears the session and the sync state", [(await A.signOut()).ok, (await A.status()).signedIn, kept.sync.since], [true, false, null]);
   }
+}
+
+/* ---- the chat as a channel (lib/telegram.mjs, 2026-09-21). One transcript
+   row → what Telegram shows; one update → what the customer did. The buttons
+   are the card's OWN labels, so an action renamed in lib/customer.mjs fails
+   here before it reaches a phone. */
+{
+  const dir = mkdtempSync(join(tmpdir(), "mq-tg-"));
+  const offer = offerFrom({ name: "Vocavela", one_line: "a tutor for spoken Spanish", problem: "I can read Spanish but freeze when I speak", signals: ["ask for speaking practice"], places: ["Spanish"], searches: ["speaking practice"] });
+  const { card: oCard } = offerCard(offer, { room: (p) => `r/${p}` });
+  check("an offer's buttons are its own labels — and 'Change something' is a question, not an event",
+    buttonsFor(oCard, 7), { inline_keyboard: [[{ text: "Looks right", callback_data: "a|7|confirm" }], [{ text: "Change something", callback_data: "q|7|change" }]] });
+  check("a confirmed offer has no buttons left to press", buttonsFor({ ...oCard, state: "confirmed" }, 7), null);
+
+  const row = postOpportunity(dir, { id: "t3_abc", place: "Spanish", url: "https://example.test/x", author: "ana", title: "I freeze when I speak", body: "reading is fine", why: "says it plainly" }, { room: (p) => `r/${p}` });
+  const keys = buttonsFor(row.card, row.id);
+  check("an opportunity: the thread is a link, the thumbs share a row, and 'Copy reply' does not cross — a chat has no clipboard",
+    [keys.inline_keyboard[0][0].url, keys.inline_keyboard[1].map((b) => b.text), keys.inline_keyboard.flat().some((b) => /copy/i.test(b.text)), keys.inline_keyboard.at(-1)[0].callback_data],
+    ["https://example.test/x", ["👍", "👎"], false, `a|${row.id}|replied`]);
+  check("the button that was pressed comes back ticked; a press that ends the card leaves none",
+    [pressedButtons(row.card, row.id, "good").inline_keyboard[1][0].text, pressedButtons(row.card, row.id, "replied")], ["👍 ✓", null]);
+
+  const out = renderRow(row);
+  check("a card goes out as the text the transcript already carries, buttons under the last message",
+    [out.length, out[0].text === row.text, Boolean(out[0].reply_markup)], [1, true, true]);
+  check("the customer's own line is never read back to them", renderRow({ sender: "you", body: { text: "hello" } }), []);
+  check("a long message is cut where a person would cut it", splitText(`${"a".repeat(3000)}\n\n${"b".repeat(1200)}`).map((s) => s.length), [3000, 1200]);
+
+  const drafted = { sender: "system", body: { from: "system", ref: row.id, set: { draft: "here is what I would say", drafts: [{ style: "straight", text: "here is what I would say" }, { style: "deeper", text: "the longer one" }], rewriting: null } } };
+  const [draft] = renderRow(drafted, { sent: { [row.id]: 4242 } });
+  check("the reply arrives as its own message under the card it answers — a long press copies it — with the other version a button away",
+    [draft.text, draft.reply_to_message_id, draft.reply_markup.inline_keyboard[0][0].callback_data, draft.reply_markup.inline_keyboard[1].map((b) => b.text)],
+    ["here is what I would say", 4242, `q|${row.id}|rewrite`, ["Deeper"]]);
+  check("a card that moved but says nothing new sends nothing", renderRow({ sender: "system", body: { from: "system", ref: row.id, set: { rating: "good" } } }), []);
+  check("a draft with a claim to check says so before it is posted",
+    renderRow({ sender: "system", body: { from: "system", ref: row.id, set: { drafts: [{ style: "straight", text: "we doubled it", check: ["doubled"] }] } } })[0].text,
+    "we doubled it\n\nBefore you post: doubled");
+
+  const chat = { id: 5, type: "private" };
+  check("/start with a code links; /start alone is a hello; a group chat is not a customer",
+    [intentOf({ message: { chat, text: "/start K7QF2M9P", message_id: 1 } }).kind, intentOf({ message: { chat, text: "/start", message_id: 1 } }).kind, intentOf({ message: { chat: { id: 5, type: "group" }, text: "hi", message_id: 1 } }).kind],
+    ["start", "hello", "ignore"]);
+  check("a press is an act on the card behind it, and data nobody minted is ignored",
+    [intentOf({ callback_query: { id: "c1", data: `a|${row.id}|good`, from: { id: 9 }, message: { message_id: 4242, chat } } }), intentOf({ callback_query: { id: "c1", data: "x|1|dropit", from: { id: 9 }, message: { message_id: 4242, chat } } }).kind],
+    [{ kind: "act", id: row.id, action: "good", chat: 5, from: 9, callback: "c1", message: 4242 }, "ignore"]);
+  const asked = { for: "rewrite", card: row.id, prompt: 77, at: new Date().toISOString() };
+  check("an answer to the question the bot asked is a note — whether or not the phone replied properly — and an hour later it is a message again",
+    [intentOf({ message: { chat, text: "shorter", message_id: 8, reply_to_message: { message_id: 77 } } }, { awaiting: asked }).kind,
+     intentOf({ message: { chat, text: "shorter", message_id: 8 } }, { awaiting: asked }),
+     intentOf({ message: { chat, text: "shorter", message_id: 8 } }, { awaiting: { ...asked, at: "2020-01-01T00:00:00.000Z" } }).kind],
+    ["note", { kind: "note", id: row.id, for: "rewrite", text: "shorter", chat: 5, from: null, message: 8 }, "say"]);
+  check("everything else is a message for Quest, which reads an instruction better than a parser would",
+    intentOf({ message: { chat, text: "and leave out agencies", message_id: 9 } }).kind, "say");
+  check("the styles offered are the ones the writer actually wrote", draftButtons(3, [{ style: "straight" }], "straight").inline_keyboard.length, 1);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
