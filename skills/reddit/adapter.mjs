@@ -10,8 +10,8 @@
 // Connect a second platform by writing this same folder for it;
 // skills/README.md is the contract.
 
-import { readPage, userPage, threadPage, commentPage, threadOf, subredditOf, postIdOf, itemOf, kindOf, SPECS, BODIES_PER_READ } from "./pages.mjs";
-import { scoped, submissions, refuse, rulesUrl, isParody } from "./shapes.mjs";
+import { readPage, userPage, threadPage, commentPage, threadOf, subredditOf, postIdOf, itemOf, kindOf, communitiesFrom, SPECS, BODIES_PER_READ } from "./pages.mjs";
+import { scoped, submissions, communities, refuse, rulesUrl, isParody } from "./shapes.mjs";
 
 export default {
   id: "reddit",
@@ -42,6 +42,14 @@ export default {
   /** The page for a watched source. A phrase makes it a scoped search;
    *  none makes it the room's new submissions. */
   sourceUrl: ({ place, q, window }) => (q ? scoped(place, q, window) : submissions(place)),
+
+  /** Where a person looks for communities about a topic, and how what that
+   *  page says is read (pages.mjs communitiesFrom: text in, communities out,
+   *  each with how alive it is). One read before a first look, so the first
+   *  look searches rooms that exist — the names a model guesses do not
+   *  (lib/quest.mjs discoveredPlaces). Not a source and never watched. */
+  discoverUrl: ({ q }) => communities(q),
+  discoverRooms: communitiesFrom,
 
   /** Shapes this platform refuses to read, with the measurement that says why. */
   refuse,

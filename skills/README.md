@@ -100,6 +100,13 @@ Optional, and simply absent elsewhere:
 
 - `rulesUrl(place)`, `parody(place)` — where a human reads the room's rules,
   and communities that are jokes about the communities they name.
+- `discoverUrl({q})` and `discoverRooms(text)` — the platform's own search for
+  communities about a topic, read once (as text) before the first look, and
+  what to make of it: `discoverRooms` returns `[{place, visitors, contributions,
+  about}]` in the platform's ranking, the numbers null when the page does not
+  say. The first look then searches rooms that exist and are alive, not the
+  names a model guessed. Never a source; never watched. Absent, the first look
+  uses the offer's own guesses.
 - `idOf(url)`, `itemOf(url)` — a post's stable id off its permalink, and
   what a permalink names (`{id, kind}`), so a colleague cannot invent an id
   and `mq add` checks the right thing.
